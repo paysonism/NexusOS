@@ -1174,8 +1174,12 @@ usb_find_endpoint:
     cmp byte [rsi + rdx + 5], 3  ; bInterfaceClass = HID?
     jne .not_hid_interface
 
-    ; Accept: Keyboard (1), Mouse (2), Report Protocol (0)
+    ; Accept Mouse (2) and Report Protocol (0) only; skip keyboards (1).
+    ; Keyboards are handled via PS/2 legacy emulation - claiming a keyboard
+    ; interface here means the actual mouse port is never enumerated.
     mov al, [rsi + rdx + 7]
+    cmp al, 1                    ; keyboard boot protocol?
+    je .not_hid_interface        ; skip - try next port
     mov [usb_hid_protocol], al
     mov ebx, 1                   ; Set "found HID" flag - look for interrupt IN next
     jmp .next_desc

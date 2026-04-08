@@ -874,7 +874,7 @@ wait_vsync:
 .vga_active:
     ; 0x3DA is working - do full VGA vsync wait
     ; Wait for retrace to end first (if currently in retrace)
-    mov ecx, 100000
+    mov ecx, 8000           ; ~8ms: if retrace hasn't ended, 0x3DA is stuck→PIT
 .wait_retrace_end:
     in al, dx
     test al, 0x08
@@ -884,7 +884,7 @@ wait_vsync:
     jmp .pit_fallback       ; Stuck in retrace - fall back
 
 .wait_retrace_start:
-    mov ecx, 100000        ; ~10ms timeout
+    mov ecx, 25000         ; ~25ms: covers down to 40Hz monitors
 .wait_loop:
     in al, dx
     test al, 0x08

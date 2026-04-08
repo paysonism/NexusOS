@@ -804,6 +804,21 @@ hid_process_touchpad_report:
     ; --- Apply position updates ---
     cmp byte [hid_parsed_is_absolute], 1
     je .apply_absolute
+    jmp .rel_apply
+
+.apply_absolute:
+    ; Only update position when a finger is actually present.
+    ; Without this guard the touchpad keeps overwriting mouse_x/y with its
+    ; last-known position every poll cycle even when no finger is on it,
+    ; which fights arrow-key movement and sets mouse_moved=1 every frame.
+    test r11d, r11d         ; tip switch set?
+    jnz .abs_contact_ok
+    test r10d, r10d         ; contact count > 0?
+    jz .no_xy               ; no finger → skip position + mouse_moved
+.abs_contact_ok:
+    jmp .do_apply_absolute
+
+.rel_apply:
 
     ; --- Relative mode ---
     mov eax, [hid_rel_x]
@@ -822,7 +837,7 @@ hid_process_touchpad_report:
     add [mouse_y], eax
     jmp .clamp_coords
 
-.apply_absolute:
+.do_apply_absolute:
     ; Scale absolute X to screen width
     ; screen_x = (abs_x - logical_min) * scr_width / (logical_max - logical_min)
     mov eax, [hid_abs_x]
