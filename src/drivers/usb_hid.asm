@@ -581,6 +581,8 @@ usb_poll_mouse:
     mov ecx, [scr_width]
     mul ecx
     mov ecx, 0x7FFF
+    test ecx, ecx
+    jz .done_movement
     div ecx
     mov [mouse_x], eax
     
@@ -588,6 +590,8 @@ usb_poll_mouse:
     mov ecx, [scr_height]
     mul ecx
     mov ecx, 0x7FFF
+    test ecx, ecx
+    jz .done_movement
     div ecx
     mov [mouse_y], eax
     jmp .done_movement
@@ -1121,30 +1125,34 @@ usb_control_transfer_nodata:
 ; ============================================================================
 usb_wait_completion:
     ; PIT-based 1-second timeout + CPU spin fallback
+    ; Use rsi for deadline - xhci_poll_event saves/restores rsi internally
     push rbx
     push rcx
-    mov rbx, [tick_count]
-    add rbx, 100                 ; 100 ticks = 1 second at 100Hz
+    push rsi
+    mov rsi, [tick_count]
+    add rsi, 100                 ; 100 ticks = 1 second at 100Hz
     mov ecx, 20000000            ; ~10M iterations max spin fallback
 .poll:
-    call xhci_poll_event
+    call xhci_poll_event         ; rsi preserved by xhci_poll_event (push/pop rsi inside)
     test eax, eax
     jnz .done
-    
+
     dec ecx
     jz .fail_timeout
-    
+
     mov rax, [tick_count]
-    cmp rax, rbx
+    cmp rax, rsi                 ; rsi = deadline (not corrupted by xhci_poll_event)
     jl .poll
-    
+
 .fail_timeout:
     xor eax, eax
+    pop rsi
     pop rcx
     pop rbx
     ret
 
 .done:
+    pop rsi
     pop rcx
     pop rbx
     ; Check if it was success

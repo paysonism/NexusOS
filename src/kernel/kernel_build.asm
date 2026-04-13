@@ -6,10 +6,13 @@
 [org 0x100000]
 
 ; Define macros to ignore extern/global directives in included files
-%macro extern 1
+; Using 1-* allows the macro to ignore any number of arguments (comma separated)
+%unmacro extern 1-*
+%macro extern 1-*
 %endmacro
 
-%macro global 1
+%unmacro global 1-*
+%macro global 1-*
 %endmacro
 
 ; --- Core Kernel Entry Point (MUST BE FIRST) ---
@@ -21,6 +24,10 @@ section .text
 %include "src/kernel/memory.asm"
 %include "src/kernel/pic.asm"
 %include "src/kernel/pit.asm"
+%include "src/kernel/tss.asm"
+%include "src/boot/gdt.asm"
+%include "src/kernel/usermode.asm"
+%include "src/kernel/syscall.asm"
 
 ; --- ACPI & APIC Core ---
 %include "src/kernel/rsdp.asm"
@@ -78,7 +85,7 @@ strlen equ fn_strlen
 
 ; --- BSS Section ---
 section .bss
-align 16
+alignb 16
 _bss_start:
 ; NASM aggregates sections, so all .bss from included files will end up here.
 _bss_end:

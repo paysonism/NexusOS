@@ -1,7 +1,3 @@
-; ============================================================================
-; NexusOS v3.0 - Render Engine (SSE2 Optimized)
-; Dirty rectangle tracking and wrappers for display driver
-; ============================================================================
 bits 64
 
 %include "constants.inc"
@@ -9,6 +5,7 @@ bits 64
 MAX_DIRTY_RECTS equ 32
 
 section .text
+db "RENDER_START"
 
 ; Import from display driver
 extern display_flip_rect
@@ -230,8 +227,11 @@ render_restore_backbuffer:
     ret
 
 section .data
-dirty_count:    dd 0
-full_redraw:    db 1
+
+dirty_count    dd 0
+full_redraw    db 0
+dirty_rects    times MAX_DIRTY_RECTS * 16 db 0
 
 section .bss
-dirty_rects:    resb (MAX_DIRTY_RECTS * 16)
+
+section .text

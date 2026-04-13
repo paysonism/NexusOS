@@ -766,7 +766,7 @@ xhci_setup_event_ring:
 ; ============================================================================
 global xhci_submit_cmd
 xhci_submit_cmd:
-    push rbx
+    ; NOTE: RBX is a return value (DWord3 of completion event) - do NOT save/restore it
     push rcx
     push rdx
     push rsi
@@ -828,9 +828,19 @@ xhci_submit_cmd:
     mov rsi, [xhci_db_base]
     mov dword [rsi], 0
 
+    ; Serial: 'v' = doorbell rung
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, 'v'
+    out dx, al
+    pop rdx
+    pop rax
+
     ; Poll event ring for Command Completion (PIT-based 2-second timeout + spin fallback)
-    mov rbx, [tick_count]
-    add rbx, 200                  ; 200 ticks = 2 seconds at 100Hz
+    mov rax, [tick_count]
+    add rax, 200                  ; 200 ticks = 2 seconds at 100Hz
+    mov [xhci_cmd_deadline], rax  ; store deadline (not rbx - rbx is return value)
     mov ecx, 40000000             ; ~20M iterations spin fallback
 .poll:
     push rcx
@@ -838,16 +848,35 @@ xhci_submit_cmd:
     pop rcx
     test eax, eax
     jnz .got_event
-    
+
     dec ecx
-    jz .cmd_fail
-    
+    jz .cmd_fail_spin
+
     mov rax, [tick_count]
-    cmp rax, rbx
+    cmp rax, [xhci_cmd_deadline]
     jl .poll
 
-.cmd_fail:
+    ; PIT timeout
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, 'Z'
+    out dx, al
+    pop rdx
+    pop rax
+    jmp .cmd_fail
 
+.cmd_fail_spin:
+    ; Spin counter timeout
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, 'z'
+    out dx, al
+    pop rdx
+    pop rax
+
+.cmd_fail:
     ; Timeout
     xor eax, eax
     jmp .cmd_ret
@@ -860,6 +889,22 @@ xhci_submit_cmd:
     cmp ecx, TRB_CMD_COMPLETION
     jne .poll                     ; Not our event, keep polling
 
+    ; Serial: print completion code digit
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    push rax
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jle .cc_ok
+    add al, 7
+.cc_ok:
+    out dx, al
+    pop rax
+    pop rdx
+    pop rax
+
     ; Return completion code
     ; (already in EAX from xhci_poll_event)
 
@@ -868,7 +913,7 @@ xhci_submit_cmd:
     pop rsi
     pop rdx
     pop rcx
-    pop rbx
+    ; NOTE: rbx is NOT restored - it holds the return value (DWord3 of completion event)
     ret
 
 ; ============================================================================
@@ -1078,9 +1123,7 @@ xhci_find_port:
     mov [rsi + rdx + XHCI_PORTSC], eax
 
     ; Wait for reset complete: PRC (Port Reset Change) = 1 or WRC (Warm Reset Change = 1<<19)
-    mov rbx, [tick_count]
-    add rbx, 50
-    mov ecx, 10000000
+    mov ecx, 50000              ; ~50ms worth of MMIO polls at QEMU speed
 .wait_reset:
     mov eax, [rsi + rdx + XHCI_PORTSC]
     test eax, XHCI_PORTSC_PRC
@@ -1088,11 +1131,7 @@ xhci_find_port:
     test eax, (1 << 19)                ; WRC bit
     jnz .reset_done
     dec ecx
-    jz .no_port
-    mov rax, [tick_count]
-    cmp rax, rbx
-    jge .no_port                  ; Reset timeout
-    pause
+    jz .reset_done                ; timeout: proceed anyway
     jmp .wait_reset
 .reset_done:
 
@@ -1110,37 +1149,24 @@ xhci_find_port:
     mov [xhci_port_speed], al
 
     ; Wait 10ms after reset before enumeration (USB spec)
-    push rbx
-    mov rbx, [tick_count]
-    add rbx, 1               ; 1 tick = 10ms at 100Hz
+    mov ecx, 20000
 .post_reset_wait:
-    mov rax, [tick_count]
-    cmp rax, rbx
-    jge .port_ready
-    pause
-    jmp .post_reset_wait
+    dec ecx
+    jnz .post_reset_wait
 .port_ready:
-    pop rbx
-
     ; Check PED (port enabled after reset) - give it extra time if needed
     mov eax, [rsi + rdx + XHCI_PORTSC]
     test eax, XHCI_PORTSC_PED
     jnz .ped_ok
-    ; PED not set - try a bit longer (up to 50ms)
-    push rbx
-    mov rbx, [tick_count]
-    add rbx, 5
+    ; PED not set - try a bit longer
+    mov ecx, 50000
 .wait_ped:
     mov eax, [rsi + rdx + XHCI_PORTSC]
     test eax, XHCI_PORTSC_PED
     jnz .ped_wait_done
-    mov rax, [tick_count]
-    cmp rax, rbx
-    jge .ped_wait_done       ; Don't fail - just proceed anyway
-    pause
-    jmp .wait_ped
+    dec ecx
+    jnz .wait_ped
 .ped_wait_done:
-    pop rbx
     ; Read final speed
     mov eax, [rsi + rdx + XHCI_PORTSC]
     shr eax, XHCI_PORTSC_SPEED_SHIFT
@@ -1913,6 +1939,7 @@ xhci_hccparams1:    dd 0
 ; Command ring state
 xhci_cmd_enqueue:   dd 0
 xhci_cmd_cycle:     db 1
+xhci_cmd_deadline:  dq 0          ; PIT deadline for xhci_submit_cmd timeout
 
 ; Event ring state
 xhci_evt_dequeue:   dd 0

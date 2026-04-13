@@ -24,29 +24,27 @@ ioapic_init:
     push rdx
     push rcx
     
-    ; Route Timer to Vector 32 (assume GSI 2 for standard override)
-    mov rdi, 2
-    mov rsi, 32
-    mov rdx, 0
-    mov rcx, 0      ; Edge, High
+    ; 1. Route all first 16 GSIs (ISA range) to standard vectors (32-47)
+    ; This covers PIT on GSI 0 or 2, Keyboard on GSI 1, Mouse on GSI 12, etc.
+    mov r8, 0
+.loop_gsis:
+    mov rdi, r8             ; GSI
+    lea rsi, [r8 + 32]      ; Vector (32, 33, ...)
+    mov rdx, 0              ; Destination: CPU 0
+    mov rcx, 0              ; Flags: Edge, High, Physical
     call ioapic_set_irq
+    inc r8
+    cmp r8, 16
+    jl .loop_gsis
 
-    ; Route Keyboard to Vector 33
-    mov rdi, 1
-    mov rsi, 33
-    mov rdx, 0
-    mov rcx, 0      ; Edge, High
-    call ioapic_set_irq
-    
-    ; Route PS/2 Mouse to Vector 44
+    ; 2. Route PS/2 Mouse specifically to Vector 44 (GSI 12) - redundancy
     mov rdi, 12
     mov rsi, 44
     mov rdx, 0
     mov rcx, 0      ; Edge, High
     call ioapic_set_irq
 
-    ; Route SPI Touchpad to Vector 50
-    ; Typically PCI IRQs (GSI > 15) are Level-Low
+    ; 3. Route SPI Touchpad specifically to Vector 50
     movzx edi, word [touchpad_irq]
     mov rsi, 50
     mov rdx, 0

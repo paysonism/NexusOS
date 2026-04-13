@@ -408,6 +408,11 @@ mouse_handler:
     ; Read byte from data port
     in al, 0x60
     movzx eax, al
+    push rax
+    mov dx, 0x3F8
+    mov al, 'm'
+    out dx, al
+    pop rax
 
     ; Store last raw bytes for debug
     movzx ecx, byte [mouse_cycle]

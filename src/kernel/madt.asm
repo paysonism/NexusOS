@@ -5,6 +5,10 @@
 bits 64
 
 %include "constants.inc"
+%include "macros.inc"
+
+; Serial char macro for debugging
+
 
 extern ioapic_base
 extern debug_print
@@ -20,6 +24,7 @@ madt_init:
     push rsi
     push rdi
     push r8
+    SER 'M'
     
     ; MADT Header size is 44 bytes
     ; +0: Signature (4)
@@ -63,7 +68,18 @@ madt_init:
     ; +3: IRQ Source
     ; +4: Global System Interrupt (4 bytes)
     ; +8: Flags (2 bytes)
-    ; Save these overrides for routing later
+    ; If IRQ Source is 0 (Timer), log the Global System Interrupt
+    cmp byte [rbx + 3], 0
+    jne .next
+    
+    ; Found Timer ISO
+    SER 'I'
+    SER 'S'
+    SER 'O'
+    mov eax, [rbx + 4]
+    add al, '0'
+    mov edx, 0x3F8
+    out dx, al
     jmp .next
 
 .next:

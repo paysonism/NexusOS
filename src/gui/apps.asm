@@ -7,7 +7,10 @@
 ; ============================================================================
 bits 64
 
+section .text
+
 %include "constants.inc"
+%include "syscall_user.inc"
 
 WIN_OFF_X       equ 8
 WIN_OFF_Y       equ 16
@@ -63,6 +66,53 @@ extern i2c_hid_debug_dump
 extern mouse_wait_input
 extern fat16_debug_dump_root
 
+app_sys_render_rect:
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
+    ret
+
+app_sys_render_text:
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
+    ret
+
+app_sys_fs_get_entry:
+    SYS_FS_ENTRY rdi
+    ret
+
+app_sys_fs_change_dir:
+    movzx rdi, ax
+    SYS_FS_CHDIR rdi
+    ret
+
+app_sys_fs_write_file:
+    SYS_FS_WRITE rdi, rsi, rdx
+    ret
+
+app_sys_fs_sync_root:
+    SYS_FS_SYNC_ROOT
+    ret
+
+app_sys_wm_close_window:
+    SYS_WM_CLOSE rdi
+    ret
+
+app_sys_display_set_mode:
+    SYS_DISPLAY_SET_MODE rdi, rsi, rdx
+    ret
+
+app_sys_cursor_init:
+    SYS_CURSOR_INIT
+    ret
+
+%xdefine render_rect app_sys_render_rect
+%xdefine render_text app_sys_render_text
+%xdefine fat16_get_entry app_sys_fs_get_entry
+%xdefine fat16_change_dir app_sys_fs_change_dir
+%xdefine fat16_write_file app_sys_fs_write_file
+%xdefine fat16_sync_root app_sys_fs_sync_root
+%xdefine wm_close_window app_sys_wm_close_window
+%xdefine display_set_mode app_sys_display_set_mode
+%xdefine cursor_init app_sys_cursor_init
+
 ; ============================================================================
 ; app_launch - Launch an app by ID
 ; RDI = app ID (2..6)
@@ -99,7 +149,9 @@ app_launch:
     mov rcx, 420
     mov r8, 340
     mov r9, app_explorer_draw
+    sub rsp, 8               ; Align stack
     call wm_create_window_ex
+    add rsp, 8
     cmp rax, -1
     je .done
     push rax
@@ -114,6 +166,13 @@ app_launch:
     ; Reset terminal state
     mov dword [term_cursor], 0
     mov byte [term_input], 0
+    
+    ; Clear entire input buffer for safety
+    lea rdi, [term_input]
+    xor eax, eax
+    mov ecx, 64
+    rep stosb
+
     mov dword [term_hist_count], 0
     ; Clear history pointers
     lea rcx, [term_hist_ptrs]
@@ -137,7 +196,9 @@ app_launch:
     mov rcx, 450
     mov r8, 300
     mov r9, app_terminal_draw
+    sub rsp, 8               ; Align stack
     call wm_create_window_ex
+    add rsp, 8
     cmp rax, -1
     je .done
     push rax
@@ -145,6 +206,11 @@ app_launch:
     add rax, WINDOW_POOL_ADDR
     mov qword [rax + WIN_OFF_CLICKFN], app_terminal_click
     mov qword [rax + WIN_OFF_KEYFN], app_terminal_key
+    
+    ; Reset filesystem state to root when terminal starts
+    xor ax, ax
+    call fat16_change_dir
+    
     pop rax
     jmp .done
 
@@ -172,7 +238,9 @@ app_launch:
     mov rcx, 400
     mov r8, 300
     mov r9, app_notepad_draw
+    sub rsp, 8               ; Align stack
     call wm_create_window_ex
+    add rsp, 8
     cmp rax, -1
     je .done
     push rax
@@ -276,19 +344,20 @@ app_open_file_in_notepad:
 
     mov r12, rdi             ; save dir entry ptr
 
-    ; Launch notepad (resets buffer)
+    ; Launch notepad (resets buffer) via syscall
     mov rdi, APP_NOTEPAD
-    call app_launch
+    SYS_APP_LAUNCH rdi
     cmp rax, -1
     je .open_done
     mov r13, rax             ; window ID
 
-    ; Set window title from 8.3 name
-    imul rax, r13, WINDOW_STRUCT_SIZE
+    ; Format name into title buffer (WIN_OFF_TITLE is +48)
+    mov rax, r13
+    imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    lea rdi, [rax + 48]      ; WIN_OFF_TITLE
+    lea rdi, [rax + 48]
     mov rsi, r12
-    call fat16_format_name_to  ; format 8.3 name into rdi
+    call fat16_format_name_to  ; local call is fine
 
     ; Save dir entry for notepad (so Save knows the filename)
     mov [np_open_entry], r12
@@ -296,8 +365,8 @@ app_open_file_in_notepad:
     ; Read file content from FAT16
     mov rdi, r12             ; dir entry ptr
     lea rsi, [notepad_buf]   ; dest = notepad buffer
-    mov edx, NP_BUF_SIZE - 1 ; max bytes
-    call fat16_read_file
+    mov rdx, NP_BUF_SIZE - 1 ; max bytes
+    SYS_FS_READ rdi, rsi, rdx
     ; eax = bytes read
     cmp eax, -1
     je .open_load_empty
@@ -416,7 +485,7 @@ app_explorer_draw:
     sub rdx, BORDER_WIDTH * 2
     mov ecx, 20
     mov r8d, 0x00E0E0E0
-    call render_rect
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
 
     ; Path text
     mov rdi, r12
@@ -424,9 +493,45 @@ app_explorer_draw:
     mov rsi, r13
     add rsi, TITLEBAR_HEIGHT + 3
     mov rdx, szPathRoot
+    cmp word [fat16_cur_dir_cluster], 0
+    jne .draw_subdir
+    call .draw_path
+    jmp .path_done
+    
+    ; If not root, also show " [Back]" button
+.draw_subdir:
+    mov rdx, szPathSub
+    call .draw_path
+    
+    ; Draw [Back] button
+    mov rdi, r12
+    add rdi, r14
+    sub rdi, 60
+    mov rsi, r13
+    add rsi, TITLEBAR_HEIGHT + 2
+    mov rdx, 50
+    mov rcx, 16
+    mov r8d, 0x00A0A0A0
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
+    
+    mov rdi, r12
+    add rdi, r14
+    sub rdi, 55
+    mov rsi, r13
+    add rsi, TITLEBAR_HEIGHT + 4
+    mov rdx, szBackBtn
+    mov ecx, 0x00000000
+    mov r8d, 0x00A0A0A0
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
+    jmp .path_done
+
+.draw_path:
     mov ecx, 0x00333333
     mov r8d, 0x00E0E0E0
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
+    ret
+
+.path_done:
 
     ; --- Column headers ---
     mov rdi, r12
@@ -436,8 +541,8 @@ app_explorer_draw:
     mov rdx, r14
     sub rdx, BORDER_WIDTH * 2
     mov ecx, 18
-    mov r8d, 0x00D0D0E0
-    call render_rect
+    mov r8, 0x00D0D0E0
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
 
     mov rdi, r12
     add rdi, BORDER_WIDTH + 4
@@ -445,8 +550,8 @@ app_explorer_draw:
     add rsi, TITLEBAR_HEIGHT + 23
     mov rdx, szColName
     mov ecx, 0x00333333
-    mov r8d, 0x00D0D0E0
-    call render_text
+    mov r8, 0x00D0D0E0
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
     mov rdi, r12
     add rdi, r14
@@ -456,11 +561,10 @@ app_explorer_draw:
     mov rdx, szColSize
     mov ecx, 0x00333333
     mov r8d, 0x00D0D0E0
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
-    ; --- File list from FAT16 ---
-    call fat16_file_count
-    mov r8d, eax            ; total files
+    SYS_FS_COUNT
+    mov r8, rax            ; total files
     xor edx, edx            ; current file index
 
 .entry_loop:
@@ -489,15 +593,14 @@ app_explorer_draw:
     mov rdx, r14
     sub rdx, BORDER_WIDTH * 2
     mov ecx, 18
-    mov r8d, COLOR_HIGHLIGHT
-    call render_rect
+    mov r8, COLOR_HIGHLIGHT
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
     pop rdx
 
 .no_highlight:
-    ; Get FAT16 directory entry
     push rdx
-    mov edi, edx
-    call fat16_get_entry
+    mov rdi, rdx
+    SYS_FS_ENTRY rdi
     mov r9, rax              ; r9 = dir entry pointer
     pop rdx
     test r9, r9
@@ -539,7 +642,7 @@ app_explorer_draw:
     mov r8d, COLOR_HIGHLIGHT
     mov ecx, COLOR_TEXT_WHITE
 .entry_no_hl_text:
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
     mov edx, [explorer_cur_idx]
     mov r9, [explorer_cur_entry]
 
@@ -566,7 +669,7 @@ app_explorer_draw:
     mov rdx, fat16_size_buf
     mov ecx, 0x00666666
     mov r8d, COLOR_WINDOW_BG
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
     jmp .entry_size_done
 
 .dir_size:
@@ -581,15 +684,16 @@ app_explorer_draw:
     mov rdx, szDirLabel
     mov ecx, 0x00999999
     mov r8d, COLOR_WINDOW_BG
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
 .entry_size_done:
     pop r8
     pop rdx
-    inc edx
+    inc rdx
     jmp .entry_loop
 
 .entries_done:
+    ; (Registers will be popped at the very end of app_explorer_draw)
 
     ; Status bar at bottom
     mov rdi, r12
@@ -601,7 +705,7 @@ app_explorer_draw:
     sub rdx, BORDER_WIDTH * 2
     mov ecx, 18
     mov r8d, 0x00E8E8E8
-    call render_rect
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
 
     mov rdi, r12
     add rdi, BORDER_WIDTH + 4
@@ -611,7 +715,7 @@ app_explorer_draw:
     mov rdx, szStatusReady
     mov ecx, 0x00666666
     mov r8d, 0x00E8E8E8
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
     ; --- Rename overlay (inline input at bottom) ---
     cmp byte [exp_rename_active], 0
@@ -627,7 +731,7 @@ app_explorer_draw:
     sub rdx, BORDER_WIDTH * 2
     mov ecx, 22
     mov r8d, 0x00334455
-    call render_rect
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
 
     ; "Rename:" label
     mov rdi, r12
@@ -638,7 +742,7 @@ app_explorer_draw:
     mov rdx, szRenameLabel
     mov ecx, 0x00AACCFF
     mov r8d, 0x00334455
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
     ; Rename text input value
     mov rdi, r12
@@ -649,7 +753,7 @@ app_explorer_draw:
     lea rdx, [exp_rename_buf]
     mov ecx, COLOR_TEXT_WHITE
     mov r8d, 0x00334455
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
     ; Blinking cursor after text
     mov eax, [exp_rename_cursor]
@@ -663,7 +767,7 @@ app_explorer_draw:
     mov rdx, szCursor
     mov ecx, COLOR_TEXT_WHITE
     mov r8d, 0x00334455
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
 .no_rename_overlay:
 
@@ -681,7 +785,7 @@ app_explorer_draw:
     sub rdx, BORDER_WIDTH * 2
     mov ecx, 22
     mov r8d, 0x00443355
-    call render_rect
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
 
     ; "New Folder:" label
     mov rdi, r12
@@ -692,7 +796,7 @@ app_explorer_draw:
     mov rdx, szNewFolderLabel
     mov ecx, 0x00FFAACC
     mov r8d, 0x00443355
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
     ; Folder name input value
     mov rdi, r12
@@ -703,7 +807,7 @@ app_explorer_draw:
     lea rdx, [exp_newfolder_buf]
     mov ecx, COLOR_TEXT_WHITE
     mov r8d, 0x00443355
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
     ; Cursor
     mov eax, [exp_newfolder_cursor]
@@ -717,7 +821,7 @@ app_explorer_draw:
     mov rdx, szCursor
     mov ecx, COLOR_TEXT_WHITE
     mov r8d, 0x00443355
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
 .no_newfolder_overlay:
 
@@ -735,7 +839,7 @@ app_explorer_draw:
     mov edx, 140
     mov ecx, 30
     mov r8d, 0x00228B22
-    call render_rect
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
 
     mov rdi, r12
     mov eax, r14d
@@ -747,9 +851,11 @@ app_explorer_draw:
     mov rdx, szNewFolderDone
     mov ecx, COLOR_TEXT_WHITE
     mov r8d, 0x00228B22
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
+    jmp .no_newfolder_msg
 
 .no_newfolder_msg:
+    ; Continue to context menu
 
     ; --- Context menu overlay ---
     cmp byte [ctx_menu_visible], 0
@@ -761,7 +867,7 @@ app_explorer_draw:
     mov edx, CTX_WIDTH
     mov ecx, CTX_ITEM_H * 4 + 4
     mov r8d, 0x00F0F0F0
-    call render_rect
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
 
     ; Border
     mov edi, [ctx_menu_x]
@@ -769,7 +875,7 @@ app_explorer_draw:
     mov edx, CTX_WIDTH
     mov ecx, 1
     mov r8d, 0x00999999
-    call render_rect
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
 
     ; Item 0: Open
     mov edi, [ctx_menu_x]
@@ -779,7 +885,7 @@ app_explorer_draw:
     mov rdx, szCtxOpen
     mov ecx, 0x00222222
     mov r8d, 0x00F0F0F0
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
     ; Item 1: Rename
     mov edi, [ctx_menu_x]
@@ -789,7 +895,7 @@ app_explorer_draw:
     mov rdx, szCtxRename
     mov ecx, 0x00222222
     mov r8d, 0x00F0F0F0
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
     ; Item 2: New Folder
     mov edi, [ctx_menu_x]
@@ -799,7 +905,7 @@ app_explorer_draw:
     mov rdx, szCtxNewFolder
     mov ecx, 0x00222222
     mov r8d, 0x00F0F0F0
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
     ; Item 3: Properties
     mov edi, [ctx_menu_x]
@@ -809,7 +915,7 @@ app_explorer_draw:
     mov rdx, szCtxProperties
     mov ecx, 0x00666666
     mov r8d, 0x00F0F0F0
-    call render_text
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
 .no_ctx_menu:
     pop r15
@@ -817,7 +923,7 @@ app_explorer_draw:
     pop r13
     pop r12
     pop rbx
-    ret
+    SYS_APP_DONE
 
 ; Click callback: RDI=window_ptr, RSI=client_x, RDX=client_y
 app_explorer_click:
@@ -827,6 +933,8 @@ app_explorer_click:
     push rdx
     push rsi
     push rdi
+    push r15
+    push rbp        ; 8 pushes = 64 bytes (16-byte aligned)
 
     ; Dismiss "Folder Created!" message on click
     cmp byte [exp_newfolder_done_msg], 0
@@ -895,7 +1003,7 @@ app_explorer_click:
     ; Open selected file in notepad
     mov byte [ctx_menu_visible], 0
     mov edi, [explorer_sel]
-    call fat16_get_entry
+    SYS_FS_ENTRY rdi
     test rax, rax
     jz .ctx_dismiss
     ; Check it's a file (not dir)
@@ -913,7 +1021,7 @@ app_explorer_click:
     mov dword [exp_rename_cursor], 0
     ; Get current entry name
     mov edi, [explorer_sel]
-    call fat16_get_entry
+    SYS_FS_ENTRY rdi
     test rax, rax
     jz .ctx_dismiss
     ; Copy name into rename buffer (up to 23 chars from VFS 24-byte name)
@@ -953,7 +1061,7 @@ app_explorer_click:
 .ctx_properties:
     mov byte [ctx_menu_visible], 0
     mov edi, [explorer_sel]
-    call fat16_get_entry
+    SYS_FS_ENTRY rdi
     test rax, rax
     jz .ctx_dismiss
     mov [prop_entry_ptr], rax
@@ -961,10 +1069,10 @@ app_explorer_click:
     mov rdi, szPropTitle
     mov rsi, 250
     mov rdx, 200
-    mov rcx, 240
+    mov r10, 240
     mov r8, 160
     mov r9, app_properties_draw
-    call wm_create_window_ex
+    SYS_WM_CREATE rdi, rsi, rdx, r10, r8, r9
     jmp .exp_click_ret
 
 .ctx_dismiss:
@@ -981,6 +1089,15 @@ app_explorer_click:
     ; Context menu is triggered by explorer_key or by the main event loop
 
     ; client_y relative to client area top
+    ; Check if Back button clicked (X > width - 60, Y < 20)
+    cmp rdx, 20
+    jge .exp_not_back
+    mov rax, [rdi + WIN_OFF_W]
+    sub rax, 60
+    cmp rsi, rax
+    jge .exp_back_click
+.exp_not_back:
+
     cmp rdx, 42
     jl .exp_click_ret
 
@@ -993,11 +1110,18 @@ app_explorer_click:
 
     ; Check against FAT16 file count
     push rax
-    call fat16_file_count
+    SYS_FS_COUNT
     mov ecx, eax
     pop rax
     cmp eax, ecx
     jge .exp_click_ret
+    jmp .exp_select
+
+.exp_back_click:
+    xor di, di
+    SYS_FS_CHDIR rdi
+    mov dword [explorer_sel], 0
+    jmp .exp_click_ret
 
 .exp_select:
     ; Check if same item (double-click = open)
@@ -1007,7 +1131,7 @@ app_explorer_click:
     ; Double-click: open file
     push rax
     mov edi, eax
-    call fat16_get_entry
+    SYS_FS_ENTRY rdi
     test rax, rax
     jz .dblclick_done
     ; Check if directory
@@ -1025,13 +1149,15 @@ app_explorer_click:
     mov [explorer_sel], eax
 
 .exp_click_ret:
+    pop rbp
+    pop r15
     pop rdi
     pop rsi
     pop rdx
     pop rcx
     pop rbx
     pop rax
-    ret
+    SYS_APP_DONE              ; Return to kernel from Ring 3
 
 ; Key handler for explorer (arrow navigation + Enter to open + right-click menu key)
 app_explorer_key:
@@ -1039,6 +1165,7 @@ app_explorer_key:
     push rbx
     push rcx
     push rdx
+    push rbp        ; Align stack
 
     ; Check if rename mode is active
     cmp byte [exp_rename_active], 1
@@ -1302,7 +1429,7 @@ app_explorer_key:
     inc eax
     ; Check against FAT16 file count
     push rax
-    call fat16_file_count
+    SYS_FS_COUNT
     mov ecx, eax
     pop rax
     cmp eax, ecx
@@ -1335,14 +1462,204 @@ app_explorer_key:
     mov rdi, rax
     call app_open_file
 .eke_done:
-    pop rax
+    ; (rax was saved at start, we'll pop it at .exp_key_done)
+    jmp .exp_key_done
 
 .exp_key_done:
+    pop rbp
     pop rdx
     pop rcx
     pop rbx
     pop rax
+    SYS_APP_DONE
+
+; ============================================================================
+; TERMINAL APP - Command Handlers & FS Helpers
+; ============================================================================
+
+; Helper: Find a directory by name in current view and return cluster
+; RSI = name to find. Returns AX = cluster or 0xFFFF
+term_find_dir_cluster:
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rsi ; target name
+    
+    SYS_FS_COUNT
+    mov r13d, eax
+    xor r14d, r14d ; index
+    
+.fdir_loop:
+    cmp r14d, r13d
+    jge .fdir_fail
+    
+    mov edi, r14d
+    call fat16_get_entry
+    test rax, rax
+    jz .fdir_next
+    
+    mov r15, rax ; entry pointer
+    
+    ; Format name for comparison
+    mov rdi, fat16_name_buf
+    mov rsi, r15
+    call fat16_format_name
+    
+    ; Compare fat16_name_buf with r12
+    mov rsi, fat16_name_buf
+    mov rdi, r12
+    call term_strcmp_nc ; case insensitive
+    test eax, eax
+    jnz .fdir_match
+    jmp .fdir_next
+
+.fdir_match:
+    ; Match! Check if directory
+    mov al, [r15 + 11]
+    test al, 0x10
+    jz .fdir_next
+    
+    ; It's a directory! return cluster
+    movzx eax, word [r15 + 26]
+    jmp .fdir_done
+
+.fdir_next:
+    inc r14d
+    jmp .fdir_loop
+
+.fdir_fail:
+    mov ax, 0xFFFF
+.fdir_done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
     ret
+
+; Case-insensitive strcmp for terminal
+term_strcmp_nc:
+    push rsi
+    push rdi
+.snc_loop:
+    mov al, [rsi]
+    mov bl, [rdi]
+    test al, al
+    jnz .snc_not_end
+    test bl, bl
+    jnz .snc_fail
+    mov eax, 1
+    jmp .snc_done
+.snc_not_end:
+    ; toupper al
+    cmp al, 'a'
+    jl .snc_up_bl
+    cmp al, 'z'
+    jg .snc_up_bl
+    sub al, 32
+.snc_up_bl:
+    ; toupper bl
+    cmp bl, 'a'
+    jl .snc_cmp
+    cmp bl, 'z'
+    jg .snc_cmp
+    sub bl, 32
+.snc_cmp:
+    cmp al, bl
+    jne .snc_fail
+    inc rsi
+    inc rdi
+    jmp .snc_loop
+.snc_fail:
+    xor eax, eax
+.snc_done:
+    pop rdi
+    pop rsi
+    ret
+
+; Helper: Build a string of all files in current directory
+term_build_ls_string:
+    push rdi
+    push rsi
+    push rbx
+    push rcx
+    push r12
+    push r13
+    
+    lea rdi, [term_ls_buf]
+    mov byte [rdi], 0
+    
+    SYS_FS_COUNT
+    test eax, eax
+    jz .ls_empty
+    
+    mov r12d, eax ; count
+    xor r13d, r13d ; index
+    
+.ls_loop:
+    cmp r13d, r12d
+    jge .ls_done
+    
+    push rdi
+    mov edi, r13d
+    call fat16_get_entry
+    pop rdi
+    test rax, rax
+    jz .ls_next
+    
+    ; Format name into fat16_name_buf
+    push rdi
+    mov rsi, rax
+    mov rdi, fat16_name_buf
+    call fat16_format_name
+    pop rdi
+    
+    ; Copy from fat16_name_buf to rdi
+    push rsi
+    lea rsi, [fat16_name_buf]
+.ls_cp:
+    lodsb
+    test al, al
+    jz .ls_cp_done
+    stosb
+    jmp .ls_cp
+.ls_cp_done:
+    ; Add spaces
+    mov al, ' '
+    stosb
+    stosb
+    pop rsi
+    
+.ls_next:
+    inc r13d
+    jmp .ls_loop
+
+.ls_empty:
+    lea rsi, [szEmptyDir]
+.ls_copy_empty:
+    lodsb
+    stosb
+    test al, al
+    jnz .ls_copy_empty
+
+.ls_done:
+    mov byte [rdi], 0
+    pop r13
+    pop r12
+    pop rcx
+    pop rbx
+    pop rsi
+    pop rdi
+    ret
+
 
 ; ============================================================================
 ; TERMINAL APP
@@ -1373,55 +1690,48 @@ app_terminal_draw:
     sub rcx, TITLEBAR_HEIGHT + BORDER_WIDTH
     cmp rcx, 0
     jle .term_draw_done
-    mov r8d, 0x00111111
-    call render_rect
+    mov r8, 0x00111111
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
 
     ; Draw history lines
     mov eax, [term_hist_count]
     test eax, eax
     jz .term_no_hist
 
-    ; Calculate how many lines fit on screen (reserve 1 line for prompt)
+    ; Calculate visible lines
     mov ecx, r15d
     sub ecx, TITLEBAR_HEIGHT + BORDER_WIDTH + 16
     xor edx, edx
     push rax
     mov eax, ecx
-    mov ecx, 14                  ; line height
+    mov ecx, 14
     xor edx, edx
     div ecx
-    mov ecx, eax                 ; max visible lines
+    mov ecx, eax
     pop rax
-    dec ecx                      ; -1 for prompt line
+    dec ecx
     cmp ecx, 0
     jle .term_no_hist
 
-    ; Show last N lines of history
-    ; start_idx = max(0, hist_count - max_visible)
-    mov edx, eax                 ; hist_count
-    sub edx, ecx                 ; hist_count - max_visible
+    ; Show last N
+    mov edx, eax
+    sub edx, ecx
     cmp edx, 0
     jge .term_start_ok
     xor edx, edx
 .term_start_ok:
-    ; edx = start index, eax = hist_count
     push rbx
     lea rbx, [term_hist_ptrs]
-    xor r8d, r8d                 ; display line counter
+    xor r8d, r8d
 .term_hist_loop:
     cmp edx, eax
     jge .term_hist_end
-
     push rax
     push rdx
     push r8
-
-    ; Get string pointer
     mov rcx, [rbx + rdx * 8]
     test rcx, rcx
     jz .term_hist_skip
-
-    ; Draw line
     mov rdi, r12
     add rdi, BORDER_WIDTH + 6
     mov rsi, r13
@@ -1429,10 +1739,9 @@ app_terminal_draw:
     imul eax, r8d, 14
     add rsi, rax
     mov rdx, rcx
-    mov ecx, 0x0000DD00          ; Green output text
-    mov r8d, 0x00111111
-    call render_text
-
+    mov rcx, 0x0000DD00
+    mov r8, 0x00111111
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 .term_hist_skip:
     pop r8
     pop rdx
@@ -1440,9 +1749,7 @@ app_terminal_draw:
     inc edx
     inc r8d
     jmp .term_hist_loop
-
 .term_hist_end:
-    ; r8d = number of lines drawn
     mov [term_draw_lines], r8d
     pop rbx
     jmp .term_draw_prompt
@@ -1451,7 +1758,7 @@ app_terminal_draw:
     mov dword [term_draw_lines], 0
 
 .term_draw_prompt:
-    ; Draw prompt
+    ; Draw prompt "C:\> "
     mov rdi, r12
     add rdi, BORDER_WIDTH + 6
     mov rsi, r13
@@ -1460,11 +1767,11 @@ app_terminal_draw:
     imul eax, 14
     add rsi, rax
     mov rdx, szTermPrompt
-    mov ecx, 0x0000FF00
-    mov r8d, 0x00111111
-    call render_text
+    mov rcx, 0x0000FF00
+    mov r8, 0x00111111
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
-    ; Draw input text after prompt "C:\> "
+    ; Draw input text
     mov rdi, r12
     add rdi, BORDER_WIDTH + 6 + 40
     mov rsi, r13
@@ -1473,9 +1780,9 @@ app_terminal_draw:
     imul eax, 14
     add rsi, rax
     lea rdx, [term_input]
-    mov ecx, 0x00FFFFFF
-    mov r8d, 0x00111111
-    call render_text
+    mov rcx, 0x00FFFFFF
+    mov r8, 0x00111111
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
     ; Draw cursor
     mov eax, [term_cursor]
@@ -1489,9 +1796,9 @@ app_terminal_draw:
     imul eax, 14
     add rsi, rax
     mov rdx, szCursor
-    mov ecx, 0x00FFFFFF
-    mov r8d, 0x00111111
-    call render_text
+    mov rcx, 0x00FFFFFF
+    mov r8, 0x00111111
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
 
 .term_draw_done:
     pop r15
@@ -1499,10 +1806,10 @@ app_terminal_draw:
     pop r13
     pop r12
     pop rbx
-    ret
+    SYS_APP_DONE
 
 app_terminal_click:
-    ret
+    SYS_APP_DONE
 
 ; Key handler: RDI=window_ptr, ESI=key_event [pressed:8|mods:8|ascii:8|scan:8]
 app_terminal_key:
@@ -1612,6 +1919,12 @@ app_terminal_key:
     test eax, eax
     jnz .cmd_dir
     
+    ; Check "cd "
+    lea rdi, [szCmdCd]
+    call term_starts_with
+    test eax, eax
+    jnz .cmd_cd
+    
     ; Check "time" or "date"
     lea rdi, [szCmdTime]
     call term_strcmp
@@ -1705,7 +2018,20 @@ app_terminal_key:
     lea rdx, [szCmdVerOut]
     jmp .cmd_add_output
 .cmd_dir:
-    lea rdx, [szCmdDirOut] ; Static for now, could be dynamic
+    call term_build_ls_string
+    lea rdx, [term_ls_buf]
+    jmp .cmd_add_output
+
+.cmd_cd:
+    ; cd <dirname>
+    lea rsi, [term_input + 3] ; skip "cd "
+    call term_find_dir_cluster
+    cmp ax, 0xFFFF
+    je .cd_err
+    call fat16_change_dir
+    jmp .term_clear_input
+.cd_err:
+    lea rdx, [szCmdCdErr]
     jmp .cmd_add_output
 .cmd_time:
     lea rdx, [szTime] ; Use taskbar time string
@@ -1806,7 +2132,7 @@ app_terminal_key:
     pop rcx
     pop rbx
     pop rax
-    ret
+    SYS_APP_DONE
 
 ; Helper: add echo buffer pointer to history
 term_add_history_echo:
@@ -2273,7 +2599,7 @@ app_notepad_draw:
     pop r13
     pop r12
     pop rbx
-    ret
+    SYS_APP_DONE
 
 ; Click handler for notepad
 app_notepad_click:
@@ -2535,7 +2861,7 @@ app_notepad_click:
     pop rcx
     pop rbx
     pop rax
-    ret
+    SYS_APP_DONE
 
 ; Key handler for notepad: supports arrows, Enter, Backspace, printable chars
 app_notepad_key:
@@ -3032,7 +3358,7 @@ app_notepad_key:
     pop rcx
     pop rbx
     pop rax
-    ret
+    SYS_APP_DONE
 
 ; ============================================================================
 ; SETTINGS APP
@@ -3243,7 +3569,7 @@ app_settings_draw:
     pop r13
     pop r12
     pop rbx
-    ret
+    SYS_APP_DONE
 
 ; Click Handler
 app_settings_click:
@@ -3344,7 +3670,7 @@ app_settings_click:
     pop r13
     pop r12
     pop rbx
-    ret
+    SYS_APP_DONE
 
 
 ; ============================================================================
@@ -3446,7 +3772,7 @@ app_about_draw:
     pop r13
     pop r12
     pop rbx
-    ret
+    SYS_APP_DONE
 
 ; ============================================================================
 ; Right-click context menu for explorer (called from main event loop)
@@ -3595,7 +3921,7 @@ app_properties_draw:
     pop r13
     pop r12
     pop rbx
-    ret
+    SYS_APP_DONE
 
 global ctx_menu_visible
 
@@ -3616,11 +3942,11 @@ app_open_file_in_bmpview:
 
     mov r12, rdi             ; dir entry ptr
 
-    ; Read BMP file into memory
+    ; Read BMP file into memory via syscall
     mov rdi, r12
     mov rsi, BMP_FILE_BUF
-    mov edx, 262144          ; max 256KB
-    call fat16_read_file
+    mov rdx, 262144          ; max 256KB
+    SYS_FS_READ rdi, rsi, rdx
     cmp eax, -1
     je .bmp_open_fail
     mov r13d, eax            ; bytes read
@@ -3653,11 +3979,11 @@ app_open_file_in_bmpview:
     mov rsi, 150
     mov rdx, 100
     ; Window size = image size + borders + titlebar
-    mov ecx, [bmp_width]
-    add ecx, BORDER_WIDTH * 2
-    cmp ecx, 200
+    mov r10d, [bmp_width]
+    add r10d, BORDER_WIDTH * 2
+    cmp r10d, 200
     jge .bmp_w_ok
-    mov ecx, 200
+    mov r10d, 200
 .bmp_w_ok:
     mov r8d, [bmp_height]
     add r8d, TITLEBAR_HEIGHT + BORDER_WIDTH
@@ -3666,7 +3992,7 @@ app_open_file_in_bmpview:
     mov r8d, 100
 .bmp_h_ok:
     mov r9, app_bmp_draw
-    call wm_create_window_ex
+    SYS_WM_CREATE rdi, rsi, rdx, r10, r8, r9
 
 .bmp_open_fail:
     pop r13
@@ -3782,7 +4108,7 @@ app_bmp_draw:
     pop r13
     pop r12
     pop rbx
-    ret
+    SYS_APP_DONE
 
 ; ============================================================================
 ; HELPER FUNCTIONS
@@ -3955,6 +4281,8 @@ app_format_bytes_size:
     ; Convert to digits on stack (reverse order)
     xor ecx, ecx          ; digit count
     mov ebx, 10
+    test ebx, ebx
+    jz .skip_u2s
 .u2s_div:
     xor edx, edx
     div ebx
@@ -3977,6 +4305,7 @@ app_format_bytes_size:
     mov byte [rdi + 1], 'B'
     mov byte [rdi + 2], 0
 
+.skip_u2s:
 .u2s_done:
     pop rsi
     pop rdi
@@ -4310,7 +4639,7 @@ app_paint_draw:
     pop r13
     pop r12
     pop rbx
-    ret
+    SYS_APP_DONE
 
 ; Click Handler
 ; RSI = Client X, RDX = Client Y
@@ -4431,7 +4760,7 @@ app_paint_click:
     pop r13
     pop r12
     pop rbx
-    ret
+    SYS_APP_DONE
 
 ; Key handler for Paint (Save As)
 app_paint_key:
@@ -4531,8 +4860,9 @@ app_paint_key:
     pop rdx
     pop rcx
     pop rbx
+    SYS_APP_DONE
 .pk_ret:
-    ret
+    SYS_APP_DONE
 
 app_paint_save:
     mov rdi, 0x930000
@@ -4718,6 +5048,9 @@ exp_rename_cursor  dd 0
 exp_newfolder_active  db 0
 exp_newfolder_cursor  dd 0
 exp_newfolder_done_msg db 0
+term_ls_buf      times 512 db 0
+term_debug_buf   times 1024 db 0
+term_echo_buf    times 128 db 0
 
 ; --- Terminal strings ---
 szTermWelcome   db "NexusOS Terminal v3.0", 0
@@ -4726,9 +5059,16 @@ szTermHelpHint  db "----------------------------", 0
 szTermPrompt    db "C:\> ", 0
 szCursor        db "_", 0
 szCmdUnknown    db "  Unknown command. Type help.", 0
-szCmdHelpOut    db "  help ver dir cls debug restart usb mouse touchpad", 0
+szCmdHelpOut    db "  help cd dir ver cls debug restart exit", 0
 szCmdVerOut     db "  NexusOS v3.0 (x86-64)", 0
 szCmdDirOut     db "  Documents  Pictures  System", 0
+szCmdCdErr      db "  Directory not found.", 0
+szEmptyDir      db "(empty)", 0
+szCmdCd         db "cd ", 0
+szCmdDir        db "dir", 0
+szCmdLs         db "ls", 0
+szPathSub       db "C:\...", 0
+szBackBtn       db "[Up]", 0
 
 ; Terminal state
 term_cursor     dd 0
@@ -4827,10 +5167,8 @@ paint_brush_size dd 2
 szCmdHelp db "help", 0
 szCmdVer  db "ver", 0
 szCmdCls  db "cls", 0
-szCmdDir  db "dir", 0
 szCmdTime db "time", 0
 szCmdEcho db "echo", 0
-szCmdLs   db "ls", 0
 szCmdClear db "clear", 0
 szCmdExit db "exit", 0
 szCmdPwd  db "pwd", 0
@@ -4845,9 +5183,7 @@ szCmdTouchpad db "touchpad", 0
 szCmdIdebug db "idebug", 0
 
 section .bss
-term_debug_buf: resb 256
 term_input:     resb 64
-term_echo_buf:  resb 128
 notepad_buf:    resb NP_BUF_SIZE
 np_line_len:    resd NP_MAX_LINES
 np_saved_content: resb NP_BUF_SIZE
@@ -4858,3 +5194,5 @@ exp_rename_buf: resb 24
 exp_newfolder_buf: resb 24
 np_saveas_buf: resb 24
 np_saveas_83:  resb 12
+
+section .text

@@ -827,16 +827,12 @@ bb_addr:    dq BACK_BUFFER_ADDR
 scr_width:  dd SCREEN_WIDTH
 scr_height: dd SCREEN_HEIGHT
 scr_pitch:  dd SCREEN_PITCH
-vsync_enabled: db 1        ; Enabled by default (uses PIT fallback on AMD/UEFI)
+vsync_enabled: db 0        ; Disabled by default (uses PIT fallback on AMD/UEFI)
 fps_show:      db 1
 last_vsync_tick: dq 0      ; PIT tick count at last vsync
 global last_vsync_tick
 global vsync_enabled, fps_show
-global fps_count, last_fps, frame_count, start_tick
-fps_count:     dd 0
-last_fps:      dd 0
-frame_count:   dd 0
-start_tick:    dq 0
+extern fps_count, last_fps, frame_count, start_tick
 
 ; --- Wait for VSync / Frame Pacing ---
 ; On real AMD/UEFI hardware port 0x3DA is unreliable for vsync.
@@ -845,10 +841,18 @@ start_tick:    dq 0
 ; We use a hybrid: try 0x3DA with a long timeout; if it times out too fast, use PIT.
 global wait_vsync
 wait_vsync:
-    push rax
-    push rdx
-    push rcx
     push rbx
+    push rcx
+    push rdx
+    push rax
+
+    ; Check if interrupts are enabled. If they are disabled (IF=0), we are likely 
+    ; in an ISR or Syscall. Since tick_count won't increment in this state, 
+    ; we must skip the PIT-based pacing to avoid deadlocking/stalling.
+    pushf
+    pop rax
+    test eax, 0x200         ; Bit 9 = Interrupt Flag
+    jz .vsync_done_pop      ; Masked? Skip vsync wait.
 
     ; Quick check: does 0x3DA work at all? (VGA retrace signal)
     ; On AMD UEFI/GOP hardware 0x3DA returns 0 always - skip it entirely.
@@ -911,10 +915,11 @@ wait_vsync:
     mov [last_vsync_tick], rax
 
 .vsync_done:
-    pop rbx
-    pop rcx
-    pop rdx
+.vsync_done_pop:
     pop rax
+    pop rdx
+    pop rcx
+    pop rbx
     ret
 
 ; --- Set Video Mode (Bochs VBE) ---
@@ -1022,6 +1027,4 @@ display_set_mode:
     pop rax
     pop rdx
     pop rbx
-    ret
-
-global vsync_enabled, fps_show, fps_count, last_fps
+    ret

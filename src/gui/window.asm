@@ -3,6 +3,8 @@
 ; ============================================================================
 bits 64
 
+section .text
+
 %include "constants.inc"
 
 ; Window structure layout (256 bytes per window, qword fields):
@@ -412,9 +414,13 @@ wm_draw_window:
     test rax, rax
     jz .default_content
 
-    ; Call app draw: rdi = window struct ptr
-    mov rdi, rbx
-    call rax
+    ; Call app draw in L3: rdi=fn, rsi=win_ptr
+    extern call_app_l3
+    mov rdi, rax         ; app draw function address
+    mov rsi, rbx         ; window struct pointer
+    xor rdx, rdx
+    xor rcx, rcx
+    call call_app_l3
     jmp .content_done
 
 .default_content:
@@ -553,15 +559,18 @@ wm_handle_mouse_event:
     test r8, r8
     jz .set_focus
     ; Call click_fn(window_ptr, mouseX_rel, mouseY_rel)
+    ; Call click_fn in L3: rdi=fn, rsi=win_ptr, rdx=relX, rcx=relY
+    extern call_app_l3
+    mov rdi, r8              ; click_fn address
+    mov rsi, rax              ; window ptr
+    mov rdx, r12
+    sub rdx, [rax + WIN_OFF_X]
+    sub rdx, BORDER_WIDTH     ; client_x (relX)
+    mov rcx, r13
+    sub rcx, [rax + WIN_OFF_Y]
+    sub rcx, TITLEBAR_HEIGHT  ; client_y (relY)
     push rax
-    mov rdi, rax         ; window ptr
-    mov rsi, r12
-    sub rsi, [rax + WIN_OFF_X]
-    sub rsi, BORDER_WIDTH
-    mov rdx, r13
-    sub rdx, [rax + WIN_OFF_Y]
-    sub rdx, TITLEBAR_HEIGHT
-    call r8
+    call call_app_l3
     pop rax
 
 .set_focus:
@@ -878,3 +887,5 @@ wm_drag_preview_x dq 0          ; outline X position
 wm_drag_preview_y dq 0          ; outline Y position
 wm_drag_preview_w dq 0          ; outline width
 wm_drag_preview_h dq 0          ; outline height
+
+section .text

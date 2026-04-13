@@ -207,7 +207,27 @@ try {
     Write-DirEntry ($rootDirOff + $entryIdx * 32) "NEXUSOS" "   " 0x08 0 0
     $entryIdx++
 
-    # README.TXT
+    # DOCS directory
+    $docsCluster = $script:nextFreeCluster
+    $script:nextFreeCluster++
+    Write-DirEntry ($rootDirOff + $entryIdx * 32) "DOCS" "   " 0x10 $docsCluster 0
+    $entryIdx++
+
+    # Prepare DOCS directory content (cluster)
+    $docsDirOff = $dataOff + (($docsCluster - 2) * $clusterSize)
+    # 1. "." entry
+    Write-DirEntry $docsDirOff "." "   " 0x10 $docsCluster 0
+    # 2. ".." entry
+    Write-DirEntry ($docsDirOff + 32) ".." "   " 0x10 0 0
+    
+    # Add a file inside DOCS
+    $secretText = "This is a secret file inside the DOCS directory!`r`n"
+    $secretData = [System.Text.Encoding]::ASCII.GetBytes($secretText)
+    $secretCluster = Write-FileData $secretData
+    # Write entry into DOCS directory (3rd slot)
+    Write-DirEntry ($docsDirOff + 64) "SECRET" "TXT" 0x20 $secretCluster $secretData.Length
+
+    # README.TXT (back in root)
     $readmeText = "Welcome to NexusOS v3.0!`r`nThis is a 64-bit operating system written entirely in x86-64 assembly.`r`n`r`nFeatures:`r`n- Graphical desktop environment`r`n- Window manager with drag support`r`n- File explorer with real FAT16 filesystem`r`n- Built-in text editor (Notepad)`r`n- Terminal with basic commands`r`n`r`nEnjoy exploring!`r`n"
     $readmeData = [System.Text.Encoding]::ASCII.GetBytes($readmeText)
     $readmeCluster = Write-FileData $readmeData
@@ -235,8 +255,7 @@ try {
     Write-DirEntry ($rootDirOff + $entryIdx * 32) "SYSTEM" "TXT" 0x20 $sysCluster $sysData.Length
     $entryIdx++
 
-    # Create a small 16x16 BMP image (LOGO.BMP)
-    # BMP header: 14 bytes file header + 40 bytes DIB header + pixel data
+    # LOGO.BMP
     $bmpWidth = 16
     $bmpHeight = 16
     $bmpRowSize = $bmpWidth * 3
@@ -244,31 +263,25 @@ try {
     $bmpDataSize = $bmpRowSize * $bmpHeight
     $bmpFileSize = 54 + $bmpDataSize
     $bmpData = New-Object byte[] $bmpFileSize
-    # BMP file header
-    $bmpData[0] = 0x42; $bmpData[1] = 0x4D  # 'BM'
+    $bmpData[0] = 0x42; $bmpData[1] = 0x4D
     $bmpData[2] = [byte]($bmpFileSize -band 0xFF)
     $bmpData[3] = [byte](($bmpFileSize -shr 8) -band 0xFF)
-    $bmpData[10] = 54  # pixel data offset
-    # DIB header (BITMAPINFOHEADER)
-    $bmpData[14] = 40  # header size
+    $bmpData[10] = 54
+    $bmpData[14] = 40
     $bmpData[18] = [byte]$bmpWidth
     $bmpData[22] = [byte]$bmpHeight
-    $bmpData[26] = 1   # planes
-    $bmpData[28] = 24  # bits per pixel
-    # Draw a simple "N" pattern in blue/green on white bg
+    $bmpData[26] = 1
+    $bmpData[28] = 24
     for ($y = 0; $y -lt $bmpHeight; $y++) {
         for ($x = 0; $x -lt $bmpWidth; $x++) {
             $off = 54 + ($y * $bmpRowSize) + ($x * 3)
-            # White background
             $bmpData[$off] = 0xFF; $bmpData[$off+1] = 0xFF; $bmpData[$off+2] = 0xFF
-            # Draw blue border
             if ($x -eq 0 -or $x -eq 15 -or $y -eq 0 -or $y -eq 15) {
-                $bmpData[$off] = 0xAA; $bmpData[$off+1] = 0x55; $bmpData[$off+2] = 0x00  # BGR = 0x0055AA
+                $bmpData[$off] = 0xAA; $bmpData[$off+1] = 0x55; $bmpData[$off+2] = 0x00
             }
-            # Draw N shape in green (cols 3-12, rows 3-12)
             if ($y -ge 3 -and $y -le 12 -and $x -ge 3 -and $x -le 12) {
                 if ($x -eq 3 -or $x -eq 12 -or ($x - 3) -eq (12 - $y)) {
-                    $bmpData[$off] = 0x00; $bmpData[$off+1] = 0x88; $bmpData[$off+2] = 0x00  # BGR green
+                    $bmpData[$off] = 0x00; $bmpData[$off+1] = 0x88; $bmpData[$off+2] = 0x00
                 }
             }
         }
@@ -280,7 +293,7 @@ try {
     # Copy FAT1 to FAT2 again (after writing all files)
     [Array]::Copy($imgBytes, $fat1Off, $imgBytes, $fat2Off, $fatSizeSects * $bytesPerSect)
 
-    Write-Host "  FAT16: $totalClusters clusters, $fatSizeSects FAT sectors, $($entryIdx - 1) files" -ForegroundColor Gray
+    Write-Host "  FAT16: $totalClusters clusters, $fatSizeSects FAT sectors, $($entryIdx - 1) files, 1 directory" -ForegroundColor Gray
 
     [System.IO.File]::WriteAllBytes($imgPath, $imgBytes)
 

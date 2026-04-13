@@ -7,18 +7,12 @@ bits 64
 %include "macros.inc"
 
 ; Serial char macro for debugging
-%macro SER 1
-    push rax
-    push rdx
-    mov dx, 0x3F8
-    mov al, %1
-    out dx, al
-    pop rdx
-    pop rax
-%endmacro
+
 
 section .text
 global kmain
+global process_keyboard
+global process_mouse
 
 ; Kernel
 extern idt_init
@@ -128,6 +122,8 @@ debug_y: dd 40
 
 section .text
 
+section .text
+
 ; debug_print - Helper to print string to screen AND serial
 ; RSI = string pointer
 global debug_print
@@ -169,6 +165,8 @@ debug_print:
     test rax, rax
     jz .done
     
+
+    
     ; Draw background bar for text
     mov edi, 0
     mov esi, [debug_y]
@@ -187,7 +185,11 @@ debug_print:
 
     ; Advance Y
     add dword [debug_y], 16
-    ; NOTE: We now call display_flip here to see debug boot logs instantly on screen!
+    
+    ; Only flip in debug_print during early boot. Once GUI is active, 
+    ; the timer-driven render loop handles flipping.
+    cmp byte [gui_initialized], 1
+    je .done
     call display_flip
 
 .done:
@@ -207,28 +209,23 @@ kmain:
     ; Init display immediately - replaces UEFI white screen with black
     call display_init
     call display_flip
-    SER 'A'
 
     ; 1. Initialize Hardware
     call idt_init
-    SER 'B'
+    ; 0. HW Prep
+    call gdt64_init
+    call tss_init
+    call syscall_init
+
+    ; 1. Hardware & System Init
     call pic_init
-    SER 'C'
     call pit_init
-    SER 'D'
     ; Initialize advanced hardware
     call acpi_init
-    SER 'E'
     call apic_init
-    SER 'F'
     call ioapic_init
-    SER 'G'
     call spi_init
-    SER 'H'
     call spi_hid_init
-    SER 'I'
-    SER 'J'
-    SER 'K'
     
     mov rsi, szBootMsg
     call debug_print
@@ -247,66 +244,40 @@ kmain:
 
     ; Init USB HID (XHCI) - this can take hundreds of ms
     call usb_hid_init
-
-    mov rsi, szUsbDone
-    call debug_print
-
-    mov rsi, szI2cInit
-    call debug_print
-
-    ; Init I2C HID touchpad
     call i2c_hid_init
-    
-    mov rsi, szI2cDone
-    call debug_print
-
-    ; Init battery/power status
-    call battery_init
-
-    ; Initialize filesystem
     call fat16_init
 
-    ; 2. Initialize GUI
+    
+    ; 3. GUI System
     call render_init
-    call wm_init
     call cursor_init
+    call wm_init
+    
+    ; 4. Initial draw before entering usermode
+    mov byte [gui_initialized], 1
+    call render_frame
 
-    ; 3. Flush any spurious keyboard events from init
-.flush_keys:
-    call keyboard_read
-    test eax, eax
-    jnz .flush_keys
+    ; 5. Main Work Loop
+.infinite:
+    cmp byte [gui_initialized], 1
+    jne .skip_gui
 
-    ; 5. Initial Draw
-    mov byte [scene_dirty], 1
-
-    ; 6. Free-running Event + Render Loop
-.loop:
-    ; --- Poll USB Mouse ---
+    call render_frame
     call usb_poll_mouse
-
-    ; --- Poll I2C/SPI HID Touchpad (Fallback to Polling since APIC routing may not be reliable on all boards) ---
     call i2c_hid_poll
-    call spi_hid_poll
-
-    ; --- Poll battery status (throttled internally) ---
     call battery_poll
-
-    ; --- Process all pending input events ---
     call process_mouse
-    ; Fire repeat key if a key is held
     call keyboard_repeat_tick
-    ; Drain entire keyboard buffer each frame
-.pk_drain:
+
+.drain_kb:
     call process_keyboard
     call keyboard_available
     test eax, eax
-    jnz .pk_drain
+    jnz .drain_kb
 
-    ; --- Render frame ---
-    call render_frame
-
-    jmp .loop
+.skip_gui:
+    hlt                      ; Wait for next interrupt (e.g. Timer)
+    jmp .infinite
 
 ; ============================================================================
 ; Process mouse input - sets scene_dirty if needed
@@ -480,14 +451,14 @@ process_keyboard:
     test r9, r9
     jz .pk_no_focus_pop
 
-    ; Call key_fn(window_ptr=rdi, key_event=esi)
-    mov rdi, rax
-    pop rax
-    push rax
-    mov esi, eax
-    call r9
-
-    pop rax
+    ; Call key_fn in L3: rdi=fn, rsi=win_ptr, rdx=key_event
+    extern call_app_l3
+    mov rdi, r9              ; app key function
+    mov rsi, rax              ; window pointer
+    pop rax                  ; original key event (contains ASCII, scancode, etc)
+    mov edx, eax             ; 3rd arg: key event
+    xor rcx, rcx
+    call call_app_l3
     mov byte [scene_dirty], 1
     ret
 
@@ -661,7 +632,6 @@ render_frame:
     mov edi, [mouse_x]
     mov esi, [mouse_y]
     call cursor_draw
-
     ret
 
 .rf_draw_drag:
@@ -690,13 +660,16 @@ render_frame:
 .rf_update_fps:
     inc dword [frame_count]
     mov rax, [tick_count]
-    mov rbx, [start_tick]
-    sub rax, rbx
-    cmp rax, 100             ; 1 second (100 ticks)
+    mov rcx, [start_tick]    ; Use RCX instead of RBX
+    mov rdx, rax
+    sub rdx, rcx             ; RDX = elapsed ticks
+    cmp rdx, 100             ; 100 ticks = 1 second
     jl .rf_fps_no_update
+    
     mov eax, [frame_count]
     mov [last_fps], eax
     mov dword [frame_count], 0
+    
     mov rax, [tick_count]
     mov [start_tick], rax
 .rf_fps_no_update:
@@ -851,10 +824,14 @@ dbg_str     db "USB:0",0,"I2C:0",0,"SPP:0",0
 dbg_xlbl    db "X:",0
 dbg_ylbl    db "Y:",0
 dbg_num     times 12 db 0    ; scratch for uint32_to_str output
-scene_dirty db 1              ; 1 = scene needs full redraw
+section .data
+scene_dirty      db 1              ; 1 = scene needs full redraw
+global gui_initialized
+gui_initialized db 0          ; set to 1 after GUI fully initialized
 
 szBootMsg db "Booting NexusOS v3.0...", 0
 szUsbInit db "Initializing USB HID (XHCI)...", 0
 szUsbDone db "USB HID Init Complete.", 0
 szI2cInit db "Initializing I2C HID (Touchpad)...", 0
 szI2cDone db "I2C HID Init Complete.", 0
+szUsermodeIn db "-> Entering Usermode (Ring 3)...", 0

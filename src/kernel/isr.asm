@@ -16,6 +16,14 @@ extern mouse_handler
 extern i2c_hid_poll
 extern spi_hid_poll
 extern apic_eoi
+extern render_frame
+extern process_mouse
+extern keyboard_repeat_tick
+extern keyboard_available
+extern process_keyboard
+extern usb_poll_mouse
+extern battery_poll
+extern gui_initialized
 
 ; ============================================================================
 ; Exception ISR Stubs (0-31)
@@ -57,14 +65,28 @@ ISR_NOERRCODE 31
 ; Common ISR handler for exceptions
 global isr_common_stub
 isr_common_stub:
+    cld                     ; Clear direction flag for kernel
     PUSH_ALL
 
-    ; Stack frame (after PUSH_ALL):
-    ; [rsp+120] = interrupt number
-    ; [rsp+128] = error code
-    ; [rsp+136] = RIP
-    ; [rsp+144] = CS
-    ; [rsp+152] = RFLAGS
+    ; Print Exception Info: X<num> @ <RIP> # <CS> ! <RSP>
+    SER 'X'
+    mov rdi, [rsp + 120]     ; Interrupt number
+    call ser_print_hex64
+    
+    SER '@'
+    mov rdi, [rsp + 136]     ; RIP
+    call ser_print_hex64
+
+    SER '#'
+    mov rdi, [rsp + 144]     ; CS
+    call ser_print_hex64
+
+    SER '!'
+    mov rdi, [rsp + 160]     ; RSP (User/Interrupted)
+    call ser_print_hex64
+    
+    SER 13
+    SER 10
 
     ; For now, just paint a red pixel at top-left to indicate exception and halt
     mov rdi, [0x9000]        ; Framebuffer address
@@ -72,7 +94,7 @@ isr_common_stub:
     mov dword [rdi+4], 0x000000FF
     mov dword [rdi+8], 0x000000FF
 
-    ; Write exception number as colored pixels
+    ; Highlight the exception number with yellow pixels
     mov rax, [rsp + 120]     ; Interrupt number
     shl rax, 2               ; * 4 bytes per pixel
     add rax, 16              ; Offset from start
@@ -127,8 +149,12 @@ irq_common_stub:
 
 .irq_timer:
     call pit_handler
-    call apic_eoi
+    
+    ; Send EOI to hardware
+    call apic_eoi           
+    call pic_eoi_master
     jmp .done
+
 
 .irq_keyboard:
     call keyboard_handler
@@ -161,3 +187,26 @@ irq_common_stub:
     POP_ALL
     add rsp, 16              ; Pop error code and interrupt number
     iretq
+
+; Helper: Print 64-bit hex value to serial
+ser_print_hex64:
+    push rcx
+    push rax
+    push rdx
+    mov rcx, 16
+.hex_loop:
+    rol rdi, 4
+    mov al, dil
+    and al, 0x0F
+    cmp al, 10
+    jl .hex_digit
+    add al, 'A' - '0' - 10
+.hex_digit:
+    add al, '0'
+    mov dx, 0x3F8
+    out dx, al
+    loop .hex_loop
+    pop rdx
+    pop rax
+    pop rcx
+    ret

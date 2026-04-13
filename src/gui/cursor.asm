@@ -481,3 +481,5 @@ MOVE_CURSOR_H equ 11
 
 section .bss
 cursor_bg_save: resb (CURSOR_WIDTH * CURSOR_HEIGHT * 4)  ; Saved background pixels
+
+section .text
