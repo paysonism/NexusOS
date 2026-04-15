@@ -81,6 +81,7 @@ usb_hid_init_body:
     ; Reset active flag
     mov byte [usb_mouse_active], 0
     mov byte [usb_use_parsed], 0
+    mov byte [usb_accept_keyboard], 0
 
     ; 1. Try XHCI controllers until one succeeds with a HID endpoint
     ;    xhci_pci_find continues from where it left off each call
@@ -420,8 +421,9 @@ usb_delay:
     add rbx, rax         ; Target tick_count
 
     ; Calculate spin timeout (fallback)
-    ; ~2M spins per millisecond
-    mov rdx, 2000000
+    ; Keep this bounded so pre-STI delays do not look like a hard lock
+    ; when tick_count is not advancing yet.
+    mov rdx, 50000
     imul rdx, rcx        ; RDX = max spin iterations
 
 .wait:
@@ -581,6 +583,8 @@ usb_poll_mouse:
     mov ecx, [scr_width]
     mul ecx
     mov ecx, 0x7FFF
+    test ecx, ecx
+    jz .done_movement
     div ecx
     mov [mouse_x], eax
     
@@ -588,6 +592,8 @@ usb_poll_mouse:
     mov ecx, [scr_height]
     mul ecx
     mov ecx, 0x7FFF
+    test ecx, ecx
+    jz .done_movement
     div ecx
     mov [mouse_y], eax
     jmp .done_movement
@@ -848,6 +854,7 @@ usb_hid_init_slot2:
     push rbp
 
     mov byte [usb_slot2_active], 0
+    mov byte [usb_accept_keyboard], 1
 
     ; Switch xhci_address_device and xhci_configure_endpoint to slot2 buffers
     mov byte [xhci_slot2_mode], 1
@@ -922,6 +929,8 @@ usb_hid_init_slot2:
     push rax
     movzx eax, byte [usb_ep_interval]
     push rax
+    movzx eax, byte [usb_hid_protocol]
+    push rax
 
     call usb_find_endpoint
     test eax, eax
@@ -944,6 +953,8 @@ usb_hid_init_slot2:
 
     ; Restore slot1 ep vars
     pop rax
+    mov [usb_hid_protocol], al
+    pop rax
     mov [usb_ep_interval], al
     pop rax
     mov [usb_ep_mps], ax
@@ -954,6 +965,23 @@ usb_hid_init_slot2:
     mov r8d, 0x00010900
     mov r9d, 0x00000000
     call usb_control_transfer_nodata
+
+    ; Mirror slot1 init: force boot protocol on keyboards/mice that advertise
+    ; a boot HID protocol, then disable idle repeat throttling.
+    cmp byte [usb_hid_protocol2], 0
+    je .slot2_skip_set_protocol
+
+    ; SET_PROTOCOL(Value=0 => Boot Protocol)
+    mov r8d, 0x00000B21
+    mov r9d, 0x00000000
+    call usb_control_transfer_nodata
+
+    ; SET_IDLE(Value=0 => infinite duration)
+    mov r8d, 0x00000A21
+    mov r9d, 0x00000000
+    call usb_control_transfer_nodata
+
+.slot2_skip_set_protocol:
 
     ; Configure endpoint for slot2
     movzx edi, byte [usb_ep2_addr]
@@ -990,6 +1018,8 @@ usb_hid_init_slot2:
 
 .slot2_restore_fail:
     pop rax
+    mov [usb_hid_protocol], al
+    pop rax
     mov [usb_ep_interval], al
     pop rax
     mov [usb_ep_mps], ax
@@ -1012,6 +1042,7 @@ usb_hid_init_slot2:
     mov dx, 0x3F8
     mov al, ']'
     out dx, al
+    mov byte [usb_accept_keyboard], 0
     xor eax, eax
     jmp .slot2_ret
 
@@ -1020,6 +1051,7 @@ usb_hid_init_slot2:
     mov dx, 0x3F8
     mov al, ')'
     out dx, al
+    mov byte [usb_accept_keyboard], 0
     mov eax, 1
 .slot2_ret:
     ; Restore slot1 mode for xhci functions
@@ -1121,30 +1153,34 @@ usb_control_transfer_nodata:
 ; ============================================================================
 usb_wait_completion:
     ; PIT-based 1-second timeout + CPU spin fallback
+    ; Use rsi for deadline - xhci_poll_event saves/restores rsi internally
     push rbx
     push rcx
-    mov rbx, [tick_count]
-    add rbx, 100                 ; 100 ticks = 1 second at 100Hz
+    push rsi
+    mov rsi, [tick_count]
+    add rsi, 100                 ; 100 ticks = 1 second at 100Hz
     mov ecx, 20000000            ; ~10M iterations max spin fallback
 .poll:
-    call xhci_poll_event
+    call xhci_poll_event         ; rsi preserved by xhci_poll_event (push/pop rsi inside)
     test eax, eax
     jnz .done
-    
+
     dec ecx
     jz .fail_timeout
-    
+
     mov rax, [tick_count]
-    cmp rax, rbx
+    cmp rax, rsi                 ; rsi = deadline (not corrupted by xhci_poll_event)
     jl .poll
-    
+
 .fail_timeout:
     xor eax, eax
+    pop rsi
     pop rcx
     pop rbx
     ret
 
 .done:
+    pop rsi
     pop rcx
     pop rbx
     ; Check if it was success
@@ -1189,18 +1225,20 @@ usb_find_endpoint:
     jmp .next_desc
 
 .check_interface:
-    ; Found an interface descriptor!
-    ; Accept: Class=3 (HID) with ANY protocol:
-    ;   Protocol=0 = Report Protocol (touchpads, composite HID)
-    ;   Protocol=1 = Keyboard boot protocol  (skip)
-    ;   Protocol=2 = Mouse boot protocol     (accept)
-    ; We accept 0 or 2 - any HID with an interrupt IN endpoint will work.
+    ; Found an interface descriptor.
+    ; The primary probe should prefer pointer-class HID devices.
+    ; A secondary probe may also accept a keyboard.
 
     cmp byte [rsi + rdx + 5], 3  ; bInterfaceClass = HID?
     jne .not_hid_interface
 
-    ; Accept: Keyboard (1), Mouse (2), Report Protocol (0)
     mov al, [rsi + rdx + 7]
+    cmp al, 1
+    jne .accept_hid_interface
+    cmp byte [usb_accept_keyboard], 1
+    jne .not_hid_interface
+
+.accept_hid_interface:
     mov [usb_hid_protocol], al
     mov ebx, 1                   ; Set "found HID" flag - look for interrupt IN next
     jmp .next_desc
@@ -1277,6 +1315,7 @@ usb_slot1_id:     db 0
 usb_int_ep1_dci:  db 0
 
 usb_use_parsed:   db 0           ; 1 = HID report descriptor parsed
+usb_accept_keyboard: db 0        ; 0 = primary probe wants pointer HID, 1 = allow keyboard
 
 ; Slot 2 device info
 usb_slot2_active: db 0

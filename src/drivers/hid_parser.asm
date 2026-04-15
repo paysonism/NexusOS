@@ -765,6 +765,8 @@ hid_process_touchpad_report:
 .f1y_pos:
     imul eax, [scr_height]
     xor edx, edx
+    test ecx, ecx
+    jz .no_second_finger
     div ecx
     ; Average with finger0 Y for more stable tracking
     mov ecx, [mouse_y]
@@ -791,6 +793,8 @@ hid_process_touchpad_report:
 .f1x_pos:
     imul eax, [scr_width]
     xor edx, edx
+    test ecx, ecx
+    jz .no_second_finger
     div ecx
     mov [hid_f1_x], eax         ; finger1 screen X
 

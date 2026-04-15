@@ -50,13 +50,12 @@ ATTR_DIRECTORY      equ 0x10
 ATTR_ARCHIVE        equ 0x20
 ATTR_LFN            equ 0x0F
 
-; Temp buffers - placed AFTER XHCI memory region (which ends at 0x9B0000)
-; Must not overlap BACK_BUFFER_SAVE_ADDR at 0xA00000
-FAT16_SECTOR_BUF    equ 0x9B0000   ; 512 byte sector buffer
-FAT16_FAT_CACHE     equ 0x9B1000   ; FAT table cache (up to 64KB)
-FAT16_ROOT_CACHE    equ 0x9C1000   ; Root directory cache (up to 32 sectors = 16KB)
-FAT16_FILE_BUF      equ 0x9D1000   ; File read buffer (up to 64KB)
-FAT16_DIR_CACHE     equ 0x9E1000   ; Current directory listing cache
+; Temp buffers - moved to 13MB region to avoid XHCI conflict (0x900000-0x9F0000)
+FAT16_SECTOR_BUF    equ 0xD00000   ; 512 byte sector buffer
+FAT16_FAT_CACHE     equ 0xD01000   ; FAT table cache (up to 64KB)
+FAT16_ROOT_CACHE    equ 0xD11000   ; Root directory cache (up to 32 sectors = 16KB)
+FAT16_FILE_BUF      equ 0xD21000   ; File read buffer (up to 64KB)
+FAT16_DIR_CACHE     equ 0xD31000   ; Current directory listing cache
 
 ; ============================================================================
 ; fat16_init - Initialize FAT16 driver, read BPB and cache FAT + root dir
@@ -641,6 +640,7 @@ fat16_change_dir:
     push r10
 
     movzx ebx, ax          ; cluster
+    mov [fat16_cur_dir_cluster], bx
     
     ; Cluster 0 -> Load Root Directory
     test ebx, ebx
@@ -715,6 +715,7 @@ fat16_change_dir:
 
 .cd_done:
     pop r10
+
     pop r9
     pop r8
     pop rsi
@@ -769,6 +770,7 @@ fat16_root_start_sect dd 0
 fat16_root_sectors    dd 0
 fat16_data_start_sect dd 0
 fat16_file_count_val  dd 0
+fat16_cur_dir_cluster dw 0
 
 
 ; ============================================================================

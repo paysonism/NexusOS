@@ -5,6 +5,17 @@
 %ifndef MACROS_INC
 %define MACROS_INC
 
+; Output character to COM1 for debugging
+%macro SER 1
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, %1
+    out dx, al
+    pop rdx
+    pop rax
+%endmacro
+
 ; Save all general-purpose registers (64-bit)
 %macro PUSH_ALL 0
     push rax
@@ -23,6 +34,23 @@
     push r14
     push r15
 %endmacro
+
+; Offset of registers in PUSH_ALL frame
+ALL_R15 equ 0
+ALL_R14 equ 8
+ALL_R13 equ 16
+ALL_R12 equ 24
+ALL_R11 equ 32
+ALL_R10 equ 40
+ALL_R9  equ 48
+ALL_R8  equ 56
+ALL_RBP equ 64
+ALL_RDI equ 72
+ALL_RSI equ 80
+ALL_RDX equ 88
+ALL_RCX equ 96
+ALL_RBX equ 104
+ALL_RAX equ 112
 
 ; Restore all general-purpose registers (64-bit)
 %macro POP_ALL 0

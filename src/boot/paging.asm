@@ -7,6 +7,7 @@ bits 16   ; We are in 16-bit Unreal Mode
 
 PAGE_PRESENT    equ 0x01
 PAGE_WRITABLE   equ 0x02
+PAGE_USER       equ 0x04     ; User-accessible (ring 3)
 PAGE_LARGE      equ 0x80     ; 2MB page (PS bit in PD entry)
 
 setup_paging:
@@ -27,27 +28,27 @@ setup_paging:
     ; PML4[0] -> PDPT at 0x71000
     ; Using a32 prefix for implicit DS:EDI addressing
     mov edi, 0x70000
-    mov eax, 0x71000 | PAGE_PRESENT | PAGE_WRITABLE
+    mov eax, 0x71000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
     a32 mov [edi], eax
     
     ; PDPT[0] -> PD at 0x72000 (covers 0-1GB)
     mov edi, 0x71000
-    mov eax, 0x72000 | PAGE_PRESENT | PAGE_WRITABLE
+    mov eax, 0x72000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
     a32 mov [edi], eax
 
     ; PDPT[1] -> PD at 0x73000 (covers 1-2GB)
     mov edi, 0x71008
-    mov eax, 0x73000 | PAGE_PRESENT | PAGE_WRITABLE
+    mov eax, 0x73000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
     a32 mov [edi], eax
 
     ; PDPT[2] -> PD at 0x74000 (covers 2-3GB)
     mov edi, 0x71010
-    mov eax, 0x74000 | PAGE_PRESENT | PAGE_WRITABLE
+    mov eax, 0x74000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
     a32 mov [edi], eax
 
     ; PDPT[3] -> PD at 0x75000 (covers 3-4GB)
     mov edi, 0x71018
-    mov eax, 0x75000 | PAGE_PRESENT | PAGE_WRITABLE
+    mov eax, 0x75000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
     a32 mov [edi], eax
 
     ; Fill PD tables with 2MB pages
@@ -55,7 +56,7 @@ setup_paging:
     ; 4 PDs = 4GB total coverage
     
     mov edi, 0x72000            ; Start of PD tables
-    mov eax, PAGE_PRESENT | PAGE_WRITABLE | PAGE_LARGE  ; Flags for 2MB page (address starts at 0)
+    mov eax, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER | PAGE_LARGE  ; Flags for 2MB page (address starts at 0)
     mov ecx, 512 * 4            ; 2048 entries total (4 PDs x 512)
 
 .fill_pd:

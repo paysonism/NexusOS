@@ -322,9 +322,9 @@ _start:
     SER 'T'             ; T = GDT + trampoline copied
 
     ; Load GDT from 0x580 (fixed physical address)
-    mov word  [0x580], gdt64_end - gdt64 - 1
-    mov qword [0x582], 0x500
-    lgdt [0x580]
+    mov word  [abs 0x580], gdt64_end - gdt64 - 1
+    mov qword [abs 0x582], 0x500
+    lgdt [abs 0x580]
 
     ; Far return to reload CS = 0x08
     lea rax, [.cs_reload]
@@ -380,6 +380,9 @@ trampoline:
     shr rcx, 3              ; round up to qwords
     rep movsq
     wbinvd
+    ; Switch to our own page tables (with User bits for ring 3)
+    mov rax, PT_BASE
+    mov cr3, rax
     mov rax, KERN_DEST
     jmp rax
 trampoline_end:
@@ -794,27 +797,42 @@ setup_paging:
     push rbx
     push r12
 
-    ; Clear 2 pages (PML4 + PDPT)
+    ; Clear 3 pages (PML4 + PDPT0 + PDPT1)
     mov rdi, PT_BASE
     xor eax, eax
-    mov ecx, 2 * 4096 / 4
+    mov ecx, 3 * 4096 / 4
     rep stosd
 
-    ; PML4[0] -> PDPT at 0x71000
-    mov qword [PT_BASE], 0x71000 | 3
+    ; PML4[0] -> PDPT0 at 0x71000 (covers 0-512 GB) - User bit for ring 3 access
+    mov qword [abs PT_BASE], 0x71000 | 7
+    ; PML4[1] -> PDPT1 at 0x72000 (covers 512-1024 GB)
+    mov qword [abs PT_BASE + 8], 0x72000 | 7
 
-    ; PDPT[0..511]: 1 GB identity pages (Present | Writable | PS)
+    ; PDPT0[0..511]: 1 GB identity pages starting at 0 GB
     mov rdi, PT_BASE + 0x1000
     xor rbx, rbx                    ; physical base = 0
     mov r12d, 512
 .loop:
     mov rax, rbx
-    or  rax, 0x83                   ; Present | Writable | Page Size (1 GB)
+    or  rax, 0x87                   ; Present | Writable | User | Page Size (1 GB)
     mov [rdi], rax
     add rdi, 8
     add rbx, 0x40000000             ; +1 GB
     dec r12d
     jnz .loop
+
+    ; PDPT1[0..511]: 1 GB identity pages starting at 512 GB
+    mov rdi, PT_BASE + 0x2000
+    mov rbx, 0x8000000000           ; physical base = 512 GB
+    mov r12d, 512
+.loop2:
+    mov rax, rbx
+    or  rax, 0x87                   ; Present | Writable | User | Page Size (1 GB)
+    mov [rdi], rax
+    add rdi, 8
+    add rbx, 0x40000000             ; +1 GB
+    dec r12d
+    jnz .loop2
 
     pop r12
     pop rbx
@@ -857,13 +875,13 @@ locate_spp:
     call rax
 
     ; Write interface pointer into VBE info block so the kernel can find it
-    mov qword [VBE_INFO + 0x18], r12
+    mov qword [abs VBE_INFO + 0x18], r12
     SDBG 'SPP-OK'
     jmp .done
 
 .no_spp:
     SDBG 'SPP-NONE'
-    mov qword [VBE_INFO + 0x18], 0
+    mov qword [abs VBE_INFO + 0x18], 0
 
 .done:
     add rsp, 40
@@ -969,6 +987,32 @@ gdt64_data:
     db 10010010b                    ; P=1 DPL=0 S=1 Type=0010 (Data R/W)
     db 00000000b
     db 0x00
+
+gdt64_user_code32:                  ; Selector 0x18 - user 32-bit code placeholder (sysret layout)
+    dq 0x00CFFA000000FFFF
+
+gdt64_user_data:                    ; Selector 0x20 - user data DPL=3
+    dw 0x0000, 0x0000
+    db 0x00
+    db 11110010b
+    db 00000000b
+    db 0x00
+
+gdt64_user_code64:                  ; Selector 0x28 - user 64-bit code DPL=3
+    dw 0x0000, 0x0000
+    db 0x00
+    db 11111010b
+    db 00100000b
+    db 0x00
+
+gdt64_tss_uefi:                     ; Selector 0x30 - TSS descriptor (16 bytes)
+    dw 103                          ; Limit (104 bytes - 1)
+    dw 0                            ; Base[15:0]  (filled by tss_init)
+    db 0                            ; Base[23:16]
+    db 10001001b                    ; Present, TSS Available
+    db 0                            ; Flags + Limit High
+    db 0                            ; Base[31:24]
+    dq 0                            ; Base[63:32] + reserved
 
 gdt64_end:
 

@@ -41,6 +41,11 @@ keyboard_handler:
     ; Read scancode from data port
     in al, 0x60
     movzx eax, al
+    push rax
+    mov dx, 0x3F8
+    mov al, 'K'
+    out dx, al
+    pop rax
 
     ; Check for extended scancode prefix
     cmp al, 0xE0
@@ -233,7 +238,10 @@ keyboard_repeat_tick:
     jz .rep_done
 
     mov ecx, [tick_count]
-    cmp ecx, [kb_repeat_next_tick]
+    mov ebx, [kb_repeat_next_tick]
+    test ebx, ebx
+    jz .rep_done             ; Don't repeat if next_tick is 0
+    cmp ecx, ebx
     jl .rep_done
 
     ; Advance next repeat tick

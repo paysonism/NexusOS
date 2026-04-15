@@ -27,29 +27,57 @@ acpi_init:
     test rax, rax
     jz .done            ; RSDP not found
 
-    ; Extract RSDT pointer (offset 16)
-    ; In ACPI 2.0+ XSDT is at offset 24, but let's stick to simple 32-bit RSDT here
+    ; Extract XSDT pointer (offset 24) for ACPI 2.0+
+    mov rsi, qword [rax + 24]
+    test rsi, rsi
+    jnz .got_xsdt
+    
+    ; Fallback to RSDT (offset 16) for legacy
     mov esi, dword [rax + 16]
-    test esi, esi
+    test rsi, rsi
     jz .done
 
-    ; RSDT Header:
-    ; +0: "RSDT"
+.got_xsdt:
+    ; Table Header:
+    ; +0: Signature
     ; +4: Length (dword)
     ; Let's parse entries directly after header (length - 36)
     mov ecx, [rsi + 4]
     sub ecx, 36         ; Subtract header size to get entries length
-    shr ecx, 2          ; Divide by 4 (pointer size)
     
-    ; Setup pointer to first entry
+    ; If it's XSDT, entries are 64-bit. If RSDT, 32-bit.
+    mov eax, [rsi]
+    cmp eax, 'XSDT'
+    je .parse_xsdt
+
+.parse_rsdt:
+    shr ecx, 2          ; Divide by 4 (32-bit pointers)
+    lea rbx, [rsi + 36]
+    jmp .loop_tables
+
+.parse_xsdt:
+    shr ecx, 3          ; Divide by 8 (64-bit pointers)
     lea rbx, [rsi + 36]
 
 .loop_tables:
     test ecx, ecx
     jz .done
 
-    ; Load 32-bit pointer table entry
+    ; Load pointer (32 or 64 bit depending on table type)
+    mov eax, [rsi]
+    cmp eax, 'XSDT'
+    je .load_xsdt_entry
+
+.load_rsdt_entry:
     mov edi, dword [rbx]
+    add rbx, 4
+    jmp .handle_entry
+
+.load_xsdt_entry:
+    mov rdi, qword [rbx]
+    add rbx, 8
+
+.handle_entry:
     
     ; Check the table signature
     mov eax, dword [rdi]
@@ -61,7 +89,6 @@ acpi_init:
     je .handle_facp
     
 .next_table:
-    add rbx, 4
     dec ecx
     jmp .loop_tables
 

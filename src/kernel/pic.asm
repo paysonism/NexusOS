@@ -50,12 +50,12 @@ pic_init:
     out 0xA1, al
     call .io_wait
 
-    ; Mask all IRQs initially AND LEAVE THEM MASKED (we use IOAPIC now)
-    mov al, 0xFF
-    out 0x21, al            ; Mask all master IRQs
+    ; Unmask IRQ0 (timer), IRQ1 (keyboard), IRQ12 (mouse); mask rest
+    mov al, 11111000b       ; Unmask IRQ0,1,2(cascade) on master
+    out 0x21, al
     call .io_wait
-    mov al, 0xFF
-    out 0xA1, al            ; Mask all slave IRQs
+    mov al, 11101111b       ; Unmask IRQ12 (mouse) on slave
+    out 0xA1, al
     call .io_wait
 
     ret

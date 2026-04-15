@@ -365,3 +365,5 @@ szSettings   db "Settings", 0
 szPaint      db "Paint", 0
 szAbout      db "About", 0
 szPromptIcon db ">_", 0
+
+section .text

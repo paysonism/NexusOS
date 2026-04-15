@@ -62,6 +62,8 @@ extern desktop_remove_icon
 extern battery_state
 extern battery_percent
 extern uint32_to_str
+extern time_hours
+extern time_minutes
 
 ; Draw the taskbar + start menu
 tb_draw:
@@ -199,7 +201,28 @@ tb_draw:
 
 .tb_win_done:
 
-    ; 4. Clock area
+    ; 4. Clock area - format HH:MM into szTime
+    push rax
+    push rcx
+    ; Hours
+; This section in taskbar.asm is now correct because time_hours is a db
+    movzx eax, byte [time_hours]
+    mov bl, 10
+    div bl              ; al = tens, ah = ones
+    add ax, 0x3030      ; convert both to ASCII
+    mov [szTime], al
+    mov [szTime+1], ah
+    mov byte [szTime+2], ':'
+    ; Minutes
+    movzx eax, byte [time_minutes]
+    mov bl, 10
+    div bl
+    add ax, 0x3030
+    mov [szTime+3], al
+    mov [szTime+4], ah
+
+    pop rcx
+    pop rax
     mov rdi, CLOCK_X
     mov rsi, CLOCK_Y
     mov rdx, szTime
@@ -990,7 +1013,11 @@ sm_submenu_open db 0
 sm_submenu_app  db 0          ; app ID being right-clicked
 sm_submenu_x    dd 0
 sm_submenu_y    dd 0
+sm_prev_mouseX   dq -1
+sm_prev_mouseY   dq -1
 
+section .text
 szSubAdd    db "Add to Desktop", 0
 szSubRemove db "Remove from Desktop", 0
 bat_pct_str times 8 db 0      ; "100%" + null, with room
+
