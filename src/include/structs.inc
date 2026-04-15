@@ -58,3 +58,33 @@ struc e820_entry_t
     .type:          resd 1      ; 1=usable, 2=reserved, 3=ACPI reclaimable
     .acpi:          resd 1      ; ACPI extended attributes
 endstruc
+; --- Process structure (512 bytes) ---
+struc process_t
+    .rax:           resq 1      ; 0x00
+    .rbx:           resq 1
+    .rcx:           resq 1
+    .rdx:           resq 1
+    .rsi:           resq 1
+    .rdi:           resq 1
+    .rbp:           resq 1
+    .rsp:           resq 1      ; 0x38
+    .r8:            resq 1
+    .r9:            resq 1
+    .r10:           resq 1
+    .r11:           resq 1
+    .r12:           resq 1
+    .r13:           resq 1
+    .r14:           resq 1
+    .r15:           resq 1      ; 0x78
+    .rip:           resq 1      ; 0x80
+    .rflags:        resq 1      ; 0x88
+    .cr3:           resq 1      ; 0x90
+    .state:         resd 1      ; 0x98: 0=EMPTY, 1=READY, 2=RUNNING, 3=SLEEPING, 4=TERMINATED
+    .id:            resd 1      ; 0x9C: Process ID
+    .win_id:        resd 1      ; 0xA0: Associated window ID
+    .slot:          resd 1      ; 0xA4: App arena slot index
+    .cs:            resq 1      ; 0xA8
+    .ss:            resq 1      ; 0xB0
+    .kernel_rsp:    resq 1      ; 0xB8
+    .padding:       resb 384    ; Pad to 512 bytes
+endstruc

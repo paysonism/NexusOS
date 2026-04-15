@@ -1,3 +1,6 @@
+%ifndef SYSCALL_USER_INC
+%define SYSCALL_USER_INC
+
 ; ============================================================================
 ; NexusOS v3.0 - Usermode Syscall Wrappers
 ; ============================================================================
@@ -126,3 +129,5 @@
     mov rax, 17
     syscall
 %endmacro
+
+%endif

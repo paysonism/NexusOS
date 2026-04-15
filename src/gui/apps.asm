@@ -11,6 +11,14 @@ section .text
 
 %include "constants.inc"
 %include "syscall_user.inc"
+%include "macros.inc"
+
+; Ring 3 apps must not touch COM directly.
+%unmacro SER 1
+%macro SER 1
+%endmacro
+
+extern app_blob_start
 
 WIN_OFF_X       equ 8
 WIN_OFF_Y       equ 16
@@ -49,8 +57,6 @@ CTX_WIDTH       equ 140
 
 section .text
 
-extern render_rect
-extern render_text
 extern wm_create_window_ex
 extern fat16_file_count
 extern fat16_get_entry
@@ -66,52 +72,158 @@ extern i2c_hid_debug_dump
 extern mouse_wait_input
 extern fat16_debug_dump_root
 
+section .data
+kernel_render_rect_ptr dq render_rect
+kernel_render_text_ptr dq render_text
+
+section .text
+
 app_sys_render_rect:
-    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
+    mov rax, 2
+    mov r10, rcx
+    syscall
     ret
 
 app_sys_render_text:
-    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
+    mov rax, 3
+    mov r10, rcx
+    syscall
+    ret
+
+app_sys_fs_count:
+    mov rax, 4
+    syscall
     ret
 
 app_sys_fs_get_entry:
-    SYS_FS_ENTRY rdi
+    mov rax, 5
+    syscall
     ret
 
 app_sys_fs_change_dir:
-    movzx rdi, ax
-    SYS_FS_CHDIR rdi
+    mov rax, 6
+    syscall
+    ret
+
+app_sys_fs_read:
+    mov rax, 8
+    syscall
     ret
 
 app_sys_fs_write_file:
-    SYS_FS_WRITE rdi, rsi, rdx
+    mov rax, 13
+    syscall
     ret
 
 app_sys_fs_sync_root:
-    SYS_FS_SYNC_ROOT
+    mov rax, 14
+    syscall
     ret
 
 app_sys_wm_close_window:
-    SYS_WM_CLOSE rdi
+    mov rax, 15
+    syscall
     ret
 
 app_sys_display_set_mode:
-    SYS_DISPLAY_SET_MODE rdi, rsi, rdx
+    mov rax, 16
+    syscall
     ret
 
 app_sys_cursor_init:
-    SYS_CURSOR_INIT
+    mov rax, 17
+    syscall
     ret
 
 %xdefine render_rect app_sys_render_rect
 %xdefine render_text app_sys_render_text
+%xdefine fat16_file_count app_sys_fs_count
 %xdefine fat16_get_entry app_sys_fs_get_entry
+%xdefine fat16_read_file app_sys_fs_read
 %xdefine fat16_change_dir app_sys_fs_change_dir
 %xdefine fat16_write_file app_sys_fs_write_file
 %xdefine fat16_sync_root app_sys_fs_sync_root
 %xdefine wm_close_window app_sys_wm_close_window
 %xdefine display_set_mode app_sys_display_set_mode
 %xdefine cursor_init app_sys_cursor_init
+
+global app_l3_test_draw
+global app_l3_test_click
+global app_l3_test_key
+global app_terminal_kernel_draw
+global app_terminal_kernel_key
+
+app_l3_test_draw:
+    push rdi
+    push r14
+    ;SYS_PRINT szL3DrawOk
+    mov rdi, [rsp + 8]
+    mov r14, [rdi + WIN_OFF_APPDATA]
+    cmp byte [r14], 1
+    je .skip_selftest
+    mov byte [r14], 1
+    ;SYS_PRINT szL3T0
+    SYS_FS_COUNT
+    mov [r14 + 8], eax
+    ;SYS_PRINT szL3T4
+    xor edi, edi
+    SYS_FS_ENTRY rdi
+    mov [r14 + 16], rax
+    test rax, rax
+    jz .skip_selftest
+    ;SYS_PRINT szL3T5
+    xor edi, edi
+    SYS_FS_CHDIR rdi
+    ;SYS_PRINT szL3T6
+    mov rdi, [r14 + 16]
+    lea rsi, [r14 + 256]
+    mov rdx, 64
+    SYS_FS_READ rdi, rsi, rdx
+    mov [r14 + 24], eax
+    ;SYS_PRINT szL3T8
+    mov rdi, [r14 + 16]
+    lea rsi, [r14 + 128]
+    SYS_FS_FORMAT_NAME rdi, rsi
+    ;SYS_PRINT szL3T11
+    lea rdi, [rel szL3Tmp83]
+    lea rsi, [rel szL3TmpData]
+    mov rdx, 4
+    SYS_FS_WRITE rdi, rsi, rdx
+    ;SYS_PRINT szL3T13
+    SYS_FS_SYNC_ROOT
+    ;SYS_PRINT szL3T14
+    SYS_CURSOR_INIT
+    ;SYS_PRINT szL3T17
+.skip_selftest:
+    pop r14
+    pop rdi
+    mov rax, [rdi + WIN_OFF_X]
+    add rax, BORDER_WIDTH + 8
+    mov rsi, [rdi + WIN_OFF_Y]
+    add rsi, TITLEBAR_HEIGHT + 8
+    mov rdi, rax
+    mov edx, 80
+    mov ecx, 24
+    mov r8d, 0x0000AA44
+    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
+    mov rdx, szL3DrawOk
+    mov ecx, COLOR_TEXT_WHITE
+    mov r8d, 0x0000AA44
+    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
+    ret
+
+app_l3_test_click:
+    push rdi
+    SYS_PRINT szL3ClickOk
+    pop rdi
+    ret
+
+app_l3_test_key:
+    push rdi
+    SYS_PRINT szL3KeyOk
+    pop rdi
+    ret
+
 
 ; ============================================================================
 ; app_launch - Launch an app by ID
@@ -120,6 +232,12 @@ app_sys_cursor_init:
 ; ============================================================================
 global app_launch
 app_launch:
+    SER 'L'
+    SER '['
+    push rdi
+    call ser_print_hex64
+    pop rdi
+    SER ']'
     cmp rdi, APP_EXPLORER
     je .launch_explorer
     cmp rdi, APP_TERMINAL
@@ -136,6 +254,8 @@ app_launch:
     ret
 
 .launch_explorer:
+    SER 'E'
+    SER 'e'
     ; Reset explorer state to root
     mov dword [explorer_sel], 0
     mov dword [explorer_dir], 0
@@ -143,26 +263,39 @@ app_launch:
     mov byte [exp_rename_active], 0
     mov byte [exp_newfolder_active], 0
     mov byte [exp_newfolder_done_msg], 0
-    mov rdi, szExplorerTitle
+    lea rdi, [rel szExplorerTitle]
     mov rsi, 120
     mov rdx, 80
     mov rcx, 420
     mov r8, 340
-    mov r9, app_explorer_draw
+    lea r9, [rel app_explorer_draw]
+    SER '{'
     sub rsp, 8               ; Align stack
     call wm_create_window_ex
     add rsp, 8
+    SER '}'
+    push rax
+    push rdi
+    mov rdi, rax
+    call ser_print_hex64
+    pop rdi
+    pop rax
     cmp rax, -1
     je .done
     push rax
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov qword [rax + WIN_OFF_CLICKFN], app_explorer_click
-    mov qword [rax + WIN_OFF_KEYFN], app_explorer_key
+    lea r10, [rel app_explorer_click]
+    mov qword [rax + WIN_OFF_CLICKFN], r10
+    lea r10, [rel app_explorer_key]
+    mov qword [rax + WIN_OFF_KEYFN], r10
+    SER 'e'
     pop rax
     jmp .done
 
 .launch_terminal:
+    SER 'T'
+    SER 't'
     ; Reset terminal state
     mov dword [term_cursor], 0
     mov byte [term_input], 0
@@ -171,11 +304,12 @@ app_launch:
     lea rdi, [term_input]
     xor eax, eax
     mov ecx, 64
+    cld
     rep stosb
 
     mov dword [term_hist_count], 0
     ; Clear history pointers
-    lea rcx, [term_hist_ptrs]
+    lea rcx, [rel term_hist_ptrs]
     xor eax, eax
 .clr_hist:
     cmp eax, TERM_MAX_HIST
@@ -186,35 +320,51 @@ app_launch:
 .hist_cleared:
     ; Add welcome lines
     lea rcx, [term_hist_ptrs]
-    mov qword [rcx + 0], szTermWelcome
-    mov qword [rcx + 8], szTermVer
-    mov qword [rcx + 16], szTermHelpHint
+    lea rax, [rel szTermWelcome]
+    mov qword [rcx + 0], rax
+    lea rax, [rel szTermVer]
+    mov qword [rcx + 8], rax
+    lea rax, [rel szTermHelpHint]
+    mov qword [rcx + 16], rax
     mov dword [term_hist_count], 3
-    mov rdi, szTermTitle
+    lea rdi, [rel szTermTitle]
     mov rsi, 200
     mov rdx, 150
     mov rcx, 450
     mov r8, 300
-    mov r9, app_terminal_draw
+    lea r9, [rel app_terminal_kernel_draw]
+    SER '{'
     sub rsp, 8               ; Align stack
     call wm_create_window_ex
     add rsp, 8
+    SER '}'
     cmp rax, -1
     je .done
+    SER 'a'
     push rax
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov qword [rax + WIN_OFF_CLICKFN], app_terminal_click
-    mov qword [rax + WIN_OFF_KEYFN], app_terminal_key
+    SER 'b'
+    lea r10, [rel app_terminal_click]
+    mov qword [rax + WIN_OFF_CLICKFN], r10
+    SER 'c'
+    lea r10, [rel app_terminal_kernel_key]
+    mov qword [rax + WIN_OFF_KEYFN], r10
+    SER 'd'
     
     ; Reset filesystem state to root when terminal starts
+    SER 'r'
     xor ax, ax
     call fat16_change_dir
+    SER 'R'
     
+    SER 't'
     pop rax
     jmp .done
 
 .launch_notepad:
+    SER 'N'
+    SER 'n'
     ; Reset notepad state
     lea rdi, [notepad_buf]
     xor eax, eax
@@ -232,43 +382,70 @@ app_launch:
     xor eax, eax
     mov ecx, NP_MAX_LINES
     rep stosd
-    mov rdi, szNotepadTitle
+    lea rdi, [rel szNotepadTitle]
     mov rsi, 250
     mov rdx, 120
     mov rcx, 400
     mov r8, 300
-    mov r9, app_notepad_draw
+    lea r9, [rel app_notepad_draw]
+    SER '{'
     sub rsp, 8               ; Align stack
     call wm_create_window_ex
     add rsp, 8
+    SER '}'
+    push rax
+    push rdi
+    mov rdi, rax
+    call ser_print_hex64
+    pop rdi
+    pop rax
     cmp rax, -1
     je .done
     push rax
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov qword [rax + WIN_OFF_KEYFN], app_notepad_key
-    mov qword [rax + WIN_OFF_CLICKFN], app_notepad_click
+    lea r10, [rel app_notepad_key]
+    mov qword [rax + WIN_OFF_KEYFN], r10
+    lea r10, [rel app_notepad_click]
+    mov qword [rax + WIN_OFF_CLICKFN], r10
+    SER 'n'
     pop rax
     jmp .done
 
 .launch_settings:
-    mov rdi, szSettingsTitle
+    SER 'S'
+    SER 's'
+    lea rdi, [rel szSettingsTitle]
     mov rsi, 300
     mov rdx, 180
     mov rcx, 380
     mov r8, 280
-    mov r9, app_settings_draw
+    lea r9, [rel app_settings_draw]
+    SER '{'
+    sub rsp, 8
     call wm_create_window_ex
+    add rsp, 8
+    SER '}'
+    push rax
+    push rdi
+    mov rdi, rax
+    call ser_print_hex64
+    pop rdi
+    pop rax
     cmp rax, -1
     je .done
     push rax
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov qword [rax + WIN_OFF_CLICKFN], app_settings_click
+    lea r10, [rel app_settings_click]
+    mov qword [rax + WIN_OFF_CLICKFN], r10
+    SER 's'
     pop rax
     jmp .done
 
 .launch_paint:
+    SER 'P'
+    SER 'p'
     ; Reset paint state - use static buffers at known addresses
     mov dword [paint_color], 0xFF000000 ; Black
     mov dword [paint_brush_size], 2
@@ -279,13 +456,23 @@ app_launch:
     mov eax, 0xFFFFFFFF
     rep stosd
 
-    mov rdi, szPaintTitle
+    lea rdi, [rel szPaintTitle]
     mov rsi, 150
     mov rdx, 100
     mov rcx, 340   ; width (canvas 200 + border/tools + buttons)
     mov r8, 240    ; height (canvas 150 + toolbar)
-    mov r9, app_paint_draw
+    lea r9, [rel app_paint_draw]
+    SER '{'
+    sub rsp, 8
     call wm_create_window_ex
+    add rsp, 8
+    SER '}'
+    push rax
+    push rdi
+    mov rdi, rax
+    call ser_print_hex64
+    pop rdi
+    pop rax
     cmp rax, -1
     je .done
     
@@ -293,23 +480,50 @@ app_launch:
     push rax
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov qword [rax + WIN_OFF_CLICKFN], app_paint_click
-    mov qword [rax + WIN_OFF_KEYFN], app_paint_key
+    lea r10, [rel app_paint_click]
+    mov qword [rax + WIN_OFF_CLICKFN], r10
+    lea r10, [rel app_paint_key]
+    mov qword [rax + WIN_OFF_KEYFN], r10
+    SER 'p'
     pop rax
     jmp .done
 
 .launch_about:
-    mov rdi, szAboutTitle
+    SER 'B'
+    SER 'b'
+    lea rdi, [rel szAboutTitle]
     mov rsi, 280
     mov rdx, 200
     mov rcx, 340
     mov r8, 220
-    mov r9, app_about_draw
+    lea r9, [rel app_l3_test_draw]
+    SER '{'
+    sub rsp, 8
     call wm_create_window_ex
+    add rsp, 8
+    SER '}'
+    push rax
+    push rdi
+    mov rdi, rax
+    call ser_print_hex64
+    pop rdi
+    pop rax
+    cmp rax, -1
+    je .done
+    push rax
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    lea r10, [rel app_l3_test_click]
+    mov qword [rax + WIN_OFF_CLICKFN], r10
+    lea r10, [rel app_l3_test_key]
+    mov qword [rax + WIN_OFF_KEYFN], r10
+    SER 'b'
+    pop rax
     jmp .done
 
 .done:
     ret
+
 
 ; ============================================================================
 ; app_open_file - Open a file, routing by extension
@@ -923,7 +1137,7 @@ app_explorer_draw:
     pop r13
     pop r12
     pop rbx
-    SYS_APP_DONE
+    ret
 
 ; Click callback: RDI=window_ptr, RSI=client_x, RDX=client_y
 app_explorer_click:
@@ -1066,12 +1280,12 @@ app_explorer_click:
     jz .ctx_dismiss
     mov [prop_entry_ptr], rax
     ; Open a Properties window
-    mov rdi, szPropTitle
+    lea rdi, [rel szPropTitle]
     mov rsi, 250
     mov rdx, 200
     mov r10, 240
     mov r8, 160
-    mov r9, app_properties_draw
+    lea r9, [rel app_properties_draw]
     SYS_WM_CREATE rdi, rsi, rdx, r10, r8, r9
     jmp .exp_click_ret
 
@@ -1157,7 +1371,7 @@ app_explorer_click:
     pop rcx
     pop rbx
     pop rax
-    SYS_APP_DONE              ; Return to kernel from Ring 3
+    ret
 
 ; Key handler for explorer (arrow navigation + Enter to open + right-click menu key)
 app_explorer_key:
@@ -1471,7 +1685,7 @@ app_explorer_key:
     pop rcx
     pop rbx
     pop rax
-    SYS_APP_DONE
+    ret
 
 ; ============================================================================
 ; TERMINAL APP - Command Handlers & FS Helpers
@@ -1666,7 +1880,7 @@ term_build_ls_string:
 ; Command prompt with scrollable output history
 ; ============================================================================
 
-app_terminal_draw:
+app_terminal_kernel_draw:
     push rbx
     push r12
     push r13
@@ -1679,7 +1893,7 @@ app_terminal_draw:
     mov r14, [rbx + WIN_OFF_W]
     mov r15, [rbx + WIN_OFF_H]
 
-    ; Black terminal background
+    ; Background
     mov rdi, r12
     add rdi, BORDER_WIDTH
     mov rsi, r13
@@ -1691,114 +1905,75 @@ app_terminal_draw:
     cmp rcx, 0
     jle .term_draw_done
     mov r8, 0x00111111
-    SYS_GUI_RECT rdi, rsi, rdx, rcx, r8
+    call qword [rel kernel_render_rect_ptr]
 
-    ; Draw history lines
-    mov eax, [term_hist_count]
-    test eax, eax
-    jz .term_no_hist
-
-    ; Calculate visible lines
-    mov ecx, r15d
-    sub ecx, TITLEBAR_HEIGHT + BORDER_WIDTH + 16
-    xor edx, edx
-    push rax
-    mov eax, ecx
-    mov ecx, 14
-    xor edx, edx
-    div ecx
-    mov ecx, eax
-    pop rax
-    dec ecx
-    cmp ecx, 0
-    jle .term_no_hist
-
-    ; Show last N
-    mov edx, eax
-    sub edx, ecx
-    cmp edx, 0
-    jge .term_start_ok
-    xor edx, edx
-.term_start_ok:
-    push rbx
-    lea rbx, [term_hist_ptrs]
-    xor r8d, r8d
-.term_hist_loop:
-    cmp edx, eax
-    jge .term_hist_end
-    push rax
-    push rdx
-    push r8
-    mov rcx, [rbx + rdx * 8]
-    test rcx, rcx
-    jz .term_hist_skip
+    ; Simple header
     mov rdi, r12
     add rdi, BORDER_WIDTH + 6
     mov rsi, r13
     add rsi, TITLEBAR_HEIGHT + 4
-    imul eax, r8d, 14
-    add rsi, rax
-    mov rdx, rcx
-    mov rcx, 0x0000DD00
+    lea rdx, [rel szTermWelcome]
+    mov ecx, 0x0000DD00
     mov r8, 0x00111111
-    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
-.term_hist_skip:
-    pop r8
-    pop rdx
-    pop rax
-    inc edx
-    inc r8d
-    jmp .term_hist_loop
-.term_hist_end:
-    mov [term_draw_lines], r8d
-    pop rbx
-    jmp .term_draw_prompt
+    call qword [rel kernel_render_text_ptr]
 
-.term_no_hist:
-    mov dword [term_draw_lines], 0
+    ; Last echoed command or hint
+    mov rdi, r12
+    add rdi, BORDER_WIDTH + 6
+    mov rsi, r13
+    add rsi, TITLEBAR_HEIGHT + 20
+    lea rdx, [rel term_echo_buf]
+    cmp byte [rdx], 0
+    jne .term_have_echo
+    lea rdx, [rel szTermHelpHint]
+.term_have_echo:
+    mov ecx, 0x00CCCCCC
+    mov r8, 0x00111111
+    call qword [rel kernel_render_text_ptr]
 
-.term_draw_prompt:
+    mov dword [rel term_draw_lines], 2
+
     ; Draw prompt "C:\> "
     mov rdi, r12
     add rdi, BORDER_WIDTH + 6
     mov rsi, r13
     add rsi, TITLEBAR_HEIGHT + 4
-    mov eax, [term_draw_lines]
+    mov eax, [rel term_draw_lines]
     imul eax, 14
     add rsi, rax
-    mov rdx, szTermPrompt
+    lea rdx, [rel szTermPrompt]
     mov rcx, 0x0000FF00
     mov r8, 0x00111111
-    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
+    call qword [rel kernel_render_text_ptr]
 
     ; Draw input text
     mov rdi, r12
     add rdi, BORDER_WIDTH + 6 + 40
     mov rsi, r13
     add rsi, TITLEBAR_HEIGHT + 4
-    mov eax, [term_draw_lines]
+    mov eax, [rel term_draw_lines]
     imul eax, 14
     add rsi, rax
-    lea rdx, [term_input]
+    lea rdx, [rel term_input]
     mov rcx, 0x00FFFFFF
     mov r8, 0x00111111
-    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
+    call qword [rel kernel_render_text_ptr]
 
     ; Draw cursor
-    mov eax, [term_cursor]
+    mov eax, [rel term_cursor]
     imul eax, FONT_WIDTH
     add eax, BORDER_WIDTH + 6 + 40
     mov rdi, r12
     add edi, eax
     mov rsi, r13
     add rsi, TITLEBAR_HEIGHT + 4
-    mov eax, [term_draw_lines]
+    mov eax, [rel term_draw_lines]
     imul eax, 14
     add rsi, rax
-    mov rdx, szCursor
+    lea rdx, [rel szCursor]
     mov rcx, 0x00FFFFFF
     mov r8, 0x00111111
-    SYS_GUI_TEXT rdi, rsi, rdx, rcx, r8
+    call qword [rel kernel_render_text_ptr]
 
 .term_draw_done:
     pop r15
@@ -1806,12 +1981,18 @@ app_terminal_draw:
     pop r13
     pop r12
     pop rbx
-    SYS_APP_DONE
+    ret
+
+app_terminal_draw:
+    jmp app_terminal_kernel_draw
 
 app_terminal_click:
-    SYS_APP_DONE
+    ret
 
 ; Key handler: RDI=window_ptr, ESI=key_event [pressed:8|mods:8|ascii:8|scan:8]
+app_terminal_kernel_key:
+    jmp app_terminal_key
+
 app_terminal_key:
     push rax
     push rbx
@@ -1838,35 +2019,31 @@ app_terminal_key:
     cmp al, 126
     jg .term_key_done
 
-    mov ecx, [term_cursor]
+    mov ecx, [rel term_cursor]
     cmp ecx, 62
     jge .term_key_done
-    lea rbx, [term_input]
+    lea rbx, [rel term_input]
     mov [rbx + rcx], al
     inc ecx
     mov byte [rbx + rcx], 0
-    mov [term_cursor], ecx
+    mov dword [rel term_cursor], ecx
     jmp .term_key_done
 
 .term_backspace:
-    mov ecx, [term_cursor]
+    mov ecx, [rel term_cursor]
     test ecx, ecx
     jz .term_key_done
     dec ecx
-    lea rbx, [term_input]
+    lea rbx, [rel term_input]
     mov byte [rbx + rcx], 0
-    mov [term_cursor], ecx
+    mov dword [rel term_cursor], ecx
     jmp .term_key_done
 
 .term_enter:
-    lea rbx, [term_input]
-    cmp byte [rbx], 0
-    je .term_key_done
-
-    ; Add "C:\> <input>" echo to history
-    ; Build echo string in term_echo_buf
-    lea rdi, [term_echo_buf]
-    lea rsi, [szTermPrompt]
+    lea rbx, [rel term_input]
+    ; Build "C:\> <input>" echo into the static line buffer.
+    lea rdi, [rel term_echo_buf]
+    lea rsi, [rel szTermPrompt]
 .copy_prompt:
     lodsb
     test al, al
@@ -1874,279 +2051,37 @@ app_terminal_key:
     stosb
     jmp .copy_prompt
 .prompt_copied:
-    lea rsi, [term_input]
+    lea rsi, [rel term_input]
 .copy_input:
     lodsb
     stosb
     test al, al
     jnz .copy_input
 
-    ; Add echo string pointer to history
-    call term_add_history_echo
-
-    ; Match command
-    lea rsi, [term_input]
-    
-    ; Check "help"
-    lea rdi, [szCmdHelp]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_help
-    
-    ; Check "ver"
-    lea rdi, [szCmdVer]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_ver
-    
-    ; Check "cls" or "clear"
-    lea rdi, [szCmdCls]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_cls
-    lea rdi, [szCmdClear]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_cls
-    
-    ; Check "dir" or "ls"
-    lea rdi, [szCmdDir]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_dir
-    lea rdi, [szCmdLs]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_dir
-    
-    ; Check "cd "
-    lea rdi, [szCmdCd]
-    call term_starts_with
-    test eax, eax
-    jnz .cmd_cd
-    
-    ; Check "time" or "date"
-    lea rdi, [szCmdTime]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_time
-    lea rdi, [szCmdDate]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_time
-    
-    ; Check "exit"
-    lea rdi, [szCmdExit]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_exit
-    
-    ; Check "pwd"
-    lea rdi, [szCmdPwd]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_pwd
-    
-    ; Check "echo" (starts with echo)
-    lea rdi, [szCmdEcho]
-    call term_starts_with
-    test eax, eax
-    jnz .cmd_echo
-
-    ; Check "debug"
-    lea rdi, [szCmdDebug]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_debug
-
-    ; Check "xdebug"
-    lea rdi, [szCmdXDebug]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_xdebug
-
-    ; Check "restart" or "reboot"
-    lea rdi, [szCmdRestart]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_restart
-    lea rdi, [szCmdReboot]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_restart
-
-    ; Check "usb" (alias for debug)
-    lea rdi, [szCmdUsb]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_debug
-
-    ; Check "mouse"
-    lea rdi, [szCmdMouse]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_mouse
-
-    ; Check "touchpad" or "idebug"
-    lea rdi, [szCmdTouchpad]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_idebug
-    lea rdi, [szCmdIdebug]
-    call term_strcmp
-    test eax, eax
-    jnz .cmd_idebug
-
-    ; Unknown command
-    lea rdx, [szCmdUnknown]
-    jmp .cmd_add_output
-    
-.cmd_exit:
-    ; Close terminal window
-    mov rdi, rbx ; window ptr
-    call wm_close_window
-    jmp .term_key_done
-    
-.cmd_pwd:
-    lea rdx, [szTermPrompt] ; "C:\> "
-    jmp .cmd_add_output
-
-.cmd_help:
-    lea rdx, [szCmdHelpOut]
-    jmp .cmd_add_output
-.cmd_ver:
-    lea rdx, [szCmdVerOut]
-    jmp .cmd_add_output
-.cmd_dir:
-    call term_build_ls_string
-    lea rdx, [term_ls_buf]
-    jmp .cmd_add_output
-
-.cmd_cd:
-    ; cd <dirname>
-    lea rsi, [term_input + 3] ; skip "cd "
-    call term_find_dir_cluster
-    cmp ax, 0xFFFF
-    je .cd_err
-    call fat16_change_dir
-    jmp .term_clear_input
-.cd_err:
-    lea rdx, [szCmdCdErr]
-    jmp .cmd_add_output
-.cmd_time:
-    lea rdx, [szTime] ; Use taskbar time string
-    jmp .cmd_add_output
-    
-.cmd_echo:
-    ; Echo back the rest of the string
-    lea rdx, [term_input + 5] ; skip "echo "
-    jmp .cmd_add_output
-
-.cmd_debug:
-    ; Build XHCI debug dump into buffer
-    lea rdi, [term_debug_buf]
-    call xhci_debug_dump
-    lea rdx, [term_debug_buf]
-    jmp .cmd_add_output
-
-.cmd_xdebug:
-    ; Build XHCI debug dump into buffer
-    lea rdi, [term_debug_buf]
-    call xhci_debug_dump
-    lea rdx, [term_debug_buf]
-    jmp .cmd_add_output
-
-.cmd_restart:
-    ; Reboot via 8042 keyboard controller pulse reset line
-    cli
-    ; Try 8042 reset (pulse CPU reset line)
-    call mouse_wait_input       ; wait for 8042 input buffer clear
-    mov al, 0xFE                ; Reset command
-    out 0x64, al
-    ; If that didn't work, try triple fault
-    lidt [.null_idt]
-    int 0
-.null_idt:
-    dw 0
-    dq 0
-
-
-.cmd_cls:
-    mov dword [term_hist_count], 0
-    lea rcx, [term_hist_ptrs]
-    xor eax, eax
-.cls_loop:
-    cmp eax, TERM_MAX_HIST
-    jge .term_clear_input
-    mov qword [rcx + rax * 8], 0
-    inc eax
-    jmp .cls_loop
-
-.cmd_mouse:
-    lea rdi, [term_debug_buf]
-    call mouse_debug_dump
-    lea rdx, [term_debug_buf]
-    jmp .cmd_add_output
-
-.cmd_idebug:
-    lea rdi, [term_debug_buf]
-    call i2c_hid_debug_dump
-    lea rdx, [term_debug_buf]
-    jmp .cmd_add_output
-
-
-
-.cmd_add_output:
-    ; rdx = static response string pointer
-    ; Add to history
-    mov eax, [term_hist_count]
-    cmp eax, TERM_MAX_HIST
-    jge .term_scroll_hist
-
-    lea rcx, [term_hist_ptrs]
-    mov [rcx + rax * 8], rdx
-    inc dword [term_hist_count]
-    jmp .term_clear_input
-
-.term_scroll_hist:
-    ; Shift history up by 1
-    lea rcx, [term_hist_ptrs]
-    mov eax, 0
-.scroll_loop:
-    cmp eax, TERM_MAX_HIST - 1
-    jge .scroll_done
-    mov rbx, [rcx + rax * 8 + 8]
-    mov [rcx + rax * 8], rbx
-    inc eax
-    jmp .scroll_loop
-.scroll_done:
-    mov [rcx + (TERM_MAX_HIST - 1) * 8], rdx
-    jmp .term_clear_input
-
 .term_clear_input:
-    mov byte [term_input], 0
-    mov dword [term_cursor], 0
+    mov byte [rel term_input], 0
+    mov dword [rel term_cursor], 0
 
 .term_key_done:
     pop rdx
     pop rcx
     pop rbx
     pop rax
-    SYS_APP_DONE
+    ret
 
 ; Helper: add echo buffer pointer to history
 term_add_history_echo:
     push rax
     push rcx
     push rdx
-    mov eax, [term_hist_count]
+    mov eax, [rel term_hist_count]
     cmp eax, TERM_MAX_HIST
     jge .echo_scroll
 
-    lea rcx, [term_hist_ptrs]
-    lea rdx, [term_echo_buf]
+    lea rcx, [rel term_hist_ptrs]
+    lea rdx, [rel term_echo_buf]
     mov [rcx + rax * 8], rdx
-    inc dword [term_hist_count]
+    inc dword [rel term_hist_count]
     jmp .echo_done
 
 .echo_scroll:
@@ -2160,7 +2095,7 @@ term_add_history_echo:
     inc eax
     jmp .echo_shift
 .echo_shift_done:
-    lea rdx, [term_echo_buf]
+    lea rdx, [rel term_echo_buf]
     mov [rcx + (TERM_MAX_HIST - 1) * 8], rdx
 .echo_done:
     pop rdx
@@ -2599,7 +2534,7 @@ app_notepad_draw:
     pop r13
     pop r12
     pop rbx
-    SYS_APP_DONE
+    ret
 
 ; Click handler for notepad
 app_notepad_click:
@@ -2861,7 +2796,7 @@ app_notepad_click:
     pop rcx
     pop rbx
     pop rax
-    SYS_APP_DONE
+    ret
 
 ; Key handler for notepad: supports arrows, Enter, Backspace, printable chars
 app_notepad_key:
@@ -3358,7 +3293,7 @@ app_notepad_key:
     pop rcx
     pop rbx
     pop rax
-    SYS_APP_DONE
+    ret
 
 ; ============================================================================
 ; SETTINGS APP
@@ -3569,7 +3504,7 @@ app_settings_draw:
     pop r13
     pop r12
     pop rbx
-    SYS_APP_DONE
+    ret
 
 ; Click Handler
 app_settings_click:
@@ -3670,7 +3605,7 @@ app_settings_click:
     pop r13
     pop r12
     pop rbx
-    SYS_APP_DONE
+    ret
 
 
 ; ============================================================================
@@ -3772,7 +3707,7 @@ app_about_draw:
     pop r13
     pop r12
     pop rbx
-    SYS_APP_DONE
+    ret
 
 ; ============================================================================
 ; Right-click context menu for explorer (called from main event loop)
@@ -3921,7 +3856,7 @@ app_properties_draw:
     pop r13
     pop r12
     pop rbx
-    SYS_APP_DONE
+    ret
 
 global ctx_menu_visible
 
@@ -3991,7 +3926,7 @@ app_open_file_in_bmpview:
     jge .bmp_h_ok
     mov r8d, 100
 .bmp_h_ok:
-    mov r9, app_bmp_draw
+    lea r9, [rel app_bmp_draw]
     SYS_WM_CREATE rdi, rsi, rdx, r10, r8, r9
 
 .bmp_open_fail:
@@ -4108,7 +4043,7 @@ app_bmp_draw:
     pop r13
     pop r12
     pop rbx
-    SYS_APP_DONE
+    ret
 
 ; ============================================================================
 ; HELPER FUNCTIONS
@@ -4639,7 +4574,7 @@ app_paint_draw:
     pop r13
     pop r12
     pop rbx
-    SYS_APP_DONE
+    ret
 
 ; Click Handler
 ; RSI = Client X, RDX = Client Y
@@ -4760,7 +4695,7 @@ app_paint_click:
     pop r13
     pop r12
     pop rbx
-    SYS_APP_DONE
+    ret
 
 ; Key handler for Paint (Save As)
 app_paint_key:
@@ -4860,9 +4795,9 @@ app_paint_key:
     pop rdx
     pop rcx
     pop rbx
-    SYS_APP_DONE
+    ret
 .pk_ret:
-    SYS_APP_DONE
+    ret
 
 app_paint_save:
     mov rdi, 0x930000
@@ -5109,6 +5044,26 @@ bmp_height      dd 0
 bmp_data_offset dd 0
 bmp_bpp         dd 0
 szSavedMsg      db "Saved!", 0
+szL3DrawOk      db "L3 draw ok", 0
+szL3ClickOk     db "L3 click ok", 0
+szL3KeyOk       db "L3 key ok", 0
+szL3T0          db "L3T0", 0
+szL3T4          db "L3T4", 0
+szL3T5          db "L3T5", 0
+szL3T6          db "L3T6", 0
+szL3T8          db "L3T8", 0
+szL3T11         db "L3T11", 0
+szL3T13         db "L3T13", 0
+szL3T14         db "L3T14", 0
+szL3T7          db "L3T7", 0
+szL3T9          db "L3T9", 0
+szL3T12         db "L3T12", 0
+szL3T15         db "L3T15", 0
+szL3T16         db "L3T16", 0
+szL3T17         db "L3T17", 0
+szL3WndTitle    db "L3TEST", 0
+szL3Tmp83       db "L3TEST  TXT"
+szL3TmpData     db "L3OK"
 
 ; --- Settings strings ---
 szSetDisplay    db "Display", 0

@@ -28,6 +28,8 @@ CURSOR_BG_ADDR      equ 0x700000     ; Cursor background save area
 WINDOW_POOL_ADDR    equ 0x710000     ; Window structure pool
 EVENT_BUFFER_ADDR   equ 0x720000     ; Event buffers
 APP_DATA_ADDR       equ 0x800000     ; Application data
+APP_SLOT_SIZE       equ 0x10000      ; 64 KB private app arena per window/process
+L3_SYSCALL_STACK_ADDR equ 0xC00000   ; Kernel-only syscall stacks
 
 ; --- Stage 2 disk layout ---
 STAGE2_SECTORS      equ 63           ; Sectors 1-63
@@ -75,6 +77,8 @@ COLOR_START_HOVER    equ 0x00338833
 ; --- Window Manager ---
 MAX_WINDOWS         equ 8
 WINDOW_STRUCT_SIZE  equ 256          ; Bytes per window struct
+L3_USER_STACK_SIZE  equ 16384        ; 16 KB user stack per L3 window callback context
+L3_SYSCALL_STACK_SIZE equ 4096       ; 4 KB syscall stack per L3 context
 TITLEBAR_HEIGHT     equ 24
 BORDER_WIDTH        equ 2
 CLOSE_BTN_SIZE      equ 18

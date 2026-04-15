@@ -6,13 +6,12 @@ bits 64
 %include "constants.inc"
 %include "macros.inc"
 
-; Serial char macro for debugging
-
-
 section .text
 global kmain
 global process_keyboard
 global process_mouse
+global debug_print
+global serial_poll_command
 
 ; Kernel
 extern idt_init
@@ -25,7 +24,6 @@ extern spi_init
 extern spi_hid_init
 extern acpi_pci_init
 
-; Drivers
 ; Drivers
 extern mouse_init
 extern usb_hid_init
@@ -59,7 +57,6 @@ extern tick_count
 extern uint32_to_str
 extern render_text
 
-
 ; GUI
 extern wm_init
 extern render_init
@@ -86,8 +83,17 @@ extern render_restore_backbuffer
 extern render_mark_dirty
 extern render_save_backbuffer
 extern display_flip_rect
+extern call_app_l3
+extern app_l3_test_draw
+extern app_l3_test_click
+extern app_l3_test_key
+extern app_l3_test_click
+extern app_l3_test_key
 extern bb_addr
 extern scr_pitch
+extern display_flip
+extern wait_vsync
+extern vsync_enabled
 
 ; Filesystem
 extern fat16_init
@@ -103,30 +109,38 @@ extern tb_draw_submenu
 extern tb_handle_submenu_click
 extern sm_submenu_open
 
-; Window struct offsets (must match window.asm)
+; Window struct offsets
+WIN_OFF_ID      equ 0
+WIN_OFF_X       equ 8
+WIN_OFF_Y       equ 16
+WIN_OFF_W       equ 24
+WIN_OFF_H       equ 32
 WIN_OFF_FLAGS   equ 40
+WIN_OFF_TITLE   equ 48
+WIN_OFF_DRAWFN  equ 112
 WIN_OFF_KEYFN   equ 120
+WIN_OFF_CLICKFN equ 128
 WIN_OFF_APPDATA equ 136
 
-; FPS overlay region (small rect that gets updated each frame)
+; FPS overlay region
 FPS_REGION_X    equ 8
 FPS_REGION_Y    equ 8
-FPS_REGION_W    equ 290      ; Wide enough for debug line "USB:1 I2C:1 SPP:1 X:NNNN Y:NNNN"
-FPS_REGION_H    equ 40       ; Two lines: FPS + debug status
+FPS_REGION_W    equ 290
+FPS_REGION_H    equ 40
 
 extern fill_rect
 
-; Debug logging variables
 section .data
 debug_y: dd 40
+global gui_initialized
+gui_initialized db 0
+global scene_dirty
+scene_dirty db 1
 
 section .text
 
-section .text
-
-; debug_print - Helper to print string to screen AND serial
+; --- debug_print ---
 ; RSI = string pointer
-global debug_print
 debug_print:
     push rax
     push rbx
@@ -138,9 +152,12 @@ debug_print:
     push r9
     push r10
     push r11
+    push r12
     
-    ; --- Serial Output (0x3F8) ---
-    mov rdx, rsi
+    mov r12, rsi     ; Preserve RSI
+    
+    ; Serial Output
+    mov rdx, r12
 .serial_loop:
     movzx eax, byte [rdx]
     test al, al
@@ -152,22 +169,17 @@ debug_print:
     inc rdx
     jmp .serial_loop
 .serial_done:
-    ; Newline for serial
     mov dx, 0x3F8
     mov al, 13
     out dx, al
     mov al, 10
     out dx, al
 
-    ; --- Screen Output ---
-    ; Check if display is initialized (bb_addr != 0)
+    ; Screen Output
     mov rax, [bb_addr]
     test rax, rax
     jz .done
     
-
-    
-    ; Draw background bar for text
     mov edi, 0
     mov esi, [debug_y]
     mov edx, 800
@@ -175,24 +187,24 @@ debug_print:
     mov r8d, 0x00000000
     call fill_rect
     
-    ; Draw text
     mov edi, 10
     mov esi, [debug_y]
-    mov rdx, rsi     ; string was in RSI
-    mov ecx, 0x0000FF00 ; Green text
-    mov r8d, 0x00000000 ; Black bg
+    mov rdx, r12
+    mov ecx, 0x0000FF00
+    mov r8d, 0x00000000
     call render_text
-
-    ; Advance Y
     add dword [debug_y], 16
     
-    ; Only flip in debug_print during early boot. Once GUI is active, 
-    ; the timer-driven render loop handles flipping.
+    cmp dword [debug_y], 600
+    jl .y_ok
+    mov dword [debug_y], 0
+.y_ok:
+
     cmp byte [gui_initialized], 1
     je .done
     call display_flip
-
 .done:
+    pop r12
     pop r11
     pop r10
     pop r9
@@ -205,22 +217,23 @@ debug_print:
     pop rax
     ret
 
+; --- Kernel Entry ---
 kmain:
-    ; Init display immediately - replaces UEFI white screen with black
     call display_init
     call display_flip
 
-    ; 1. Initialize Hardware
     call idt_init
-    ; 0. HW Prep
+    extern gdt64_init
+    extern tss_init
+    extern syscall_init
     call gdt64_init
     call tss_init
     call syscall_init
 
-    ; 1. Hardware & System Init
+    extern scheduler_init
+    call scheduler_init
     call pic_init
     call pit_init
-    ; Initialize advanced hardware
     call acpi_init
     call apic_init
     call ioapic_init
@@ -229,55 +242,166 @@ kmain:
     
     mov rsi, szBootMsg
     call debug_print
-
-    sti
-
-    call keyboard_init
-
-    ; Init mouse before disabling interrupts again
-    cli
-    call mouse_init
-    sti
-
-    mov rsi, szUsbInit
-    call debug_print
-
-    ; Init USB HID (XHCI) - this can take hundreds of ms
     call usb_hid_init
     call i2c_hid_init
     call fat16_init
 
-    
-    ; 3. GUI System
+    sti
+    call keyboard_init
+    call mouse_init
+
     call render_init
     call cursor_init
     call wm_init
     
-    ; 4. Initial draw before entering usermode
     mov byte [gui_initialized], 1
     call render_frame
 
-    ; 5. Main Work Loop
 .infinite:
     cmp byte [gui_initialized], 1
     jne .skip_gui
-
     call render_frame
     call usb_poll_mouse
     call i2c_hid_poll
     call battery_poll
     call process_mouse
     call keyboard_repeat_tick
-
 .drain_kb:
     call process_keyboard
     call keyboard_available
     test eax, eax
     jnz .drain_kb
-
+    call serial_poll_command
 .skip_gui:
-    hlt                      ; Wait for next interrupt (e.g. Timer)
+    hlt
     jmp .infinite
+
+; ============================================================================
+; serial_poll_command - poll COM1 for serial automation input
+;  raw bytes become focused-window keypresses
+;  0x01 + '2'..'7' launches app IDs directly
+;  0x01 + 'x' closes the focused window
+; ============================================================================
+serial_poll_command:
+    push rax
+    push rcx
+    push rdx
+    push rdi
+
+.poll:
+    mov dx, 0x3F8 + 5
+    in al, dx
+    test al, 1
+    jz .done
+
+    mov dx, 0x3F8
+    in al, dx
+
+    cmp byte [serial_command_armed], 0
+    jne .dispatch_control
+
+    cmp al, 1
+    je .arm_control
+
+    call serial_forward_input
+    jmp .poll
+
+.arm_control:
+    mov byte [serial_command_armed], 1
+    jmp .poll
+
+.dispatch_control:
+    mov byte [serial_command_armed], 0
+    call serial_dispatch_control
+    jmp .poll
+
+.done:
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
+    ret
+
+serial_dispatch_control:
+    cmp al, '2'
+    jb .check_close
+    cmp al, '7'
+    ja .check_close
+    movzx edi, al
+    sub edi, '0'
+    sub rsp, 8
+    call app_launch
+    add rsp, 8
+    mov byte [scene_dirty], 1
+    ret
+
+.check_close:
+    cmp al, 'x'
+    je .close_focused
+    cmp al, 'X'
+    jne .control_done
+
+.close_focused:
+    mov rdi, [wm_focused_window]
+    cmp rdi, -1
+    je .control_done
+    sub rsp, 8
+    call wm_close_window
+    add rsp, 8
+    mov byte [scene_dirty], 1
+
+.control_done:
+    ret
+
+serial_forward_input:
+    cmp al, 0
+    je .input_done
+    cmp al, 10
+    jne .input_check_cr
+    mov al, 13
+.input_check_cr:
+    cmp al, 13
+    je .input_dispatch
+    cmp al, 8
+    je .input_dispatch
+    cmp al, 9
+    je .input_dispatch
+    cmp al, 32
+    jb .input_done
+    cmp al, 126
+    ja .input_done
+
+.input_dispatch:
+    mov dl, al
+    mov r8, [wm_focused_window]
+    cmp r8, -1
+    je .input_done
+    mov rax, r8
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    mov r9, [rax + WIN_OFF_KEYFN]
+    test r9, r9
+    jz .input_done
+
+    movzx ecx, dl
+    shl ecx, 8
+    or ecx, 0x01000000
+    mov edx, ecx
+    mov rsi, rax
+    mov ecx, edx
+    mov rdi, r9
+    lea r10, [rel app_l3_test_key]
+    cmp r9, r10
+    je .input_dispatch_l3
+    call r9
+    jmp .input_dispatch_done
+.input_dispatch_l3:
+    call call_app_l3
+.input_dispatch_done:
+    mov byte [scene_dirty], 1
+
+.input_done:
+    ret
 
 ; ============================================================================
 ; Process mouse input - sets scene_dirty if needed
@@ -287,49 +411,30 @@ process_mouse:
     test al, al
     jz .pm_done
 
-    ; Get state
     mov edi, [mouse_x]
     mov esi, [mouse_y]
     movzx edx, byte [mouse_buttons]
-
-    ; Save for later
     push rdi
     push rsi
     push rdx
-
-    ; Pass to window manager (handles drag, close btn, client clicks)
     call wm_handle_mouse_event
-    mov r15, rax             ; save return: 1=drag active
-
-    ; Restore for taskbar/desktop
+    mov r15, rax
     pop rdx
     pop rsi
     pop rdi
-
-    ; If drag is active, skip taskbar/desktop processing
     test r15, r15
     jnz .pm_set_dirty
-
-    ; Check left click
     test dl, 1
     jz .pm_check_rclick
-
-    ; Check if submenu is open and handle click on it first
     call tb_handle_submenu_click
     test eax, eax
     jnz .pm_set_dirty
-
-    ; Save state
     push rdx
     push rdi
     push rsi
     call tb_handle_click
-
-    ; Check if menu item was selected (rax >= 2 means app launch)
     cmp rax, 2
     jl .pm_tb_no_app
-
-    ; Launch app
     pop rsi
     pop rdi
     pop rdx
@@ -337,56 +442,40 @@ process_mouse:
     mov rdi, rax
     call app_launch
     jmp .pm_handled_click
-
 .pm_tb_no_app:
     pop rsi
     pop rdi
     test rax, rax
     jnz .pm_handled_click_pop
-
-    ; Desktop click - dismiss context menu and submenu
     mov byte [ctx_menu_visible], 0
     mov byte [sm_submenu_open], 0
     call desktop_handle_click
-
 .pm_handled_click_pop:
     pop rdx
     jmp .pm_set_dirty
-
 .pm_handled_click:
     pop rdx
-
 .pm_set_dirty:
     mov byte [scene_dirty], 1
 .pm_done:
     ret
-
 .pm_check_rclick:
-    ; Check right click for context menu
     test dl, 2
     jz .pm_no_click
-
-    ; Try start menu right-click first (add/remove from desktop)
     call tb_handle_rclick
     test eax, eax
     jnz .pm_rclick_done
-    ; Not in start menu - show explorer context menu
     call app_show_context_menu
 .pm_rclick_done:
     mov byte [scene_dirty], 1
     ret
-
 .pm_no_click:
-    ; If dragging, mark dirty for outline updates
     cmp qword [wm_drag_window_id], -1
     jne .pm_set_dirty
-    
-    ; Just cursor movement - redraw cursor at new position
     cmp byte [vsync_enabled], 1
     jne .pm_skip_vs
     call wait_vsync
 .pm_skip_vs:
-
     call cursor_hide
     mov edi, [mouse_x]
     mov esi, [mouse_y]
@@ -400,21 +489,14 @@ process_keyboard:
     call keyboard_read
     test eax, eax
     jz .pk_done
-
-    ; EAX = [pressed:8][mods:8][ascii:8][scancode:8]
     mov ecx, eax
     shr ecx, 24
     test cl, cl
-    jz .pk_done              ; Release event, ignore
-
-    mov bl, al               ; scancode
-    mov cl, ah               ; ASCII
-
-    ; --- Determine if this is an arrow/nav key ---
+    jz .pk_done
+    mov bl, al
+    mov cl, ah
     cmp byte [kb_numlock], 0
     jne .pk_numlock_on
-
-    ; --- NumLock OFF: arrows move mouse, */- click ---
     cmp bl, 0xC8
     je .pk_key_up
     cmp bl, 0xD0
@@ -427,47 +509,32 @@ process_keyboard:
     je .pk_key_lclick
     cmp cl, '-'
     je .pk_key_rclick
-    jmp .pk_forward_to_window
-
 .pk_numlock_on:
-    jmp .pk_forward_to_window
-
 .pk_forward_to_window:
-    ; If a window is focused, forward key to it
     mov r8, [wm_focused_window]
     cmp r8, -1
     je .pk_done
-    cmp r8, MAX_WINDOWS
-    jge .pk_done
-
-    push rax
     mov rax, r8
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    test qword [rax + WIN_OFF_FLAGS], WF_ACTIVE
-    jz .pk_no_focus_pop
-
     mov r9, [rax + WIN_OFF_KEYFN]
     test r9, r9
-    jz .pk_no_focus_pop
-
-    ; Call key_fn in L3: rdi=fn, rsi=win_ptr, rdx=key_event
-    extern call_app_l3
-    mov rdi, r9              ; app key function
-    mov rsi, rax              ; window pointer
-    pop rax                  ; original key event (contains ASCII, scancode, etc)
-    mov edx, eax             ; 3rd arg: key event
-    xor rcx, rcx
+    jz .pk_done
+    mov edx, ecx
+    mov rsi, rax
+    mov ecx, edx
+    mov rdi, r9
+    lea r10, [rel app_l3_test_key]
+    cmp r9, r10
+    je .pk_forward_l3
+    call r9
+    jmp .pk_forward_done
+.pk_forward_l3:
     call call_app_l3
+.pk_forward_done:
     mov byte [scene_dirty], 1
-    ret
-
-.pk_no_focus_pop:
-    pop rax
 .pk_done:
     ret
-
-    ; --- Arrow key mouse movement (NumLock OFF) ---
 .pk_key_up:
     mov eax, [mouse_y]
     sub eax, 5
@@ -478,7 +545,6 @@ process_keyboard:
     mov byte [mouse_moved], 1
     mov byte [scene_dirty], 1
     ret
-
 .pk_key_down:
     mov eax, [mouse_y]
     add eax, 5
@@ -490,7 +556,6 @@ process_keyboard:
     mov byte [mouse_moved], 1
     mov byte [scene_dirty], 1
     ret
-
 .pk_key_left:
     mov eax, [mouse_x]
     sub eax, 5
@@ -501,7 +566,6 @@ process_keyboard:
     mov byte [mouse_moved], 1
     mov byte [scene_dirty], 1
     ret
-
 .pk_key_right:
     mov eax, [mouse_x]
     add eax, 5
@@ -513,17 +577,11 @@ process_keyboard:
     mov byte [mouse_moved], 1
     mov byte [scene_dirty], 1
     ret
-
 .pk_key_lclick:
     mov byte [mouse_buttons], 1
     mov edi, [mouse_x]
     mov esi, [mouse_y]
-    mov edx, 1
-    push rdi
-    push rsi
     call wm_handle_mouse_event
-    pop rsi
-    pop rdi
     call tb_handle_click
     cmp rax, 2
     jl .pk_kc_no_app
@@ -531,307 +589,145 @@ process_keyboard:
     call app_launch
     jmp .pk_kc_handled
 .pk_kc_no_app:
-    test rax, rax
-    jnz .pk_kc_handled
     call desktop_handle_click
 .pk_kc_handled:
     mov byte [mouse_buttons], 0
     mov byte [scene_dirty], 1
     ret
-
 .pk_key_rclick:
     mov edi, [mouse_x]
     mov esi, [mouse_y]
     call tb_handle_rclick
     test eax, eax
     jnz .pk_kr_done
-    mov edi, [mouse_x]
-    mov esi, [mouse_y]
     call app_show_context_menu
 .pk_kr_done:
     mov byte [scene_dirty], 1
     ret
 
 ; ============================================================================
-; Render one frame - ultra-fast path for unchanged scenes
-; Key insight: when scene is clean, we only need to update FPS text region
-; (100 pixels wide x 16 pixels tall) instead of the full 3MB framebuffer
+; Render one frame
 ; ============================================================================
 render_frame:
-    ; Check if dragging
     cmp qword [wm_drag_window_id], -1
     jne .rf_draw_drag
-
-    ; --- Normal frame ---
     cmp byte [scene_dirty], 0
     je .rf_fast_path
-
-    ; === SCENE CHANGED: Full Redraw ===
-    ; We DO NOT hide the cursor yet. We build the full BB while VRAM remains untouched showing old state.
     call wm_draw_desktop
     call desktop_draw_icons
     call tb_draw
     call tb_draw_submenu
-
-    ; Update FPS counter
     call .rf_update_fps
-
-    ; Draw FPS text directly into backbuffer (before save)
     call .rf_draw_fps_text
-
-    ; Save entire scene (with FPS text baked in) as cache
     call render_save_backbuffer
     mov byte [scene_dirty], 0
-
-    ; --- VRAM Modification Window ---
     cmp byte [vsync_enabled], 1
     jne .fr_skip_full_vs
     call wait_vsync
 .fr_skip_full_vs:
-
-    ; Hide old cursor from VRAM
     call cursor_hide
-
-    ; Full flip to VRAM
     call render_mark_full
     call render_flush
-
-    ; Draw cursor on top of front buffer (and resample background)
     mov edi, [mouse_x]
     mov esi, [mouse_y]
     call cursor_draw
     ret
-
 .rf_fast_path:
-    ; === FAST PATH: Scene unchanged ===
     call .rf_update_fps
-
-    ; Restore just the FPS region from cache to clear old text in BB
     call .rf_restore_fps_region
-
-    ; Draw new FPS text into backbuffer
     call .rf_draw_fps_text
-
-    ; --- VRAM Modification Window ---
     cmp byte [vsync_enabled], 1
     jne .fr_skip_fast_vs
     call wait_vsync
 .fr_skip_fast_vs:
-
-    ; Hide old cursor from VRAM
     call cursor_hide
-
-    ; Flip only the FPS region from backbuffer to VRAM
     mov edi, FPS_REGION_X
     mov esi, FPS_REGION_Y
     mov edx, FPS_REGION_W
     mov ecx, FPS_REGION_H
     call display_flip_rect
-
-    ; Draw cursor on top of VRAM (and resample background)
     mov edi, [mouse_x]
     mov esi, [mouse_y]
     call cursor_draw
     ret
-
 .rf_draw_drag:
-    ; --- Drag path: need full backbuffer restore for outline ---
     call render_restore_backbuffer
     call wm_draw_drag_outline
     call .rf_update_fps
     call .rf_draw_fps_text
     call render_mark_full
-
-    ; --- VRAM Modification Window ---
     cmp byte [vsync_enabled], 1
     jne .fr_skip_drag_vs
     call wait_vsync
 .fr_skip_drag_vs:
-
     call cursor_hide
     call render_flush
-    
     mov edi, [mouse_x]
     mov esi, [mouse_y]
     call cursor_draw
     ret
 
-; --- Helper: Update FPS counter (increment + check 1-second boundary) ---
 .rf_update_fps:
     inc dword [frame_count]
     mov rax, [tick_count]
-    mov rcx, [start_tick]    ; Use RCX instead of RBX
     mov rdx, rax
-    sub rdx, rcx             ; RDX = elapsed ticks
-    cmp rdx, 100             ; 100 ticks = 1 second
+    sub rdx, [start_tick]
+    cmp rdx, 100
     jl .rf_fps_no_update
-    
     mov eax, [frame_count]
     mov [last_fps], eax
     mov dword [frame_count], 0
-    
-    mov rax, [tick_count]
     mov [start_tick], rax
 .rf_fps_no_update:
     ret
 
-; --- Helper: Draw FPS text into backbuffer ---
 .rf_draw_fps_text:
-    cmp byte [fps_show], 1
-    jne .rf_fps_text_done
-
     mov edi, [last_fps]
     lea rsi, [fps_str]
     call uint32_to_str
-
-    mov rdi, 10
-    mov rsi, 10
+    mov edi, FPS_REGION_X + 4
+    mov esi, FPS_REGION_Y + 4
     lea rdx, [szFPSPrefix]
-    mov ecx, 0x00FFFF00      ; Yellow
-    mov r8d, COLOR_DESKTOP_BG ; Opaque BG (avoid needing restore for text area)
+    mov ecx, 0x00FFFFFF
+    mov r8d, -1
     call render_text
-
-    mov rdi, 50
-    mov rsi, 10
-    lea rdx, [fps_str]
-    mov ecx, 0x00FFFF00      ; Yellow
-    mov r8d, COLOR_DESKTOP_BG
-    call render_text
-
-    ; --- Debug status line: "USB:X I2C:X SPP:X X:NNN Y:NNN" ---
-    ; Render static flags at y=28, then numbers at fixed x offsets
-    ; "USB:X"
-    movzx eax, byte [usb_mouse_active]
-    add al, '0'
-    mov [dbg_str+4], al
-    mov rdi, 10
-    mov rsi, 28
-    lea rdx, [dbg_str]
-    mov ecx, 0x0000FF00
-    mov r8d, COLOR_DESKTOP_BG
-    call render_text
-
-    ; "I2C:X"
-    movzx eax, byte [i2c_hid_active]
-    add al, '0'
-    mov [dbg_str+10], al
-    mov rdi, 58
-    mov rsi, 28
-    lea rdx, [dbg_str+6]
-    mov ecx, 0x0000FF00
-    mov r8d, COLOR_DESKTOP_BG
-    call render_text
-
-    ; "SPP:X"
-    mov rax, [VBE_INFO_ADDR + VBE_SPP_OFF]
-    test rax, rax
-    setnz al
-    add al, '0'
-    mov [dbg_str+16], al
-    mov rdi, 106
-    mov rsi, 28
-    lea rdx, [dbg_str+12]
-    mov ecx, 0x0000FF00
-    mov r8d, COLOR_DESKTOP_BG
-    call render_text
-
-    ; "X:" + number
-    mov rdi, [mouse_x]
-    lea rsi, [dbg_num]
-    call uint32_to_str
-    mov rdi, 154
-    mov rsi, 28
-    lea rdx, [dbg_xlbl]     ; "X:"
-    mov ecx, 0x0000FF00
-    mov r8d, COLOR_DESKTOP_BG
-    call render_text
-    mov rdi, 170
-    mov rsi, 28
-    lea rdx, [dbg_num]
-    mov ecx, 0x0000FF00
-    mov r8d, COLOR_DESKTOP_BG
-    call render_text
-
-    ; "Y:" + number
-    mov rdi, [mouse_y]
-    lea rsi, [dbg_num]
-    call uint32_to_str
-    mov rdi, 218
-    mov rsi, 28
-    lea rdx, [dbg_ylbl]     ; "Y:"
-    mov ecx, 0x0000FF00
-    mov r8d, COLOR_DESKTOP_BG
-    call render_text
-    mov rdi, 234
-    mov rsi, 28
-    lea rdx, [dbg_num]
-    mov ecx, 0x0000FF00
-    mov r8d, COLOR_DESKTOP_BG
-    call render_text
-
-.rf_fps_text_done:
     ret
 
-; --- Helper: Restore just the FPS region from cached backbuffer ---
-; Copies FPS_REGION_W * FPS_REGION_H pixels from save buffer to backbuffer
 .rf_restore_fps_region:
-    push rdi
-    push rsi
-    push rcx
-    push rax
-
-    ; Calculate offset for FPS region: y*pitch + x*4
     mov eax, FPS_REGION_Y
     imul eax, [scr_pitch]
     add eax, FPS_REGION_X * 4
-
     mov rdi, [bb_addr]
-    add rdi, rax              ; dest = backbuffer + offset
+    add rdi, rax
     mov rsi, BACK_BUFFER_SAVE_ADDR
-    add rsi, rax              ; src = save buffer + offset
-
-    movsxd rcx, dword [scr_pitch]
-    mov eax, FPS_REGION_H     ; row count
-
+    add rsi, rax
+    mov eax, FPS_REGION_H
 .rfr_row:
-    ; Copy one row of FPS region (FPS_REGION_W * 4 bytes)
     push rdi
     push rsi
     push rax
-    mov ecx, FPS_REGION_W     ; pixels per row
-    rep movsd                  ; copy dwords (4 bytes per pixel)
+    mov ecx, FPS_REGION_W
+    rep movsd
     pop rax
     pop rsi
     pop rdi
-
-    ; Advance to next row
     movsxd rcx, dword [scr_pitch]
     add rdi, rcx
     add rsi, rcx
     dec eax
     jnz .rfr_row
-
-    pop rax
-    pop rcx
-    pop rsi
-    pop rdi
     ret
 
+section .data
 szFPSPrefix db "FPS:", 0
 fps_str     times 16 db 0
-; Debug HUD strings (chars at [+4],[+10],[+16] are overwritten each frame)
-dbg_str     db "USB:0",0,"I2C:0",0,"SPP:0",0
-dbg_xlbl    db "X:",0
-dbg_ylbl    db "Y:",0
-dbg_num     times 12 db 0    ; scratch for uint32_to_str output
-section .data
-scene_dirty      db 1              ; 1 = scene needs full redraw
-global gui_initialized
-gui_initialized db 0          ; set to 1 after GUI fully initialized
-
+global szBootMsg, szUsbInit, szUsbDone, szI2cInit, szI2cDone, szUsermodeIn
 szBootMsg db "Booting NexusOS v3.0...", 0
 szUsbInit db "Initializing USB HID (XHCI)...", 0
 szUsbDone db "USB HID Init Complete.", 0
 szI2cInit db "Initializing I2C HID (Touchpad)...", 0
 szI2cDone db "I2C HID Init Complete.", 0
 szUsermodeIn db "-> Entering Usermode (Ring 3)...", 0
+
+section .bss
+serial_command_armed resb 1

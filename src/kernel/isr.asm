@@ -65,26 +65,79 @@ ISR_NOERRCODE 31
 ; Common ISR handler for exceptions
 global isr_common_stub
 isr_common_stub:
-    cld                     ; Clear direction flag for kernel
+    cld
+    
+    ; Nested exception guard
+    lock inc dword [rel nested_exc_count]
+    cmp dword [rel nested_exc_count], 1
+    ja isr_nested_halt
+    
     PUSH_ALL
 
-    ; Print Exception Info: X<num> @ <RIP> # <CS> ! <RSP>
+    ; Print Info: X<#>[@<RIP>#<CS>!<RSP>]
     SER 'X'
-    mov rdi, [rsp + 120]     ; Interrupt number
+    mov rdi, [rsp + 120]
     call ser_print_hex64
-    
     SER '@'
-    mov rdi, [rsp + 136]     ; RIP
+    mov rdi, [rsp + 136]
     call ser_print_hex64
-
     SER '#'
-    mov rdi, [rsp + 144]     ; CS
+    mov rdi, [rsp + 144]
     call ser_print_hex64
-
     SER '!'
-    mov rdi, [rsp + 160]     ; RSP (User/Interrupted)
+    mov rdi, [rsp + 160]
     call ser_print_hex64
-    
+    SER 13
+    SER 10
+
+    ; Dump all registers
+    SER 'A'
+    mov rdi, [rsp + 112]     ; RAX
+    call ser_print_hex64
+    SER 'B'
+    mov rdi, [rsp + 104]     ; RBX
+    call ser_print_hex64
+    SER 'C'
+    mov rdi, [rsp + 96]      ; RCX
+    call ser_print_hex64
+    SER 'D'
+    mov rdi, [rsp + 88]      ; RDX
+    call ser_print_hex64
+    SER 'I'
+    mov rdi, [rsp + 72]      ; RDI
+    call ser_print_hex64
+    SER 'S'
+    mov rdi, [rsp + 80]      ; RSI
+    call ser_print_hex64
+    SER 'P'
+    mov rdi, [rsp + 64]      ; RBP
+    call ser_print_hex64
+    SER 13
+    SER 10
+    SER '8'
+    mov rdi, [rsp + 56]      ; R8
+    call ser_print_hex64
+    SER '9'
+    mov rdi, [rsp + 48]      ; R9
+    call ser_print_hex64
+    SER '0'
+    mov rdi, [rsp + 40]      ; R10
+    call ser_print_hex64
+    SER '1'
+    mov rdi, [rsp + 32]      ; R11
+    call ser_print_hex64
+    SER '2'
+    mov rdi, [rsp + 24]      ; R12
+    call ser_print_hex64
+    SER '3'
+    mov rdi, [rsp + 16]      ; R13
+    call ser_print_hex64
+    SER '4'
+    mov rdi, [rsp + 8]       ; R14
+    call ser_print_hex64
+    SER '5'
+    mov rdi, [rsp + 0]       ; R15
+    call ser_print_hex64
     SER 13
     SER 10
 
@@ -149,7 +202,7 @@ irq_common_stub:
 
 .irq_timer:
     call pit_handler
-    
+
     ; Send EOI to hardware
     call apic_eoi           
     call pic_eoi_master
@@ -188,6 +241,13 @@ irq_common_stub:
     add rsp, 16              ; Pop error code and interrupt number
     iretq
 
+isr_nested_halt:
+    SER '!'
+    SER '!'
+    SER '!'
+    hlt
+    jmp isr_nested_halt
+
 ; Helper: Print 64-bit hex value to serial
 ser_print_hex64:
     push rcx
@@ -210,3 +270,8 @@ ser_print_hex64:
     pop rax
     pop rcx
     ret
+
+section .data
+nested_exc_count: dd 0
+
+section .text

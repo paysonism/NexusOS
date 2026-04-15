@@ -6,6 +6,7 @@ bits 64
 section .text
 
 %include "constants.inc"
+%include "macros.inc"
 
 ; Window structure layout (256 bytes per window, qword fields):
 ;   0: ID          8: X           16: Y          24: Width
@@ -45,6 +46,11 @@ extern render_mark_dirty
 extern render_save_backbuffer
 extern memcpy
 extern cursor_mode
+extern call_app_l3
+extern ser_print_hex64
+extern app_l3_test_draw
+extern app_l3_test_click
+extern process_kill_window
 
 wm_init:
     ; Zero out window pool
@@ -170,6 +176,11 @@ wm_do_create:
 
     ; Set draw callback
     mov [rbx + WIN_OFF_DRAWFN], r9
+    mov eax, ecx
+    imul rax, APP_SLOT_SIZE
+    add rax, APP_DATA_ADDR
+    mov [rbx + WIN_OFF_APPDATA], rax
+    SER 'C'
 
     ; Update globals
     movzx eax, cx
@@ -195,6 +206,7 @@ wm_close_window:
     jge .close_ret
     push rax
     push rbx
+    call process_kill_window
     mov rax, rdi
     mov rbx, WINDOW_STRUCT_SIZE
     imul rax, rbx
@@ -413,14 +425,34 @@ wm_draw_window:
     mov rax, [rbx + WIN_OFF_DRAWFN]
     test rax, rax
     jz .default_content
-
-    ; Call app draw in L3: rdi=fn, rsi=win_ptr
-    extern call_app_l3
-    mov rdi, rax         ; app draw function address
-    mov rsi, rbx         ; window struct pointer
-    xor rdx, rdx
-    xor rcx, rcx
+    ; Keep built-in apps in ring 0 until the ring 3 path is stable again.
+    SER 'w'
+    SER '0'
+    mov r11, rax
+    mov rdi, rax
+    call ser_print_hex64
+    SER '@'
+    mov rdi, rbx
+    call ser_print_hex64
+    SER 13
+    SER 10
+    lea rax, [rel app_l3_test_draw]
+    cmp r11, rax
+    je .draw_l3
+    mov rdi, r11         ; target draw_fn
+    mov rsi, rbx         ; arg0: window_ptr
+    call r11
+    jmp .draw_done
+.draw_l3:
+    mov rdi, r11         ; target draw_fn
+    mov rsi, rbx         ; arg0: window_ptr
+    xor edx, edx         ; arg1
+    xor ecx, ecx         ; arg2
+    SER '1'
     call call_app_l3
+    SER '2'
+.draw_done:
+    SER 'x'
     jmp .content_done
 
 .default_content:
@@ -558,20 +590,45 @@ wm_handle_mouse_event:
     mov r8, [rax + WIN_OFF_CLICKFN]
     test r8, r8
     jz .set_focus
-    ; Call click_fn(window_ptr, mouseX_rel, mouseY_rel)
-    ; Call click_fn in L3: rdi=fn, rsi=win_ptr, rdx=relX, rcx=relY
-    extern call_app_l3
-    mov rdi, r8              ; click_fn address
-    mov rsi, rax              ; window ptr
+    SER 'c'
+    push rdi
+    mov rdi, rax
+    call ser_print_hex64
+    SER ':'
+    mov rdi, r12
+    call ser_print_hex64
+    SER ':'
+    mov rdi, r13
+    call ser_print_hex64
+    pop rdi
+    mov r11, r8
+    lea r10, [rel app_l3_test_click]
+    cmp r11, r10
+    je .click_l3
+    ; Built-in apps run in ring 0 for now.
+    mov rdi, rax              ; arg0: window ptr
+    mov rsi, r12
+    sub rsi, [rax + WIN_OFF_X]
+    sub rsi, BORDER_WIDTH
+    mov rdx, r13
+    sub rdx, [rax + WIN_OFF_Y]
+    sub rdx, TITLEBAR_HEIGHT
+    call r11
+    jmp .click_done
+.click_l3:
+    ; Call click_fn(window_ptr, mouseX_rel, mouseY_rel) in Ring 3
+    SER 'm'
     mov rdx, r12
     sub rdx, [rax + WIN_OFF_X]
     sub rdx, BORDER_WIDTH     ; client_x (relX)
     mov rcx, r13
     sub rcx, [rax + WIN_OFF_Y]
     sub rcx, TITLEBAR_HEIGHT  ; client_y (relY)
-    push rax
+    mov rdi, r11              ; target
+    mov rsi, rax              ; arg0: window ptr
     call call_app_l3
-    pop rax
+    SER 'n'
+.click_done:
 
 .set_focus:
     ; Unfocus all, focus this one
