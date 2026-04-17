@@ -1,9 +1,22 @@
+param(
+    [switch]$Release
+)
+
 $ErrorActionPreference = 'Stop'
 
 $NASM = 'C:\Tools\nasm-2.16.03\nasm.exe'
 $SRC_DIR = Join-Path $PSScriptRoot 'src'
 $BUILD_DIR = Join-Path $PSScriptRoot 'build'
 $INCLUDE_DIR = Join-Path $PSScriptRoot 'src\include'
+$USER_LIB_DIR = Join-Path $PSScriptRoot 'src\user\lib'
+$KernelDefines = @()
+if (-not $Release) {
+    $KernelDefines += '-dENABLE_DEBUG_SERIAL'
+    $KernelDefines += '-dENABLE_USER_DEBUG_SYSCALL'
+}
+else {
+    $KernelDefines += '-dRELEASE_BUILD'
+}
 
 # Ensure build dir exists
 if (-not (Test-Path $BUILD_DIR)) {
@@ -12,6 +25,7 @@ if (-not (Test-Path $BUILD_DIR)) {
 
 Write-Host "NexusOS (BIOS) Build System" -ForegroundColor Cyan
 Write-Host "===========================" -ForegroundColor Cyan
+Write-Host ("Mode:   " + ($(if ($Release) { 'release' } else { 'debug' })))
 Write-Host "Source: $SRC_DIR"
 Write-Host "Build:  $BUILD_DIR"
 
@@ -23,12 +37,12 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # 2. Stage 2 Bootloader
 Write-Host "[2/3] Assembling Stage 2..." -ForegroundColor Yellow
-& $NASM -f bin -o "$BUILD_DIR\stage2.bin" -I "$INCLUDE_DIR\" -I "$SRC_DIR\boot\" "$SRC_DIR\boot\stage2.asm"
+& $NASM @KernelDefines -f bin -o "$BUILD_DIR\stage2.bin" -I "$INCLUDE_DIR\" -I "$SRC_DIR\boot\" "$SRC_DIR\boot\stage2.asm"
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # 3. Kernel (Monolithic)
 Write-Host "[3/3] Assembling Kernel..." -ForegroundColor Yellow
-& $NASM -f bin -o "$BUILD_DIR\kernel.bin" -I "$INCLUDE_DIR\" -I "$SRC_DIR\boot\" "$SRC_DIR\kernel\kernel_build.asm"
+& $NASM @KernelDefines -w-pp-macro-redef-multi -f bin -o "$BUILD_DIR\kernel.bin" -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" "$SRC_DIR\kernel\kernel_build.asm"
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # 4. Create Disk Image (Concatenate headers + kernel)

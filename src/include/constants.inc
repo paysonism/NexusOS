@@ -27,9 +27,9 @@ BACK_BUFFER_SAVE_ADDR equ 0xA00000     ; Saved back buffer (at 10MB)
 CURSOR_BG_ADDR      equ 0x700000     ; Cursor background save area
 WINDOW_POOL_ADDR    equ 0x710000     ; Window structure pool
 EVENT_BUFFER_ADDR   equ 0x720000     ; Event buffers
-APP_DATA_ADDR       equ 0x800000     ; Application data
-APP_SLOT_SIZE       equ 0x10000      ; 64 KB private app arena per window/process
-L3_SYSCALL_STACK_ADDR equ 0xC00000   ; Kernel-only syscall stacks
+APP_DATA_ADDR       equ 0x1000000    ; 16MB - application arena (user-mapped)
+APP_SLOT_SIZE       equ 0x100000     ; 1 MB private app arena per window/process
+L3_SYSCALL_STACK_ADDR equ 0x1800000  ; Kernel-only syscall stacks
 
 ; --- Stage 2 disk layout ---
 STAGE2_SECTORS      equ 63           ; Sectors 1-63

@@ -7,6 +7,7 @@
 
 ; Output character to COM1 for debugging
 %macro SER 1
+%ifdef ENABLE_DEBUG_SERIAL
     push rax
     push rdx
     mov dx, 0x3F8
@@ -14,6 +15,7 @@
     out dx, al
     pop rdx
     pop rax
+%endif
 %endmacro
 
 ; Save all general-purpose registers (64-bit)

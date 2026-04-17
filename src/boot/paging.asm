@@ -9,6 +9,11 @@ PAGE_PRESENT    equ 0x01
 PAGE_WRITABLE   equ 0x02
 PAGE_USER       equ 0x04     ; User-accessible (ring 3)
 PAGE_LARGE      equ 0x80     ; 2MB page (PS bit in PD entry)
+APP_DATA_ADDR   equ 0x1000000
+APP_SLOT_SIZE   equ 0x100000
+MAX_WINDOWS     equ 8
+APP_USER_PDE0   equ (APP_DATA_ADDR / 0x200000)
+APP_USER_PDE_COUNT equ ((MAX_WINDOWS * APP_SLOT_SIZE + 0x1FFFFF) / 0x200000)
 
 setup_paging:
     ; Clear page table area (24KB: 0x70000 - 0x75FFF)
@@ -56,12 +61,22 @@ setup_paging:
     ; 4 PDs = 4GB total coverage
     
     mov edi, 0x72000            ; Start of PD tables
-    mov eax, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER | PAGE_LARGE  ; Flags for 2MB page (address starts at 0)
+    mov eax, PAGE_PRESENT | PAGE_WRITABLE | PAGE_LARGE  ; Supervisor-only by default
     mov ecx, 512 * 4            ; 2048 entries total (4 PDs x 512)
+    xor ebx, ebx                ; PDE index across the whole 4GB map
 
 .fill_pd:
+    push eax
+    cmp ebx, APP_USER_PDE0
+    jb .write_entry
+    mov edx, APP_USER_PDE0 + APP_USER_PDE_COUNT
+    cmp ebx, edx
+    jae .write_entry
+    or eax, PAGE_USER
+.write_entry:
     ; Write entry (low 32 bits)
     a32 mov [edi], eax
+    pop eax
     
     ; Write entry (high 32 bits) -> 0
     ; (No need to write high dword explicitly as we zeroed the whole block earlier!)
@@ -69,6 +84,7 @@ setup_paging:
     
     add eax, 0x200000           ; Next 2MB page physical address
     add edi, 8                  ; Next PD entry (8 bytes each)
+    inc ebx
     dec ecx
     jnz .fill_pd
 

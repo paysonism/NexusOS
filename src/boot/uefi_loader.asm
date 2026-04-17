@@ -53,6 +53,8 @@ default rel
 %define PT_BASE      0x70000
 %define KERN_DEST    0x100000
 %define KERN_STACK   0x200000
+%define APPS_DEST    0x2000000          ; APPS.BIN loaded here (32MB)
+%define APPS_MAX_SZ  0x100000           ; 1MB cap for app blob
 
 ; --- UCS-2 string macro ---
 %macro ustr 1+
@@ -70,13 +72,15 @@ default rel
 
 ; SER char  - single character
 %macro SER 1
-  push rax
-  push rdx
-  mov dx, 0x3F8
-  mov al, %1
-  out dx, al
-  pop rdx
-  pop rax
+%ifndef RELEASE_BUILD
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, %1
+    out dx, al
+    pop rdx
+    pop rax
+%endif
 %endmacro
 
 ; SDBG 'text'  - string + CRLF
@@ -255,6 +259,11 @@ _start:
     lea rdx, [s_ok]
     call print
 
+    ; === S2b: Load APPS.BIN (built-in user blob, binary-separated) ===
+    SDBG 'S2b-Apps'
+    call load_apps
+    SREG 'APPS-SZ', [v_apps_size]
+
     ; === S3: Build identity-mapped page tables ===
     SDBG 'S3-Paging'
     lea rdx, [s_paging]
@@ -297,7 +306,7 @@ _start:
     mov ecx, 0xC0000080
     rdmsr
     bts eax, 8          ; LME on
-    btr eax, 11         ; NXE off
+    bts eax, 11         ; NXE on (enable NX bit in page tables)
     wrmsr
     SER 'F'             ; F = EFER fixed
 
@@ -428,7 +437,7 @@ claim_pages:
     %endmacro
 
     DO_CLAIM 0x9000,     1          ; VBE info block
-    DO_CLAIM PT_BASE,    6          ; Page tables (2 pages needed, 6 claimed)
+    DO_CLAIM PT_BASE,    9          ; Page tables (PML4+PDPT0+PDPT1+PD0+PT0+4 app PTs)
     DO_CLAIM 0x8000,     1          ; Trampoline
     ; NOTE: Do NOT claim KERN_DEST (0x100000) here — UEFI loaded our own
     ; PE image at ImageBase=0x100000.  Claiming it could corrupt memory
@@ -790,52 +799,274 @@ load_kernel:
     ret
 
 ; ============================================================================
-; SETUP_PAGING  - identity-map 512 GB using 1 GB pages
-; PML4 at 0x70000, PDPT at 0x71000
+; LOAD_APPS - open \EFI\BOOT\APPS.BIN, read into RAM at APPS_DEST.
+; Writes blob base + size into VBE_INFO+0x20/+0x28 for the kernel to pick up.
+; Non-fatal on failure: VBE_INFO+0x20 stays 0 (kernel treats blob as empty).
+; ============================================================================
+load_apps:
+    push rbx
+    sub rsp, 56             ; 16n-64 aligned (rbx push = 16n-16; sub 56 -> 16n-72? recompute)
+    ; Entry RSP = 16n-8. push rbx -> 16n-16. sub 56 -> 16n-72 = 8 mod 16. Fix: use 48.
+    add rsp, 56
+    sub rsp, 48
+    ; [rsp +  0..31] shadow
+    ; [rsp + 32]     arg5 / scratch
+    ; [rsp + 40]     local: read_size (in/out)
+
+    ; Write safe defaults in case anything fails.
+    mov qword [abs VBE_INFO + 0x20], 0
+    mov qword [abs VBE_INFO + 0x28], 0
+    mov qword [v_apps_size], 0
+
+    ; Reopen root volume (original root file was closed by load_kernel).
+    mov rbx, [v_sfs]
+    test rbx, rbx
+    jz .fail
+    mov rcx, rbx
+    lea rdx, [v_root]
+    mov rax, [rbx + SFS_OPENVOL]
+    call rax
+    test rax, rax
+    jnz .fail
+
+    ; Open \EFI\BOOT\APPS.BIN
+    mov rbx, [v_root]
+    mov rcx, rbx
+    lea rdx, [v_file]
+    lea r8,  [s_apps_path]
+    mov r9,  1
+    mov qword [rsp+32], 0
+    mov rax, [rbx + FP_OPEN]
+    call rax
+    SREG 'APPS-OPEN', rax
+    test rax, rax
+    jnz .fail
+
+    ; Claim APPS_DEST so firmware doesn't reuse it, then read file in.
+    mov qword [v_tmp_addr], APPS_DEST
+    mov rcx, [v_bs]
+    mov rax, [rcx + BS_ALLOCPG]
+    mov ecx, 2                      ; AllocateAddress
+    mov edx, 2                      ; EfiLoaderData
+    mov r8, APPS_MAX_SZ / 0x1000
+    lea r9, [v_tmp_addr]
+    call rax
+    SREG 'APPS-CLM', rax
+    ; (tolerate failure — firmware may already own the region)
+
+    mov qword [rsp+40], APPS_MAX_SZ
+    mov rbx, [v_file]
+    mov rcx, rbx
+    lea rdx, [rsp+40]
+    mov r8, APPS_DEST
+    mov rax, [rbx + FP_READ]
+    call rax
+    SREG 'APPS-READ', rax
+    test rax, rax
+    jnz .close_and_fail
+
+    mov rax, [rsp+40]               ; actual bytes read
+    test rax, rax
+    jz .close_and_fail
+    mov [v_apps_size], rax
+    mov qword [abs VBE_INFO + 0x20], APPS_DEST
+    mov [abs VBE_INFO + 0x28], rax
+    SDBG 'APPS-OK'
+
+    mov rbx, [v_file]
+    mov rcx, rbx
+    mov rax, [rbx + FP_CLOSE]
+    call rax
+    jmp .done
+
+.close_and_fail:
+    mov rbx, [v_file]
+    mov rcx, rbx
+    mov rax, [rbx + FP_CLOSE]
+    call rax
+.fail:
+    SDBG 'APPS-FAIL'
+.done:
+    add rsp, 48
+    pop rbx
+    ret
+
+; ============================================================================
+; SETUP_PAGING  - identity-map 512 GB.
+; The first 1 GB uses 2 MB pages so the app arena can be user-accessible
+; while the rest stays supervisor-only; everything above 1 GB stays mapped
+; with supervisor-only 1 GB pages.
 ; ============================================================================
 setup_paging:
+    push r14
+    push r15
+    %define UEFI_PAGE_PRESENT      0x01
+    %define UEFI_PAGE_WRITABLE     0x02
+    %define UEFI_PAGE_USER         0x04
+    %define UEFI_PAGE_LARGE        0x80
+    %define UEFI_APP_DATA_ADDR     0x1000000
+    %define UEFI_APP_SLOT_SIZE     0x100000
+    %define UEFI_MAX_WINDOWS       8
+    %define UEFI_APP_PDE0          (UEFI_APP_DATA_ADDR / 0x200000)
+    %define UEFI_APP_PDE_COUNT     ((UEFI_MAX_WINDOWS * UEFI_APP_SLOT_SIZE + 0x1FFFFF) / 0x200000)
+    ; W^X: kernel text lives in [KTEXT_START, KTEXT_END). All other pages NX.
+    %define UEFI_KTEXT_START_PAGE  0x100     ; PTE index of 0x100000
+    %define UEFI_KTEXT_END_PAGE    0x120     ; PTE index of 0x120000 (128KB)
+    %define UEFI_PT0_BASE          0x74000   ; 4KB page table for PD0[0]
+    %define UEFI_APP_PT_BASE       0x75000   ; 4 PTs (0x75000..0x78FFF) for app arena
     push rbx
     push r12
+    push r13
 
-    ; Clear 3 pages (PML4 + PDPT0 + PDPT1)
+    ; Clear 9 pages (PML4 + PDPT0 + PDPT1 + PD0 + PT0 + 4 app PTs)
     mov rdi, PT_BASE
     xor eax, eax
-    mov ecx, 3 * 4096 / 4
+    mov ecx, 9 * 4096 / 4
     rep stosd
 
-    ; PML4[0] -> PDPT0 at 0x71000 (covers 0-512 GB) - User bit for ring 3 access
+    ; PML4[0] -> PDPT0 at 0x71000 (covers 0-512 GB).
+    ; Mark this branch user-accessible because PDPT0[0] contains the app arena.
     mov qword [abs PT_BASE], 0x71000 | 7
-    ; PML4[1] -> PDPT1 at 0x72000 (covers 512-1024 GB)
-    mov qword [abs PT_BASE + 8], 0x72000 | 7
+    ; PML4[1] -> PDPT1 at 0x72000 (covers 512-1024 GB), supervisor-only.
+    mov qword [abs PT_BASE + 8], 0x72000 | 3
 
-    ; PDPT0[0..511]: 1 GB identity pages starting at 0 GB
-    mov rdi, PT_BASE + 0x1000
-    xor rbx, rbx                    ; physical base = 0
-    mov r12d, 512
-.loop:
+    ; PDPT0[0] -> PD0 at 0x73000 for the first 1 GB, with User set.
+    mov qword [abs PT_BASE + 0x1000], 0x73000 | 7
+
+    ; PDPT0[1..511]: 1 GB identity pages starting at 1 GB, supervisor-only, NX.
+    mov rdi, PT_BASE + 0x1000 + 8
+    mov rbx, 0x40000000             ; physical base = 1 GB
+    mov r12d, 511
+.loop_pdpt0:
     mov rax, rbx
-    or  rax, 0x87                   ; Present | Writable | User | Page Size (1 GB)
+    or  rax, 0x83                   ; Present | Writable | Page Size (1 GB)
+    bts rax, 63                     ; NX (data only, no code execution)
     mov [rdi], rax
     add rdi, 8
     add rbx, 0x40000000             ; +1 GB
     dec r12d
-    jnz .loop
+    jnz .loop_pdpt0
 
-    ; PDPT1[0..511]: 1 GB identity pages starting at 512 GB
+    ; PD0[0]: point to fine-grained PT0 (4KB pages over 0..2MB) for W^X split.
+    mov qword [abs PT_BASE + 0x3000], UEFI_PT0_BASE | (UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE)
+
+    ; PT0[0..511]: 4KB identity pages over 0..2MB.
+    ;   pages [KTEXT_START..KTEXT_END)  : executable (kernel code)
+    ;   all other pages                  : NX + writable (data/stack/etc)
+    mov rdi, UEFI_PT0_BASE
+    xor ebx, ebx                    ; ebx = PTE index
+    xor eax, eax                    ; eax = physical base
+.loop_pt0:
+    mov rdx, rax
+    or  edx, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE
+    ; Trampoline at 0x8000 must stay executable: its final two instructions
+    ; (mov rax,KERN_DEST / jmp rax) execute AFTER cr3 is reloaded with PT_BASE.
+    cmp ebx, 8
+    je .pt0_write
+    cmp ebx, UEFI_KTEXT_START_PAGE
+    jb .pt0_nx
+    cmp ebx, UEFI_KTEXT_END_PAGE
+    jae .pt0_nx
+    jmp .pt0_write                  ; kernel text: executable (NX=0)
+.pt0_nx:
+    bts rdx, 63                     ; NX
+.pt0_write:
+    mov [rdi], rdx
+    add eax, 0x1000
+    add rdi, 8
+    inc ebx
+    cmp ebx, 512
+    jb .loop_pt0
+
+    ; PD0[1..511]: 2 MB identity pages over 2MB..1GB, supervisor-only by default.
+    ; App arena PDEs get USER bit (code runs here, no NX).
+    ; All other PDEs are kernel data/heap/framebuffer: NX.
+    mov rdi, PT_BASE + 0x3000 + 8
+    mov rax, 0x200000
+    or  rax, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_LARGE
+    mov ebx, 1
+.loop_pd0:
+    mov rdx, rax
+    cmp ebx, UEFI_APP_PDE0
+    jb .pd0_nx
+    mov r13d, UEFI_APP_PDE0 + UEFI_APP_PDE_COUNT
+    cmp ebx, r13d
+    jae .pd0_nx
+    ; App arena PDE: point to a 4KB PT so we can NX the stack half per slot.
+    mov r13, UEFI_APP_PT_BASE
+    mov r14d, ebx
+    sub r14d, UEFI_APP_PDE0
+    imul r14d, r14d, 0x1000
+    add r13, r14
+    mov rdx, r13
+    or  rdx, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_USER
+    jmp .pd0_write
+.pd0_nx:
+    bts rdx, 63                     ; kernel data region: NX
+.pd0_write:
+    mov [rdi], rdx
+    add rax, 0x200000
+    add rdi, 8
+    inc ebx
+    cmp ebx, 512
+    jb .loop_pd0
+
+    ; Fill app PTs: each PDE covers 2 slots (2MB). For each slot (256 PTEs):
+    ;   PTEs   0..127  (0x00000..0x80000)  = X, W, USER   (app code/data)
+    ;   PTEs 128..255  (0x80000..0x100000) = NX, W, USER (heap/stack)  W^X
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12d, UEFI_APP_PDE_COUNT     ; PT count
+    mov r13, UEFI_APP_PT_BASE        ; current PT
+    mov rax, UEFI_APP_DATA_ADDR      ; current physical base
+.fill_pt_outer:
+    mov rdi, r13
+    xor r14d, r14d                   ; entry index 0..511
+.fill_pt_inner:
+    mov rdx, rax
+    or  rdx, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_USER
+    ; slot-local index = r14 & 0xFF; if >=128 -> NX
+    mov r15d, r14d
+    and r15d, 0xFF
+    cmp r15d, 0x80
+    jb .pt_write
+    bts rdx, 63                      ; NX for upper half of each slot
+.pt_write:
+    mov [rdi], rdx
+    add rax, 0x1000
+    add rdi, 8
+    inc r14d
+    cmp r14d, 512
+    jb .fill_pt_inner
+    add r13, 0x1000
+    dec r12d
+    jnz .fill_pt_outer
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+
+    ; PDPT1[0..511]: 1 GB identity pages starting at 512 GB, supervisor-only, NX.
     mov rdi, PT_BASE + 0x2000
     mov rbx, 0x8000000000           ; physical base = 512 GB
     mov r12d, 512
 .loop2:
     mov rax, rbx
-    or  rax, 0x87                   ; Present | Writable | User | Page Size (1 GB)
+    or  rax, 0x83                   ; Present | Writable | Page Size (1 GB)
+    bts rax, 63                     ; NX
     mov [rdi], rax
     add rdi, 8
     add rbx, 0x40000000             ; +1 GB
     dec r12d
     jnz .loop2
 
+    pop r13
     pop r12
     pop rbx
+    pop r15
+    pop r14
     ret
 
 ; ============================================================================
@@ -1054,6 +1285,7 @@ s_ok:           ustr ` OK\r\n`
 s_fail_kernel:  ustr ` FAIL: Kernel load\r\n`
 s_fail_exit:    ustr ` FAIL: ExitBootServices\r\n`
 s_kern_path:    ustr "\EFI\BOOT\KERNEL.BIN"
+s_apps_path:    ustr "\EFI\BOOT\APPS.BIN"
 
 ; ============================================================================
 ; Variables
@@ -1078,6 +1310,7 @@ v_root:        dq 0
 v_file:        dq 0
 v_kernel_addr: dq 0
 v_ksize:       dq 0
+v_apps_size:   dq 0
 v_tmp_addr:    dq 0
 
 ; Pad text section to full raw size

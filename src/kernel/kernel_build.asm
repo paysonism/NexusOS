@@ -7,107 +7,113 @@
 
 ; Define macros to ignore extern/global directives in included files
 ; Using 1-* allows the macro to ignore any number of arguments (comma separated)
+%ifmacro extern 1-*
 %unmacro extern 1-*
+%endif
 %macro extern 1-*
 %endmacro
 
+%ifmacro global 1-*
 %unmacro global 1-*
+%endif
 %macro global 1-*
 %endmacro
 
 ; --- Core Kernel Entry Point (MUST BE FIRST) ---
 section .text
-%include "src/kernel/entry.asm"
+%include "src/kernel/core/entry.asm"
 section .text
-%include "src/kernel/main.asm"
+%include "src/kernel/core/main.asm"
 section .text
-%include "src/kernel/idt.asm"
+%include "src/kernel/core/idt.asm"
 section .text
-%include "src/kernel/isr.asm"
+%include "src/kernel/core/isr.asm"
 section .text
-%include "src/kernel/memory.asm"
+%include "src/kernel/core/memory.asm"
 section .text
-%include "src/kernel/pic.asm"
+%include "src/kernel/core/pic.asm"
 section .text
-%include "src/kernel/pit.asm"
+%include "src/kernel/core/pit.asm"
 section .text
-%include "src/kernel/tss.asm"
+%include "src/kernel/core/tss.asm"
 section .text
 %include "src/boot/gdt.asm"
 section .text
-%include "src/kernel/usermode.asm"
+%include "src/kernel/proc/usermode.asm"
 section .text
-%include "src/kernel/process.asm"
+%include "src/kernel/proc/process.asm"
 section .text
-%include "src/kernel/syscall.asm"
+%include "src/kernel/proc/syscall.asm"
 
 ; --- ACPI & APIC Core ---
 section .text
-%include "src/kernel/rsdp.asm"
+%include "src/kernel/arch/rsdp.asm"
 section .text
-%include "src/kernel/acpi.asm"
+%include "src/kernel/arch/acpi.asm"
 section .text
-%include "src/kernel/madt.asm"
+%include "src/kernel/arch/madt.asm"
 section .text
-%include "src/kernel/aml_parser.asm"
+%include "src/kernel/arch/aml_parser.asm"
 section .text
-%include "src/kernel/apic.asm"
+%include "src/kernel/arch/apic.asm"
 section .text
-%include "src/kernel/ioapic.asm"
+%include "src/kernel/arch/ioapic.asm"
 
 ; --- Drivers ---
 section .text
-%include "src/drivers/acpi_pci.asm"
+%include "src/kernel/drivers/acpi_pci.asm"
 section .text
-%include "src/drivers/acpi_ec.asm"
+%include "src/kernel/drivers/acpi_ec.asm"
 section .text
-%include "src/drivers/display.asm"
+%include "src/kernel/drivers/display.asm"
 section .text
-%include "src/drivers/keyboard.asm"
+%include "src/kernel/drivers/keyboard.asm"
 section .text
-%include "src/drivers/mouse.asm"
+%include "src/kernel/drivers/mouse.asm"
 section .text
-%include "src/drivers/ata.asm"
+%include "src/kernel/drivers/ata.asm"
 section .text
-%include "src/drivers/pci.asm"
+%include "src/kernel/drivers/pci.asm"
 section .text
-%include "src/drivers/xhci.asm"
+%include "src/kernel/drivers/xhci.asm"
 section .text
-%include "src/drivers/usb_hid.asm"
+%include "src/kernel/drivers/usb_hid.asm"
 section .text
-%include "src/drivers/spi.asm"
+%include "src/kernel/drivers/spi.asm"
 section .text
-%include "src/drivers/spi_hid.asm"
+%include "src/kernel/drivers/spi_hid.asm"
 section .text
-%include "src/drivers/i2c_hid.asm"
+%include "src/kernel/drivers/i2c_hid.asm"
 section .text
-%include "src/drivers/hid_parser.asm"
+%include "src/kernel/drivers/hid_parser.asm"
 section .text
-%include "src/drivers/battery.asm"
+%include "src/kernel/drivers/battery.asm"
 
 ; --- Filesystem ---
 section .text
-%include "src/kernel/fat16.asm"
+%include "src/kernel/fs/fat16.asm"
 
 ; --- GUI System ---
 section .text
-%include "src/gui/render.asm"
+%include "src/kernel/gui/render.asm"
 section .text
-%include "src/gui/window.asm"
+%include "src/kernel/gui/window.asm"
 section .text
-%include "src/gui/taskbar.asm"
+%include "src/kernel/gui/taskbar.asm"
 section .text
-%include "src/gui/desktop.asm"
+%include "src/kernel/gui/desktop.asm"
 section .text
-%include "src/gui/cursor.asm"
+%include "src/kernel/gui/cursor.asm"
+
+; --- Built-in User Apps ---
 section .text
-%include "src/gui/apps.asm"
+%include "src/user/apps.asm"
 
 ; --- Libraries ---
 section .text
-%include "src/lib/string.asm"
-%include "src/lib/font.asm"
-%include "src/lib/math.asm"
+%include "src/kernel/lib/string.asm"
+%include "src/kernel/lib/font.asm"
+%include "src/kernel/lib/math.asm"
 
 ; --- Helper Wrappers ---
 fn_memcpy_wrapper:
