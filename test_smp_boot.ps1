@@ -19,11 +19,12 @@ if ($matches.Count -eq 0) {
 
 $last = $matches[$matches.Count - 1]
 $detected = [Convert]::ToInt64($last.Groups[1].Value, 16)
+$target = [Convert]::ToInt64($last.Groups[2].Value, 16)
 $started = [Convert]::ToInt64($last.Groups[3].Value, 16)
 $alive = [Convert]::ToInt64($last.Groups[4].Value, 16)
 
-if ($detected -gt 1 -and $started -gt 1 -and $alive -le 1) {
-    throw "AP startup inconsistent: started=$started alive=$alive."
+if ($target -gt 1 -and ($started -le 1 -or $alive -le 1)) {
+    throw "AP startup did not start QEMU APs: target=$target started=$started alive=$alive."
 }
 
 Write-Host '[smp] PASS' -ForegroundColor Green
