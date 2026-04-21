@@ -44,11 +44,14 @@ extern render_line
 extern render_get_backbuffer
 extern render_mark_dirty
 extern render_save_backbuffer
+extern draw_hline
+extern draw_vline
 extern memcpy
 extern cursor_mode
 extern call_app_l3
 extern ser_print_hex64
 extern process_kill_window
+extern process_create
 
 wm_init:
     ; Zero out window pool
@@ -64,18 +67,11 @@ wm_init:
 ; Create window (simple): RDI=title, RSI=x, RDX=y, RCX=w, R8=h
 ; Returns RAX = window ID (-1 on fail)
 wm_create_window:
-    push r9
-    xor r9, r9          ; draw_fn = NULL (default content)
-    call wm_do_create
-    pop r9
-    ret
+    xor r9d, r9d
+    jmp wm_do_create
 
-; Create window (extended): RDI=title, RSI=x, RDX=y, RCX=w, R8=h, R9=draw_fn
-; [rsp+8]=app_data after call (or set after via returned ID)
-; Returns RAX = window ID (-1 on fail)
 wm_create_window_ex:
-    call wm_do_create
-    ret
+    jmp wm_do_create
 
 wm_do_create:
     push rbx
@@ -95,8 +91,6 @@ wm_do_create:
     jge .fail
 
     ; Unfocus all existing windows
-    push r8
-    push r9
     mov rbx, WINDOW_POOL_ADDR
     xor ecx, ecx
 .unfocus_loop:
@@ -110,8 +104,6 @@ wm_do_create:
     inc ecx
     jmp .unfocus_loop
 .unfocus_done:
-    pop r9
-    pop r8
 
     ; Find free slot
     mov rbx, WINDOW_POOL_ADDR
@@ -127,18 +119,10 @@ wm_do_create:
 
 .found_slot:
     ; Zero entire slot first
-    push rcx
-    push rdi
-    push r8
-    push r9
     mov rdi, rbx
     xor eax, eax
     mov ecx, WINDOW_STRUCT_SIZE
     rep stosb
-    pop r9
-    pop r8
-    pop rdi
-    pop rcx
 
     ; ecx = slot index, rbx = ptr
     mov qword [rbx + WIN_OFF_ID], rcx
@@ -152,8 +136,6 @@ wm_do_create:
     mov [rbx + WIN_OFF_FLAGS], rax
 
     ; Copy title (up to 63 chars)
-    push rsi
-    push rdi
     mov rsi, r12
     lea rdi, [rbx + WIN_OFF_TITLE]
     mov eax, 63
@@ -169,21 +151,19 @@ wm_do_create:
 .title_null:
 .title_done:
     mov byte [rdi], 0
-    pop rdi
-    pop rsi
 
     ; Set draw callback
     mov [rbx + WIN_OFF_DRAWFN], r9
-    SER 'D'
-    push rdi
-    mov rdi, r9
-    call ser_print_hex64
-    pop rdi
     mov eax, ecx
     imul rax, APP_SLOT_SIZE
     add rax, APP_DATA_ADDR
     mov [rbx + WIN_OFF_APPDATA], rax
-    SER 'C'
+
+    ; Register process
+    mov rdi, r9
+    movzx rsi, cx
+    movzx rdx, cx
+    call process_create
 
     ; Update globals
     movzx eax, cx
@@ -309,23 +289,46 @@ wm_draw_window:
     mov r14, [rbx + WIN_OFF_W]
     mov r15, [rbx + WIN_OFF_H]
 
-    ; --- Shadow ---
+    ; --- Raised bevel border (VGA98 style) ---
+    ; Outer black frame
     mov rdi, r12
-    add rdi, 3
     mov rsi, r13
-    add rsi, 3
     mov rdx, r14
     mov rcx, r15
-    mov r8d, 0x00181818
+    mov r8d, COLOR_BEVEL_XDK
     call render_rect
 
-    ; --- Outer border ---
+    ; Top highlight
     mov rdi, r12
     mov rsi, r13
     mov rdx, r14
-    mov rcx, r15
-    mov r8d, COLOR_WINDOW_BORDER
-    call render_rect
+    mov rcx, COLOR_BEVEL_LT
+    call draw_hline
+
+    ; Left highlight
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r15
+    mov rcx, COLOR_BEVEL_LT
+    call draw_vline
+
+    ; Bottom shadow (1px up from outer)
+    mov rdi, r12
+    mov rsi, r13
+    add rsi, r15
+    sub rsi, 1
+    mov rdx, r14
+    mov rcx, COLOR_BEVEL_DK
+    call draw_hline
+
+    ; Right shadow (1px left from outer)
+    mov rdi, r12
+    add rdi, r14
+    sub rdi, 1
+    mov rsi, r13
+    mov rdx, r15
+    mov rcx, COLOR_BEVEL_DK
+    call draw_vline
 
     ; --- Client area ---
     mov rdi, r12
@@ -400,7 +403,7 @@ wm_draw_window:
     mov rsi, r13
     add rsi, 5
     mov rdx, szCloseX
-    mov ecx, COLOR_TEXT_WHITE
+    mov ecx, COLOR_TEXT_BLACK
     mov r8d, COLOR_CLOSE_BTN
     call render_text
 
@@ -431,25 +434,12 @@ wm_draw_window:
     mov rax, [rbx + WIN_OFF_DRAWFN]
     test rax, rax
     jz .default_content
-    SER 'w'
-    SER '0'
-    mov r11, rax
     mov rdi, rax
-    call ser_print_hex64
-    SER '@'
-    mov rdi, rbx
-    call ser_print_hex64
-    SER 13
-    SER 10
-    mov rdi, r11         ; target draw_fn
     mov rsi, rbx         ; arg0: window_ptr
     xor edx, edx         ; arg1
     xor ecx, ecx         ; arg2
-    SER '1'
     call call_app_l3
-    SER '2'
 .draw_done:
-    SER 'x'
     jmp .content_done
 
 .default_content:
@@ -459,7 +449,7 @@ wm_draw_window:
     mov rsi, r13
     add rsi, TITLEBAR_HEIGHT + 8
     mov rdx, szEmptyWin
-    mov ecx, 0x00888888
+    mov ecx, COLOR_TEXT_GRAY
     mov r8d, COLOR_WINDOW_BG
     call render_text
 
@@ -613,9 +603,6 @@ wm_handle_mouse_event:
 .click_done:
 
 .set_focus:
-    ; Unfocus all, focus this one
-    push rcx
-    push rbx
     mov rcx, WINDOW_POOL_ADDR
     xor edx, edx
 .focus_loop:
@@ -626,8 +613,6 @@ wm_handle_mouse_event:
     inc edx
     jmp .focus_loop
 .focus_done:
-    pop rbx
-    pop rcx
     ; rbx = window ID, recompute ptr
     mov rax, rbx
     imul rax, WINDOW_STRUCT_SIZE
@@ -662,32 +647,22 @@ wm_handle_mouse_event:
     ; Mark OLD position edges as dirty (to erase/restore)
     push r8
     push r9
-    push r10
-    push r11
     mov r8, [wm_drag_preview_x]
     mov r9, [wm_drag_preview_y]
     mov r10, [wm_drag_preview_w]
     mov r11, [wm_drag_preview_h]
     call wm_mark_outline_dirty
-    pop r11
-    pop r10
     pop r9
     pop r8
 
     mov [wm_drag_preview_x], r8
     mov [wm_drag_preview_y], r9
-    
-    ; Mark NEW position edges as dirty (to draw)
+
     push r8
     push r9
-    push r10
-    push r11
-    ; r8=newX, r9=newY
     mov r10, [wm_drag_preview_w]
     mov r11, [wm_drag_preview_h]
     call wm_mark_outline_dirty
-    pop r11
-    pop r10
     pop r9
     pop r8
 
@@ -784,21 +759,15 @@ wm_draw_drag_outline:
 
 wm_mark_outline_dirty:
     ; Args: R8=x, R9=y, R10=w, R11=h
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    
-    ; Top
+    push r8
+    push r9
+    push r10
+    push r11
     mov edi, r8d
     mov esi, r9d
     mov edx, r10d
     mov ecx, 2
     call render_mark_dirty
-    
-    ; Bottom
     mov edi, r8d
     mov esi, r9d
     add esi, r11d
@@ -806,15 +775,11 @@ wm_mark_outline_dirty:
     mov edx, r10d
     mov ecx, 2
     call render_mark_dirty
-    
-    ; Left
     mov edi, r8d
     mov esi, r9d
     mov edx, 2
     mov ecx, r11d
     call render_mark_dirty
-    
-    ; Right
     mov edi, r8d
     add edi, r10d
     sub edi, 2
@@ -822,20 +787,15 @@ wm_mark_outline_dirty:
     mov edx, 2
     mov ecx, r11d
     call render_mark_dirty
-
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
+    pop r11
+    pop r10
+    pop r9
+    pop r8
     ret
 
 ; Find topmost window at (X, Y): RDI=x, RSI=y -> RAX=window ID or -1
 wm_get_window_at:
     push r12
-    push r8
-    push r9
 
     ; Check focused window first (it's drawn on top)
     mov rax, [wm_focused_window]
@@ -901,8 +861,6 @@ wm_get_window_at:
 .not_found:
     mov rax, -1
 .found:
-    pop r9
-    pop r8
     pop r12
     ret
 

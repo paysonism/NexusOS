@@ -3,6 +3,11 @@
 ; ============================================================================
 
 ; --- Memory Layout ---
+; Cache32Max speed tiers:
+; - L1-hot: IRQ/syscall/scheduler/input flags/per-core state.
+; - L2-warm: HID parser, window metadata, font/text primitives, FAT metadata.
+; - L3/LLC GUI: framebuffer composition buffers in 4MB..16MB.
+; - RAM-cold: app arenas, device DMA rings, filesystem staging, debug data.
 STAGE2_LOAD_ADDR    equ 0x7E00       ; Stage 2 load address
 E820_COUNT_ADDR     equ 0x1FF0       ; Number of E820 entries (dword)
 E820_MAP_ADDR       equ 0x2000       ; E820 memory map entries
@@ -30,6 +35,23 @@ EVENT_BUFFER_ADDR   equ 0x720000     ; Event buffers
 APP_DATA_ADDR       equ 0x1000000    ; 16MB - application arena (user-mapped)
 APP_SLOT_SIZE       equ 0x100000     ; 1 MB private app arena per window/process
 L3_SYSCALL_STACK_ADDR equ 0x1800000  ; Kernel-only syscall stacks
+GUI_LLC_ARENA_START equ 0x400000     ; Cache32Max GUI arena start (4MB)
+GUI_LLC_ARENA_END   equ 0x1000000    ; Cache32Max GUI arena end (16MB)
+%ifdef NEXUS_CACHE32_MAX
+CACHE32_RAM_LIMIT   equ 0x2000000    ; 32MB strict profile cap
+SYSTEM_RESERVED_END equ 0x1B00000    ; Keep allocator above fixed cold buffers
+SMP_TRAMPOLINE_ADDR equ 0x8000       ; AP real-mode SIPI target page
+SMP_CORE_STATE_ADDR equ 0x220000     ; Cacheline-aligned per-core records
+SMP_CORE_STACK_BASE equ 0x240000     ; AP stacks grow down from here
+SMP_MAX_CORES       equ 8
+SMP_CORE_STATE_SIZE equ 64
+SMP_CORE_STACK_SIZE equ 0x4000
+%else
+SMP_CORE_STATE_ADDR equ 0x220000
+SMP_MAX_CORES       equ 1
+SMP_CORE_STATE_SIZE equ 64
+SYSTEM_RESERVED_END equ 0xD00000
+%endif
 
 ; --- Stage 2 disk layout ---
 STAGE2_SECTORS      equ 63           ; Sectors 1-63
@@ -53,26 +75,42 @@ VBE_BPP_OFF         equ 0x14         ; Bits per pixel (4 bytes)
 VBE_SPP_OFF         equ 0x18         ; EFI_SIMPLE_POINTER_PROTOCOL interface ptr (qword, 0=none)
 
 ; --- Colors (32-bit 0x00RRGGBB, stored as BGRX in memory) ---
+; VGA 16-color palette (NexusOS Design System, format 0x00RRGGBB)
+COLOR_VGA_BLACK     equ 0x00000000   ; #000000
+COLOR_VGA_BLUE      equ 0x000000A8   ; #0000A8
+COLOR_VGA_LGRAY     equ 0x00A8A8A8   ; #A8A8A8
+COLOR_VGA_DGRAY     equ 0x00545454   ; #545454
+COLOR_VGA_WHITE     equ 0x00FCFCFC   ; #FCFCFC
+COLOR_VGA_TEAL      equ 0x00008080   ; #008080
+COLOR_VGA_RED       equ 0x00A80000   ; #A80000
+COLOR_VGA_GREEN     equ 0x0000A800   ; #00A800
+
 COLOR_BLACK         equ 0x00000000
-COLOR_WHITE         equ 0x00FFFFFF
-COLOR_DESKTOP_BG    equ 0x00335577   ; Blue-gray desktop
-COLOR_TASKBAR_BG    equ 0x001A1A2E   ; Dark blue-gray taskbar
-COLOR_TASKBAR_TOP   equ 0x002A2A4E   ; Taskbar top highlight
-COLOR_TITLEBAR      equ 0x000055AA   ; Blue title bar (focused)
-COLOR_TITLEBAR_UNF  equ 0x00555555   ; Gray title bar (unfocused)
-COLOR_WINDOW_BG     equ 0x00F0F0F0   ; Light gray window background
-COLOR_WINDOW_BORDER equ 0x00333333   ; Window border
-COLOR_CLOSE_BTN     equ 0x00CC2222   ; Red close button
-COLOR_CLOSE_HOVER   equ 0x00FF4444   ; Red close hover
-COLOR_MIN_BTN       equ 0x00CCAA22   ; Yellow minimize button
-COLOR_TEXT_WHITE     equ 0x00FFFFFF
+COLOR_WHITE         equ 0x00FCFCFC
+COLOR_DESKTOP_BG    equ 0x00008080   ; Teal #008080
+COLOR_TASKBAR_BG    equ 0x00A8A8A8   ; VGA lightgray #A8A8A8
+COLOR_TASKBAR_TOP   equ 0x00FCFCFC   ; Bevel highlight
+COLOR_CHROME_FACE   equ 0x00A8A8A8   ; #A8A8A8 3D face
+COLOR_SURFACE       equ 0x00C0C0C0   ; #C0C0C0 window surface
+COLOR_SUNKEN        equ 0x00FCFCFC   ; #FCFCFC sunken bg
+COLOR_BEVEL_LT      equ 0x00FCFCFC   ; top/left highlight #FCFCFC
+COLOR_BEVEL_DK      equ 0x00545454   ; bottom/right shadow #545454
+COLOR_BEVEL_XDK     equ 0x00000000   ; outer 1px black
+COLOR_TITLEBAR      equ 0x000000A8   ; focused titlebar #0000A8
+COLOR_TITLEBAR_UNF  equ 0x00545454   ; unfocused #545454
+COLOR_WINDOW_BG     equ 0x00C0C0C0   ; #C0C0C0
+COLOR_WINDOW_BORDER equ 0x00000000   ; outer border black
+COLOR_CLOSE_BTN     equ 0x00A8A8A8   ; face (no red)
+COLOR_CLOSE_HOVER   equ 0x00C0C0C0
+COLOR_MIN_BTN       equ 0x00A8A8A8   ; face
+COLOR_TEXT_WHITE     equ 0x00FCFCFC
 COLOR_TEXT_BLACK     equ 0x00000000
-COLOR_TEXT_GRAY      equ 0x00888888
-COLOR_TEXT_TITLE     equ 0x00FFFFFF   ; Title bar text
-COLOR_HIGHLIGHT      equ 0x003399FF   ; Selection highlight
-COLOR_CURSOR         equ 0x00FFFFFF   ; Cursor color
-COLOR_START_BTN      equ 0x00226622   ; Start button green
-COLOR_START_HOVER    equ 0x00338833
+COLOR_TEXT_GRAY      equ 0x00545454
+COLOR_TEXT_TITLE     equ 0x00FCFCFC   ; title bar text
+COLOR_HIGHLIGHT      equ 0x000000A8   ; selection = accent blue
+COLOR_CURSOR         equ 0x00FCFCFC
+COLOR_START_BTN      equ 0x00A8A8A8   ; face
+COLOR_START_HOVER    equ 0x00C0C0C0
 
 ; --- Window Manager ---
 MAX_WINDOWS         equ 8
@@ -158,6 +196,24 @@ KEY_F11             equ 0xFB
 KEY_F12             equ 0xFC
 
 ; --- USB/XHCI Memory Layout ---
+%ifdef NEXUS_CACHE32_MAX
+XHCI_DCBAA_ADDR     equ 0x1900000    ; Cold DMA region outside GUI LLC arena
+XHCI_CMD_RING_ADDR  equ 0x1910000
+XHCI_ERST_ADDR      equ 0x1920000
+XHCI_EVT_RING_ADDR  equ 0x1930000
+XHCI_SCRATCH_ADDR   equ 0x1940000
+XHCI_DEV_CTX_ADDR   equ 0x1950000
+XHCI_INPUT_CTX_ADDR equ 0x1960000
+XHCI_CTRL_RING_ADDR equ 0x1970000
+XHCI_INT_RING_ADDR  equ 0x1980000
+XHCI_CTRL_BUF_ADDR  equ 0x1990000
+XHCI_MOUSE_BUF_ADDR equ 0x19A0000
+XHCI_DEV_CTX2_ADDR  equ 0x19B0000
+XHCI_INT_RING2_ADDR equ 0x19C0000
+XHCI_MOUSE_BUF2_ADDR equ 0x19D0000
+XHCI_CTRL_RING2_ADDR equ 0x19E0000
+XHCI_MEM_END        equ 0x19F0000
+%else
 XHCI_DCBAA_ADDR     equ 0x900000     ; Device Context Base Address Array
 XHCI_CMD_RING_ADDR  equ 0x910000     ; Command Ring (4096 TRBs)
 XHCI_ERST_ADDR      equ 0x920000     ; Event Ring Segment Table
@@ -175,6 +231,7 @@ XHCI_INT_RING2_ADDR equ 0x9C0000     ; Interrupt IN Transfer Ring (slot 2)
 XHCI_MOUSE_BUF2_ADDR equ 0x9D0000   ; Mouse interrupt data buffers (slot 2)
 XHCI_CTRL_RING2_ADDR equ 0x9E0000   ; Control EP0 Transfer Ring (slot 2)
 XHCI_MEM_END        equ 0x9F0000     ; End of XHCI memory region
+%endif
 
 ; --- XHCI Capability Register Offsets (from MMIO base) ---
 XHCI_CAP_CAPLENGTH  equ 0x00

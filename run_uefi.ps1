@@ -1,3 +1,10 @@
+param(
+    [ValidateSet('Default', 'Cache32Max')]
+    [string]$PerfProfile = 'Default',
+    [string]$GuestMemory,
+    [switch]$Headless
+)
+
 $ErrorActionPreference = 'SilentlyContinue'
 $QEMU = 'C:\Program Files\qemu\qemu-system-x86_64.exe'
 $BUILD = Join-Path $PSScriptRoot 'build'
@@ -10,15 +17,25 @@ Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -For
 
 Start-Sleep -Seconds 1
 
-Write-Host "Launching NexusOS UEFI with XHCI+HID..." -ForegroundColor Cyan
+if (-not $GuestMemory) {
+    $GuestMemory = if ($PerfProfile -eq 'Cache32Max') { '36M' } else { '512M' }
+}
 
-$proc = Start-Process -FilePath $QEMU -ArgumentList @(
+Write-Host "Launching NexusOS UEFI with XHCI+HID ($PerfProfile, $GuestMemory RAM)..." -ForegroundColor Cyan
+
+$qemuArgs = @(
     '-bios', "$BUILD\OVMF.fd",
     '-drive', "format=raw,file=fat:rw:$BUILD\esp",
     '-drive', "file=$BUILD\data.img,format=raw,media=disk",
-    '-m', '512M',
-    '-vga', 'std',
-    '-display', 'gtk,grab-on-hover=on,show-cursor=on,window-close=on',
+    '-m', $GuestMemory,
+    '-vga', 'std'
+)
+if ($PerfProfile -eq 'Cache32Max') {
+    $qemuArgs += @('-smp', '8,sockets=1,cores=8,threads=1')
+}
+$displayArg = if ($Headless) { 'none' } else { 'gtk,grab-on-hover=on,show-cursor=on,window-close=on' }
+$qemuArgs += @(
+    '-display', $displayArg,
     '-device', 'qemu-xhci,id=xhci0',
     '-device', 'usb-mouse,bus=xhci0.0,port=1',
     '-device', 'usb-kbd,bus=xhci0.0,port=2',
@@ -26,7 +43,9 @@ $proc = Start-Process -FilePath $QEMU -ArgumentList @(
     '-no-reboot',
     '-monitor', 'telnet:127.0.0.1:4444,server,nowait',
     '-name', 'NexusOS_UEFI'
- ) -PassThru
+)
+
+$proc = Start-Process -FilePath $QEMU -ArgumentList $qemuArgs -PassThru
 
 Start-Sleep -Milliseconds 800
 if ($proc.HasExited) {

@@ -84,6 +84,12 @@ isr_common_stub:
     SER '#'
     mov rdi, [rsp + 144]
     call ser_print_hex64
+    SER 'E'
+    mov rdi, [rsp + 128]
+    call ser_print_hex64
+    SER 'R'
+    mov rdi, cr2
+    call ser_print_hex64
     SER '!'
     mov rdi, [rsp + 160]
     call ser_print_hex64
@@ -141,22 +147,35 @@ isr_common_stub:
     SER 13
     SER 10
 
-    ; For now, just paint a red pixel at top-left to indicate exception and halt
+    ; Paint red pixels to indicate exception
     mov rdi, [abs 0x9000]    ; Framebuffer address
-    mov dword [rdi], 0x000000FF  ; Red pixel (BGRA)
+    mov dword [rdi], 0x000000FF
     mov dword [rdi+4], 0x000000FF
     mov dword [rdi+8], 0x000000FF
-
-    ; Highlight the exception number with yellow pixels
-    mov rax, [rsp + 120]     ; Interrupt number
-    shl rax, 2               ; * 4 bytes per pixel
-    add rax, 16              ; Offset from start
+    mov rax, [rsp + 120]
+    shl rax, 2
+    add rax, 16
     add rdi, rax
-    mov dword [rdi], 0x0000FFFF  ; Yellow pixel at position = exception#
+    mov dword [rdi], 0x0000FFFF
+
+    ; If exception from Ring 3 (CS[1:0] == 3), abort the app callback
+    ; instead of iretq-ing back to the faulting Ring 3 instruction.
+    mov rax, [rsp + 144]     ; saved CS on exception frame (after PUSH_ALL: 15 regs*8=120, then int#=8, errcode=8, rip=8, cs offset)
+    and rax, 3
+    cmp rax, 3
+    je .exc_ring3_abort
 
     POP_ALL
     add rsp, 16              ; Pop error code and interrupt number
+    lock dec dword [rel nested_exc_count]
     iretq
+
+.exc_ring3_abort:
+    POP_ALL
+    add rsp, 16
+    lock dec dword [rel nested_exc_count]
+    extern call_app_l3_return
+    jmp call_app_l3_return
 
 ; ============================================================================
 ; IRQ Stubs (0-15 -> vectors 32-47)

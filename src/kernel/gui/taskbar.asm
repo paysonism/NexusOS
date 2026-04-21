@@ -6,13 +6,29 @@ bits 64
 
 %include "constants.inc"
 
+; Draw one start menu item: icon rect + label text at row %1 with icon color %2 and label %3
+%macro MENU_ITEM 3
+    mov rdi, START_MENU_X + 8
+    mov rsi, START_MENU_Y + 8 + MENU_ITEM_H * %1
+    mov rdx, 20
+    mov rcx, 20
+    mov r8d, %2
+    call render_rect
+    mov rdi, START_MENU_X + 36
+    mov rsi, START_MENU_Y + 10 + MENU_ITEM_H * %1
+    mov rdx, %3
+    mov ecx, COLOR_TEXT_BLACK
+    mov r8d, MENU_COLOR_BG
+    call render_text
+%endmacro
+
 START_MENU_W    equ 200
 START_MENU_H    equ 200
 START_MENU_X    equ 4
 START_MENU_Y    equ (TASKBAR_Y - START_MENU_H)
 MENU_ITEM_H     equ 28
-MENU_COLOR_BG   equ 0x001E1E3E
-MENU_COLOR_HL   equ 0x003355AA
+MENU_COLOR_BG   equ 0x00A8A8A8   ; VGA chrome face #A8A8A8
+MENU_COLOR_HL   equ 0x00A80000   ; accent blue #0000A8 (BGRX)
 MENU_ITEM_COUNT equ 6
 
 ; Taskbar button layout
@@ -54,6 +70,8 @@ global tb_get_menu_item_at
 extern render_rect
 extern render_text
 extern render_mark_dirty
+extern draw_hline
+extern draw_vline
 extern wm_close_window
 extern wm_focused_window
 extern desktop_has_icon
@@ -67,12 +85,6 @@ extern time_minutes
 
 ; Draw the taskbar + start menu
 tb_draw:
-    push rax
-    push rdi
-    push rsi
-    push rdx
-    push rcx
-    push r8
     push rbx
     push r12
     push r13
@@ -86,13 +98,12 @@ tb_draw:
     mov r8d, COLOR_TASKBAR_BG
     call render_rect
 
-    ; Highlight line at top
+    ; Raised bevel top edge of taskbar
     mov rdi, 0
     mov rsi, TASKBAR_Y
     mov rdx, SCREEN_WIDTH
-    mov rcx, 1
-    mov r8d, COLOR_TASKBAR_TOP
-    call render_rect
+    mov rcx, COLOR_BEVEL_LT
+    call draw_hline
 
     ; 2. Start Button
     mov rdi, START_BTN_X
@@ -106,7 +117,7 @@ tb_draw:
     mov rdi, START_BTN_X + 12
     mov rsi, START_BTN_Y + 6
     mov rdx, szStart
-    mov ecx, COLOR_TEXT_WHITE
+    mov ecx, COLOR_TEXT_BLACK
     mov r8d, COLOR_START_BTN
     call render_text
 
@@ -123,18 +134,16 @@ tb_draw:
     test qword [rbx + WIN_OFF_FLAGS], WF_ACTIVE
     jz .tb_win_next
 
-    ; Draw button background
-    ; Focused windows get a brighter color
-    mov r8d, 0x002A2A4E          ; default: unfocused dark
+    ; Draw button background (VGA98 face color)
+    mov r8d, COLOR_CHROME_FACE   ; default face
     mov rax, [wm_focused_window]
     cmp eax, r12d
     jne .tb_not_focused
-    mov r8d, 0x003355AA          ; focused: bright blue
+    mov r8d, COLOR_SURFACE       ; focused: slightly lighter
 .tb_not_focused:
-    ; Minimized windows get slightly different look
     test qword [rbx + WIN_OFF_FLAGS], WF_MINIMIZED
     jz .tb_not_min
-    mov r8d, 0x00222244          ; minimized: darker
+    mov r8d, COLOR_CHROME_FACE   ; minimized: same face
 .tb_not_min:
     mov edi, r13d
     mov esi, TB_BTN_Y
@@ -143,13 +152,6 @@ tb_draw:
     call render_rect
 
     ; Draw button border (1px lighter top edge)
-    mov edi, r13d
-    mov esi, TB_BTN_Y
-    mov edx, TB_BTN_W
-    mov ecx, 1
-    mov r8d, 0x004466AA
-    call render_rect
-
     ; Draw window title text (truncated to fit)
     lea rdx, [rbx + WIN_OFF_TITLE]
     ; Check first byte - skip if empty title
@@ -158,9 +160,9 @@ tb_draw:
     mov edi, r13d
     add edi, 6                   ; padding from left
     mov esi, TB_BTN_Y + 7
-    mov ecx, COLOR_TEXT_WHITE
+    mov ecx, COLOR_TEXT_BLACK
     ; Background color for text depends on focus
-    mov r8d, 0x002A2A4E
+    mov r8d, COLOR_CHROME_FACE
     mov rax, [wm_focused_window]
     cmp eax, r12d
     jne .tb_txt_bg_ok
@@ -187,7 +189,7 @@ tb_draw:
     add edi, TB_CLOSE_OFF_X + 3
     mov esi, TB_BTN_Y + 8
     mov rdx, szTbClose
-    mov ecx, COLOR_TEXT_WHITE
+    mov ecx, COLOR_TEXT_BLACK
     mov r8d, COLOR_CLOSE_BTN
     call render_text
 
@@ -226,7 +228,7 @@ tb_draw:
     mov rdi, CLOCK_X
     mov rsi, CLOCK_Y
     mov rdx, szTime
-    mov ecx, COLOR_TEXT_WHITE
+    mov ecx, COLOR_TEXT_BLACK
     mov r8d, COLOR_TASKBAR_BG
     call render_text
 
@@ -245,99 +247,33 @@ tb_draw:
     mov r8d, MENU_COLOR_BG
     call render_rect
 
-    ; Menu border (top line)
+    ; Menu border: raised bevel
     mov rdi, START_MENU_X
     mov rsi, START_MENU_Y
     mov rdx, START_MENU_W
-    mov rcx, 1
-    mov r8d, 0x004466AA
-    call render_rect
-
-    ; Menu border (left line)
+    mov rcx, COLOR_BEVEL_LT
+    call draw_hline
     mov rdi, START_MENU_X
     mov rsi, START_MENU_Y
-    mov rdx, 1
-    mov rcx, START_MENU_H
-    mov r8d, 0x004466AA
-    call render_rect
-
-    ; Menu border (right line)
+    mov rdx, START_MENU_H
+    mov rcx, COLOR_BEVEL_LT
+    call draw_vline
     mov rdi, START_MENU_X + START_MENU_W - 1
     mov rsi, START_MENU_Y
-    mov rdx, 1
-    mov rcx, START_MENU_H
-    mov r8d, 0x00333366
-    call render_rect
+    mov rdx, START_MENU_H
+    mov rcx, COLOR_BEVEL_DK
+    call draw_vline
+    mov rdi, START_MENU_X
+    mov rsi, START_MENU_Y + START_MENU_H - 1
+    mov rdx, START_MENU_W
+    mov rcx, COLOR_BEVEL_DK
+    call draw_hline
 
-    ; --- Menu Item: File Explorer (icon + text) ---
-    mov rdi, START_MENU_X + 8
-    mov rsi, START_MENU_Y + 8
-    mov rdx, 20
-    mov rcx, 20
-    mov r8d, 0x00CCAA44     ; Folder yellow
-    call render_rect
-    mov rdi, START_MENU_X + 36
-    mov rsi, START_MENU_Y + 10
-    mov rdx, szMenuExplorer
-    mov ecx, COLOR_TEXT_WHITE
-    mov r8d, MENU_COLOR_BG
-    call render_text
-
-    ; --- Menu Item: Terminal ---
-    mov rdi, START_MENU_X + 8
-    mov rsi, START_MENU_Y + 8 + MENU_ITEM_H
-    mov rdx, 20
-    mov rcx, 20
-    mov r8d, 0x00222222     ; Terminal dark
-    call render_rect
-    mov rdi, START_MENU_X + 36
-    mov rsi, START_MENU_Y + 10 + MENU_ITEM_H
-    mov rdx, szMenuTerm
-    mov ecx, COLOR_TEXT_WHITE
-    mov r8d, MENU_COLOR_BG
-    call render_text
-
-    ; --- Menu Item: Notepad ---
-    mov rdi, START_MENU_X + 8
-    mov rsi, START_MENU_Y + 8 + MENU_ITEM_H * 2
-    mov rdx, 20
-    mov rcx, 20
-    mov r8d, 0x00FFFFFF     ; White notepad
-    call render_rect
-    mov rdi, START_MENU_X + 36
-    mov rsi, START_MENU_Y + 10 + MENU_ITEM_H * 2
-    mov rdx, szMenuNotepad
-    mov ecx, COLOR_TEXT_WHITE
-    mov r8d, MENU_COLOR_BG
-    call render_text
-
-    ; --- Menu Item: Settings ---
-    mov rdi, START_MENU_X + 8
-    mov rsi, START_MENU_Y + 8 + MENU_ITEM_H * 3
-    mov rdx, 20
-    mov rcx, 20
-    mov r8d, 0x00888888     ; Gray gear
-    call render_rect
-    mov rdi, START_MENU_X + 36
-    mov rsi, START_MENU_Y + 10 + MENU_ITEM_H * 3
-    mov rdx, szMenuSettings
-    mov ecx, COLOR_TEXT_WHITE
-    mov r8d, MENU_COLOR_BG
-    call render_text
-
-    ; --- Menu Item: Paint ---
-    mov rdi, START_MENU_X + 8
-    mov rsi, START_MENU_Y + 8 + MENU_ITEM_H * 4
-    mov rdx, 20
-    mov rcx, 20
-    mov r8d, 0x00FF8800     ; Orange
-    call render_rect
-    mov rdi, START_MENU_X + 36
-    mov rsi, START_MENU_Y + 10 + MENU_ITEM_H * 4
-    mov rdx, szMenuPaint
-    mov ecx, COLOR_TEXT_WHITE
-    mov r8d, MENU_COLOR_BG
-    call render_text
+    MENU_ITEM 0, 0x00CCAA44, szMenuExplorer
+    MENU_ITEM 1, 0x00222222, szMenuTerm
+    MENU_ITEM 2, 0x00FFFFFF, szMenuNotepad
+    MENU_ITEM 3, 0x00888888, szMenuSettings
+    MENU_ITEM 4, 0x00FF8800, szMenuPaint
 
     ; --- Separator ---
     mov rdi, START_MENU_X + 8
@@ -360,12 +296,6 @@ tb_draw:
     pop r13
     pop r12
     pop rbx
-    pop r8
-    pop rcx
-    pop rdx
-    pop rsi
-    pop rdi
-    pop rax
     ret
 
 ; ============================================================================
@@ -378,12 +308,7 @@ tb_draw:
 ;   State 0 (unknown):      nothing drawn
 ; ============================================================================
 tb_draw_battery:
-    push rax
     push rbx
-    push rcx
-    push rdx
-    push rdi
-    push rsi
     push r12
     push r13
 
@@ -520,7 +445,7 @@ tb_draw_battery:
     mov edi, r12d
     mov esi, TASKBAR_Y + 12
     lea rdx, [bat_pct_str]
-    mov ecx, COLOR_TEXT_WHITE
+    mov ecx, COLOR_TEXT_BLACK
     mov r8d, COLOR_TASKBAR_BG
     call render_text
     jmp .bat_done
@@ -534,19 +459,14 @@ tb_draw_battery:
     mov edi, BAT_IND_X + PLUG_ICON_W + 8
     mov esi, TASKBAR_Y + 12
     lea rdx, [szAC]
-    mov ecx, COLOR_TEXT_WHITE
+    mov ecx, COLOR_TEXT_BLACK
     mov r8d, COLOR_TASKBAR_BG
     call render_text
 
 .bat_done:
     pop r13
     pop r12
-    pop rsi
-    pop rdi
-    pop rdx
-    pop rcx
     pop rbx
-    pop rax
     ret
 
 ; ============================================================================
@@ -554,16 +474,12 @@ tb_draw_battery:
 ; EDI = X (base), ESI = Y (base)  (14x14 pixels total)
 ; ============================================================================
 tb_draw_plug_icon:
-    push rbx
     push r14
     push r15
-    push r8
-    push rcx
-    push rdx
 
-    mov r14d, edi              ; save base X
-    mov r15d, esi              ; save base Y
-    mov r8d, 0x00FFDD44        ; yellow/gold
+    mov r14d, edi
+    mov r15d, esi
+    mov r8d, 0x00FFDD44
 
     ; Left prong: (X+3, Y), 2 wide, 4 tall
     lea edi, [r14 + 3]
@@ -593,12 +509,8 @@ tb_draw_plug_icon:
     mov ecx, 4
     call render_rect
 
-    pop rdx
-    pop rcx
-    pop r8
     pop r15
     pop r14
-    pop rbx
     ret
 
 ; Handle click on taskbar / start menu
@@ -606,8 +518,6 @@ tb_draw_plug_icon:
 ; Returns: RAX = 0 (not handled), 1 (handled, no app), or 2..6 (menu item 0..4 clicked)
 tb_handle_click:
     push rbx
-    push rcx
-    push rdx
     push r12
     push r13
 
@@ -722,8 +632,6 @@ tb_handle_click:
 
 .tb_btn_focus:
     ; Unfocus all windows, then focus this one
-    push rcx
-    push rdx
     mov rcx, WINDOW_POOL_ADDR
     xor edx, edx
 .tb_unfocus_loop:
@@ -734,8 +642,6 @@ tb_handle_click:
     inc edx
     jmp .tb_unfocus_loop
 .tb_unfocus_done:
-    pop rdx
-    pop rcx
     or qword [rbx + WIN_OFF_FLAGS], WF_FOCUSED
     mov [wm_focused_window], r12
     mov rax, 1
@@ -758,8 +664,6 @@ tb_handle_click:
 .tb_click_ret:
     pop r13
     pop r12
-    pop rdx
-    pop rcx
     pop rbx
     ret
 
@@ -770,8 +674,6 @@ tb_handle_click:
 global tb_handle_rclick
 tb_handle_rclick:
     push rbx
-    push rcx
-    push rdx
 
     ; First check if submenu is open and click is inside it
     cmp byte [sm_submenu_open], 0
@@ -865,8 +767,6 @@ tb_handle_rclick:
 .rc_not_handled:
     xor eax, eax
 .rc_ret:
-    pop rdx
-    pop rcx
     pop rbx
     ret
 
@@ -896,7 +796,7 @@ tb_draw_submenu:
     mov esi, [sm_submenu_y]
     mov edx, SM_SUB_W
     mov ecx, 1
-    mov r8d, 0x004466AA
+    mov r8d, COLOR_BEVEL_LT
     call render_rect
 
     ; Determine text: "Add to Desktop" or "Remove from Desktop"
@@ -911,7 +811,7 @@ tb_draw_submenu:
     mov esi, [sm_submenu_y]
     add esi, 5
     mov rdx, szSubAdd
-    mov ecx, COLOR_TEXT_WHITE
+    mov ecx, COLOR_TEXT_BLACK
     mov r8d, 0x001E1E3E
     call render_text
     jmp .sub_draw_done

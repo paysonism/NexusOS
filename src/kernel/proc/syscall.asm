@@ -27,8 +27,14 @@ WIN_OFF_FLAGS       equ 40
 WIN_OFF_KEYFN       equ 120
 WIN_OFF_CLICKFN     equ 128
 DIR_ENTRY_SIZE      equ 32
+%ifdef NEXUS_CACHE32_MAX
+FAT16_ROOT_CACHE    equ 0x1A11000
+%else
 FAT16_ROOT_CACHE    equ 0xD11000
+%endif
 FAT16_ROOT_CACHE_SZ equ 16384
+L3_DIR_ENTRY_CACHE_OFF equ 0xFA000
+L3_DIR_ENTRY_CACHE_SZ  equ FAT16_ROOT_CACHE_SZ
 SYSCALL_MAX_STR_LEN equ 256
 
 
@@ -202,7 +208,23 @@ sc_validate_user_cstring:
 sc_validate_dir_entry_handle:
     mov rax, rdi
     sub rax, FAT16_ROOT_CACHE
+    jnc .vdeh_check_kernel
+    mov rax, rdi
+    sub rax, APP_DATA_ADDR
     jc .vdeh_fail
+    cmp rax, MAX_WINDOWS * APP_SLOT_SIZE
+    jae .vdeh_fail
+    mov edx, eax
+    and edx, APP_SLOT_SIZE - 1
+    sub edx, L3_DIR_ENTRY_CACHE_OFF
+    jc .vdeh_fail
+    cmp edx, L3_DIR_ENTRY_CACHE_SZ - DIR_ENTRY_SIZE
+    ja .vdeh_fail
+    test edx, DIR_ENTRY_SIZE - 1
+    jnz .vdeh_fail
+    mov eax, 1
+    ret
+.vdeh_check_kernel:
     cmp rax, FAT16_ROOT_CACHE_SZ - DIR_ENTRY_SIZE
     ja .vdeh_fail
     test eax, DIR_ENTRY_SIZE - 1
@@ -423,7 +445,30 @@ syscall_entry:
     jmp .done
 
 .sc_fs_entry:
+    push rdi
     call fat16_get_entry
+    pop rdi
+    test rax, rax
+    jz .sc_fs_entry_done
+    push rdi
+    push rsi
+    push rcx
+    mov esi, [rel l3_current_slot]
+    imul rsi, APP_SLOT_SIZE
+    add rsi, APP_DATA_ADDR + L3_DIR_ENTRY_CACHE_OFF
+    shl rdi, 5
+    add rsi, rdi
+    mov rdi, rsi
+    mov rsi, rax
+    mov ecx, DIR_ENTRY_SIZE
+    cld
+    rep movsb
+    mov rax, rdi
+    sub rax, DIR_ENTRY_SIZE
+    pop rcx
+    pop rsi
+    pop rdi
+.sc_fs_entry_done:
     mov [rsp + ALL_RAX], rax
     jmp .done
 
@@ -608,22 +653,6 @@ syscall_entry:
     xor edx, edx
     mov [rel l3_current_slot], edx
 .slot_ok_return:
-    push rax
-    push rdi
-    SER 'S'
-    mov edi, edx
-    call ser_print_hex64
-    SER '@'
-    imul rdx, L3_RT_SIZE
-    lea rcx, [rel l3_runtime]
-    add rdx, rcx
-    mov rdi, [rdx + L3_RT_USER_RIP]
-    call ser_print_hex64
-    SER 13
-    SER 10
-    pop rdi
-    pop rax
-    mov edx, [rel l3_current_slot]
     imul rdx, L3_RT_SIZE
     lea rcx, [rel l3_runtime]
     add rdx, rcx

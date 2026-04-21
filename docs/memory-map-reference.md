@@ -35,17 +35,21 @@ Primary source: `C:\Users\user\Documents\new\src\include\constants.inc`
 | `0x720000` | Event-buffer region | shared GUI/input region |
 | `0xA00000` | Saved backbuffer / drag/restore region | `src/kernel/gui/render.asm` |
 
+In the `Cache32Max` profile, the GUI composition region is treated as the
+L3/LLC arena from `0x400000` to `0x1000000`. XHCI and FAT16 cold buffers are
+moved outside this range.
+
 ## Ring-3 App Arenas and Runtime
 
 | Address | Meaning | Owner |
 |---|---|---|
-| `0x800000` | App slot arena base | `src/kernel/proc/usermode.asm`, `src/kernel/gui/window.asm` |
-| `0x800000 + slot * 0x10000` | Per-slot app arena | `src/kernel/proc/usermode.asm` |
-| `0xC00000` | Kernel-only syscall-stack region | `src/kernel/proc/usermode.asm`, `src/kernel/proc/syscall.asm` |
+| `0x1000000` | App slot arena base | `src/kernel/proc/usermode.asm`, `src/kernel/gui/window.asm` |
+| `0x1000000 + slot * 0x100000` | Per-slot app arena | `src/kernel/proc/usermode.asm` |
+| `0x1800000` | Kernel-only syscall-stack region | `src/kernel/proc/usermode.asm`, `src/kernel/proc/syscall.asm` |
 
 ### App slot rules
 
-- Each slot is `APP_SLOT_SIZE = 0x10000` bytes.
+- Each slot is `APP_SLOT_SIZE = 0x100000` bytes.
 - The slot stores:
   - user code/data
   - a shadow window struct near the end of the slot
@@ -57,6 +61,9 @@ Primary source: `C:\Users\user\Documents\new\src\include\constants.inc`
 These addresses are reserved by the USB stack and should not be repurposed
 without auditing `src/kernel/drivers/xhci.asm`, `src/kernel/drivers/usb_hid.asm`,
 and `src/kernel/drivers/hid_parser.asm`.
+
+Under `NEXUS_CACHE32_MAX`, this region moves to `0x1900000..0x19F0000` so it
+does not overlap the GUI LLC arena.
 
 | Address | Meaning |
 |---|---|
@@ -80,6 +87,8 @@ and `src/kernel/drivers/hid_parser.asm`.
 ## FAT16 Driver Scratch Regions
 
 These addresses are owned by `src/kernel/fs/fat16.asm`.
+
+Under `NEXUS_CACHE32_MAX`, these cold buffers move to the `0x1A00000` region.
 
 | Address | Meaning |
 |---|---|

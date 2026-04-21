@@ -87,6 +87,7 @@ app_sys_render_text:
     syscall
     ret
 
+
 app_sys_fs_count:
     mov rax, 4
     syscall

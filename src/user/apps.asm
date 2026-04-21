@@ -17,7 +17,11 @@
 %macro global 1-*
 %endmacro
 
-%include "src/user/apps/common.inc"
+; Redirect direct kernel render calls to local syscall wrappers so that
+; when the blob is copied to a user slot and runs in Ring 3, all relative
+; calls stay within the blob (correct rel32) and use the syscall ABI.
+%define render_rect  app_sys_render_rect
+%define render_text  app_sys_render_text
 
 global app_blob_start
 app_blob_start:
@@ -25,10 +29,11 @@ app_blob_start:
 ; kernel.bin without needing NASM symbol maps.
 db 0x4E, 0x58, 0x41, 0x50, 0x50, 0x42, 0x4C, 0x4F    ; "NXAPPBLO"
 db 0x42, 0x53, 0x54, 0x52, 0x54, 0xDE, 0xAD, 0xBE    ; "BSTRT" + 0xDEADBE
+%include "src/user/apps/common.inc"
 %include "src/user/apps/launch.inc"
 %include "src/user/apps/explorer.inc"
 %include "src/user/apps/terminal.inc"
-%include "src/user/apps/notepad.inc"
+%include "build/nxh/notepad.asm"
 %include "src/user/apps/settings.inc"
 %include "src/user/apps/about.inc"
 %include "src/user/apps/shell.inc"

@@ -143,7 +143,7 @@ Terminal-specific context offsets inside the slot arena:
 Owner:
 - `src/kernel/proc/usermode.asm`
 
-Each app slot is `APP_SLOT_SIZE = 0x10000`.
+Each app slot is `APP_SLOT_SIZE = 0x100000`.
 
 Practical layout:
 

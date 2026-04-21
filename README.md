@@ -67,17 +67,31 @@ UEFI smoke output is written to `build\smoke_uefi_serial.log`.
 This launches QEMU with:
 
 - OVMF firmware
-- 512 MB RAM
+- 512 MB RAM by default (`.\run_uefi.ps1 -GuestMemory 256M` to override)
 - standard VGA
 - xHCI USB controller with mouse and keyboard
 - serial on `tcp:127.0.0.1:5555`
 - QEMU monitor on `telnet://127.0.0.1:4444`
+
+Cache-first performance profile:
+
+```powershell
+.\build_uefi.ps1 -PerfProfile Cache32Max
+.\run_uefi.ps1 -PerfProfile Cache32Max
+```
+
+This uses the 8-core QEMU topology. BIOS uses the strict 32 MB guest target;
+UEFI uses a 36 MB OVMF floor while keeping the same kernel profile. See
+`docs\cache32max-performance.md`.
 
 ### BIOS
 
 ```powershell
 .\run_bios.ps1
 ```
+
+BIOS also defaults to 512 MB RAM. Use `.\run_bios.ps1 -GuestMemory 256M`
+to override.
 
 ## Source Layout
 

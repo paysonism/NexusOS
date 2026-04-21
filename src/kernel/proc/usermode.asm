@@ -207,8 +207,8 @@ l3_copy_app_blob_to_slot:
 ; EDI = slot, RSI = kernel pointer inside the built-in user blob
 ; Returns: RAX = slot-local pointer, or RSI unchanged if outside blob
 l3_slot_resolve_app_ptr:
-    mov r8, [rel app_blob_base_v]
-    mov r9, [rel app_blob_end_v]
+    lea r8, [rel app_blob_start]
+    lea r9, [rel app_blob_end]
     mov rax, rsi
     cmp rax, r8
     jb .slot_resolve_done
@@ -229,8 +229,8 @@ l3_slot_resolve_app_ptr:
 ; RSI = slot app base
 ; Returns: RAX = translated user target (or original target if no mapping applies)
 l3_translate_target:
-    mov r8, [rel app_blob_base_v]
-    mov r9, [rel app_blob_end_v]
+    lea r8, [rel app_blob_start]
+    lea r9, [rel app_blob_end]
     mov rax, rdi
     cmp rax, r8
     jb .translate_done
@@ -270,7 +270,7 @@ call_app_l3:
     mov rax, [r14 + WIN_OFF_APPDATA]
     sub rax, APP_DATA_ADDR
     js .slot_zero
-    shr rax, 16
+    shr rax, 20
     cmp eax, MAX_WINDOWS
     jb .slot_ready
 .slot_zero:

@@ -249,7 +249,7 @@ app_launch:
     mov rdx, 120
     mov rcx, 400
     mov r8, 300
-    mov r9, app_notepad_draw
+    mov r9, app_hl_notepad_draw
     SER '{'
     sub rsp, 8               ; Align stack
     call wm_create_window_ex
@@ -266,9 +266,9 @@ app_launch:
     push rax
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov r10, app_notepad_key
+    mov r10, app_hl_notepad_key
     mov qword [rax + WIN_OFF_KEYFN], r10
-    mov r10, app_notepad_click
+    mov r10, app_hl_notepad_click
     mov qword [rax + WIN_OFF_CLICKFN], r10
     SER 'n'
     pop rax
@@ -360,7 +360,7 @@ app_launch:
     mov rdx, 200
     mov rcx, 340
     mov r8, 220
-    mov r9, app_l3_test_draw
+    mov r9, app_about_draw
     SER '{'
     sub rsp, 8
     call wm_create_window_ex
@@ -374,15 +374,7 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
-    push rax
-    imul rax, WINDOW_STRUCT_SIZE
-    add rax, WINDOW_POOL_ADDR
-    mov r10, app_l3_test_click
-    mov qword [rax + WIN_OFF_CLICKFN], r10
-    mov r10, app_l3_test_key
-    mov qword [rax + WIN_OFF_KEYFN], r10
     SER 'b'
-    pop rax
     jmp .done
 
 .done:

@@ -15,6 +15,9 @@ extern debug_print
 
 section .text
 global madt_init
+global madt_lapic_count
+global madt_enabled_cpu_count
+global madt_lapic_ids
 
 ; RSI = pointer to MADT table (starts with signature "APIC", length, revision...)
 madt_init:
@@ -25,6 +28,8 @@ madt_init:
     push rdi
     push r8
     SER 'M'
+    mov dword [madt_lapic_count], 0
+    mov dword [madt_enabled_cpu_count], 0
     
     ; MADT Header size is 44 bytes
     ; +0: Signature (4)
@@ -46,12 +51,52 @@ madt_init:
     movzx edx, byte [rbx + 1] ; Length
     
     cmp eax, 0              ; Type 0: Local APIC
-    je .next
+    je .found_lapic
+    cmp eax, 9              ; Type 9: x2APIC
+    je .found_x2apic
     cmp eax, 1              ; Type 1: I/O APIC
     je .found_ioapic
     cmp eax, 2              ; Type 2: Interrupt Source Override
     je .found_iso
     
+    jmp .next
+
+.found_lapic:
+    inc dword [madt_lapic_count]
+    movzx eax, byte [rbx + 4] ; Flags
+    test eax, 1             ; Processor enabled
+    jnz .lapic_enabled
+    test eax, 8             ; Online-capable
+    jz .next
+.lapic_enabled:
+%ifdef NEXUS_CACHE32_MAX
+    mov ecx, [madt_enabled_cpu_count]
+    cmp ecx, SMP_MAX_CORES
+    jae .skip_store_lapic
+    mov al, [rbx + 3]
+    mov [madt_lapic_ids + rcx], al
+.skip_store_lapic:
+%endif
+    inc dword [madt_enabled_cpu_count]
+    jmp .next
+
+.found_x2apic:
+    inc dword [madt_lapic_count]
+    mov eax, [rbx + 12]
+    test eax, 1
+    jnz .x2_enabled
+    test eax, 8
+    jz .next
+.x2_enabled:
+%ifdef NEXUS_CACHE32_MAX
+    mov ecx, [madt_enabled_cpu_count]
+    cmp ecx, SMP_MAX_CORES
+    jae .skip_store_x2
+    mov eax, [rbx + 4]
+    mov [madt_lapic_ids + rcx], al
+.skip_store_x2:
+%endif
+    inc dword [madt_enabled_cpu_count]
     jmp .next
 
 .found_ioapic:
@@ -94,3 +139,12 @@ madt_init:
     pop rcx
     pop rbx
     ret
+
+section .data
+align 4
+madt_lapic_count: dd 0
+madt_enabled_cpu_count: dd 0
+%ifdef NEXUS_CACHE32_MAX
+align 8
+madt_lapic_ids: times SMP_MAX_CORES db 0
+%endif

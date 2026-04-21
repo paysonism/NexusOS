@@ -89,11 +89,6 @@ ALL_RAX equ 112
     out 0x80, al
 %endmacro
 
-; Bochs magic breakpoint
-%macro BOCHS_BREAK 0
-    xchg bx, bx
-%endmacro
-
 ; ISR stub that pushes a dummy error code (for exceptions without one)
 %macro ISR_NOERRCODE 1
 global isr_%1

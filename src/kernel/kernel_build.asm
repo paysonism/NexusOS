@@ -37,6 +37,8 @@ section .text
 section .text
 %include "src/kernel/core/tss.asm"
 section .text
+%include "src/kernel/core/perfdiag.asm"
+section .text
 %include "src/boot/gdt.asm"
 section .text
 %include "src/kernel/proc/usermode.asm"

@@ -1,5 +1,7 @@
 param(
-    [switch]$Release
+    [switch]$Release,
+    [ValidateSet('Default', 'Cache32Max')]
+    [string]$PerfProfile = 'Default'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,6 +19,10 @@ if (-not $Release) {
 else {
     $KernelDefines += '-dRELEASE_BUILD'
 }
+if ($PerfProfile -eq 'Cache32Max') {
+    $KernelDefines += '-dNEXUS_CACHE32_MAX'
+    $KernelDefines += '-dNEXUS_CACHE32_AP_STARTUP'
+}
 
 # Ensure build dir exists
 if (-not (Test-Path $BUILD_DIR)) {
@@ -26,6 +32,7 @@ if (-not (Test-Path $BUILD_DIR)) {
 Write-Host "NexusOS (BIOS) Build System" -ForegroundColor Cyan
 Write-Host "===========================" -ForegroundColor Cyan
 Write-Host ("Mode:   " + ($(if ($Release) { 'release' } else { 'debug' })))
+Write-Host "Perf:   $PerfProfile"
 Write-Host "Source: $SRC_DIR"
 Write-Host "Build:  $BUILD_DIR"
 

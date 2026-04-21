@@ -11,6 +11,8 @@ ICON_SIZE       equ 48
 ICON_STRIDE     equ 84         ; vertical spacing per icon (48 + 20 gap + 16 label)
 ICON_X          equ 24
 ICON_BASE_Y     equ 24
+ICON_HIT_X      equ 20
+ICON_HIT_W      equ 96
 MAX_DESK_ICONS  equ 8
 
 section .text
@@ -93,8 +95,8 @@ desktop_draw_icons:
     mov rdi, ICON_X + 8
     lea esi, [r14d + 16]
     mov rdx, szPromptIcon
-    mov ecx, 0x0000FF00
-    mov r8d, 0x00222222
+    mov ecx, 0x0054FC54   ; VGA lightgreen
+    mov r8d, 0x00000000   ; VGA black bg
     call render_text
     jmp .draw_label
 
@@ -197,10 +199,10 @@ desktop_handle_click:
     ; Close start menu
     mov byte [tb_start_menu_open], 0
 
-    ; Check if click is in icon column
-    cmp edi, ICON_X
+    ; Accept clicks on the icon and its label, not just the 48px icon box.
+    cmp edi, ICON_HIT_X
     jl .click_none
-    cmp edi, ICON_X + ICON_SIZE
+    cmp edi, ICON_HIT_X + ICON_HIT_W
     jg .click_none
 
     ; Find which icon slot
@@ -327,28 +329,28 @@ desktop_icons:
 ; Icon info table: indexed by (app_id - 2), 20 bytes each
 ; Format: dd color, dq label_ptr, dd 0 (pad)
 icon_table:
-    ; App 2: File Explorer
-    dd 0x00CCAA44
+    ; App 2: File Explorer - VGA brown/yellow
+    dd 0x00A85400
     dq szMyPC
     dd 0
     dd 0
-    ; App 3: Terminal
-    dd 0x00222222
+    ; App 3: Terminal - VGA black
+    dd 0x00000000
     dq szTerminal
     dd 0
     dd 0
-    ; App 4: Notepad
-    dd 0x00FFFFFF
+    ; App 4: Notepad - VGA white
+    dd 0x00FCFCFC
     dq szNotepad
     dd 0
     dd 0
-    ; App 5: Settings
-    dd 0x00888888
+    ; App 5: Settings - VGA darkgray
+    dd 0x00545454
     dq szSettings
     dd 0
     dd 0
-    ; App 6: Paint
-    dd 0x00FF8800
+    ; App 6: Paint - VGA red
+    dd 0x00A80000
     dq szPaint
     dd 0
     dd 0

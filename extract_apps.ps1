@@ -27,8 +27,9 @@ if ($startIdx -lt 0) { throw "App blob start marker not found in $KernelPath" }
 $endIdx = Find-Marker $bytes $endMarker ($startIdx + $startMarker.Length)
 if ($endIdx -lt 0) { throw "App blob end marker not found in $KernelPath" }
 
-# Blob bytes are everything between the two markers (exclusive of both).
-$blobStart = $startIdx + $startMarker.Length
+# Blob bytes include the start marker so internal RIP-relative calls preserve
+# the same layout after the blob is copied into an app slot.
+$blobStart = $startIdx
 $blobEnd   = $endIdx
 $blobLen   = $blobEnd - $blobStart
 

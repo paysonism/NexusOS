@@ -2,15 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $Root = $PSScriptRoot
 $BuildDir = Join-Path $Root 'build'
-$LogPath = Join-Path $BuildDir 'smoke_uefi_serial.log'
-$Markers = @(
-    'BdsDxe: starting',
-    '(!0-ENTRY)',
-    'CPU:',
-    'CACHE:',
-    'MEMCAP:',
-    'M12KF!'
-)
+$LogPath = Join-Path $BuildDir 'cache32_serial.log'
 $SerialHost = '127.0.0.1'
 $SerialPort = 5555
 
@@ -18,10 +10,11 @@ function Stop-QemuIfRunning {
     Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
-function Read-SerialBootLog {
+function Read-Serial {
     param(
-        [int]$ConnectTimeoutMs = 5000,
-        [int]$CaptureMs = 8000
+        [int]$ConnectTimeoutMs = 8000,
+        [int]$CaptureMs = 14000,
+        [byte[]]$CommandBytes = @()
     )
 
     $deadline = [DateTime]::UtcNow.AddMilliseconds($ConnectTimeoutMs)
@@ -37,18 +30,21 @@ function Read-SerialBootLog {
             Start-Sleep -Milliseconds 100
         }
     }
-
     if (-not $client) {
         throw "Unable to connect to serial on $SerialHost`:$SerialPort"
     }
 
     try {
         $stream = $client.GetStream()
+        if ($CommandBytes.Count -gt 0) {
+            Start-Sleep -Milliseconds 6000
+            $stream.Write($CommandBytes, 0, $CommandBytes.Count)
+        }
+
         $buffer = New-Object byte[] 65536
         $encoding = [System.Text.Encoding]::ASCII
         $builder = New-Object System.Text.StringBuilder
         $captureDeadline = [DateTime]::UtcNow.AddMilliseconds($CaptureMs)
-
         while ([DateTime]::UtcNow -lt $captureDeadline) {
             while ($stream.DataAvailable) {
                 $count = $stream.Read($buffer, 0, $buffer.Length)
@@ -57,7 +53,6 @@ function Read-SerialBootLog {
             }
             Start-Sleep -Milliseconds 50
         }
-
         return $builder.ToString()
     }
     finally {
@@ -67,47 +62,43 @@ function Read-SerialBootLog {
 
 try {
     Stop-QemuIfRunning
-    Start-Sleep -Seconds 1
+    New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 
-    Write-Host '[smoke] Building UEFI image...' -ForegroundColor Yellow
-    powershell -ExecutionPolicy Bypass -File (Join-Path $Root 'build_uefi.ps1')
+    Write-Host '[cache32] Building BIOS Cache32Max image...' -ForegroundColor Yellow
+    powershell -ExecutionPolicy Bypass -File (Join-Path $Root 'build_bios.ps1') -PerfProfile Cache32Max
 
-    Write-Host '[smoke] Booting VM and capturing serial...' -ForegroundColor Yellow
+    Write-Host '[cache32] Booting strict 32MB / 8-core BIOS QEMU profile...' -ForegroundColor Yellow
     $bootJob = Start-Job -ScriptBlock {
         param($RootPath)
-        powershell -ExecutionPolicy Bypass -File (Join-Path $RootPath 'run_uefi.ps1')
+        powershell -ExecutionPolicy Bypass -File (Join-Path $RootPath 'run_bios.ps1') -PerfProfile Cache32Max -Headless -SerialTcp
     } -ArgumentList $Root
 
     try {
-        $serial = Read-SerialBootLog
+        $serial = Read-Serial -CommandBytes ([byte[]]@(0x01,0x70,0x01,0x6D,0x01,0x73,0x01,0x62))
     }
     finally {
+        Stop-QemuIfRunning
         Wait-Job $bootJob | Out-Null
         Receive-Job $bootJob | Out-Host
         Remove-Job $bootJob
     }
 
-    $null = New-Item -ItemType Directory -Path $BuildDir -Force
     Set-Content -Path $LogPath -Value $serial
 
+    $markers = @('CPU:', 'CACHE:', 'FREQ:', 'MEMCAP:', 'SMP:', 'BENCH:')
     $missing = @()
-    foreach ($marker in $Markers) {
-        if ($serial -notlike "*$marker*") {
-            $missing += $marker
-        }
+    foreach ($marker in $markers) {
+        if ($serial -notlike "*$marker*") { $missing += $marker }
     }
-
     if ($missing.Count -gt 0) {
-        Write-Host '[smoke] FAILED' -ForegroundColor Red
+        Write-Host '[cache32] FAILED' -ForegroundColor Red
         Write-Host "Serial log saved to $LogPath" -ForegroundColor DarkYellow
         Write-Host 'Missing markers:' -ForegroundColor DarkYellow
-        foreach ($marker in $missing) {
-            Write-Host "  - $marker" -ForegroundColor DarkYellow
-        }
+        foreach ($marker in $missing) { Write-Host "  - $marker" -ForegroundColor DarkYellow }
         exit 1
     }
 
-    Write-Host '[smoke] PASS' -ForegroundColor Green
+    Write-Host '[cache32] PASS' -ForegroundColor Green
     Write-Host "Serial log saved to $LogPath" -ForegroundColor Gray
 }
 finally {

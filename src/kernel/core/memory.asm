@@ -50,17 +50,17 @@ memory_init:
     mov rax, 0x100000        ; New base
 
 .process_range:
-    ; Skip pages used by kernel and system structures (below 0xD00000)
-    cmp rax, 0xD00000
+    ; Skip pages used by kernel and fixed system structures.
+    cmp rax, SYSTEM_RESERVED_END
     jge .mark_free
     mov rdx, rax
     add rdx, rbx
-    cmp rdx, 0xD00000
+    cmp rdx, SYSTEM_RESERVED_END
     jle .next_entry
     ; Clip
-    sub rdx, 0xD00000
+    sub rdx, SYSTEM_RESERVED_END
     mov rbx, rdx
-    mov rax, 0xD00000
+    mov rax, SYSTEM_RESERVED_END
 
 .mark_free:
     ; Mark pages in this range as free

@@ -50,12 +50,22 @@ ATTR_DIRECTORY      equ 0x10
 ATTR_ARCHIVE        equ 0x20
 ATTR_LFN            equ 0x0F
 
-; Temp buffers - moved to 13MB region to avoid XHCI conflict (0x900000-0x9F0000)
+; Temp buffers. Cache32Max keeps these cold buffers outside the 4MB..16MB GUI
+; LLC arena and outside the 16MB..24MB app arena.
+%ifdef NEXUS_CACHE32_MAX
+FAT16_SECTOR_BUF    equ 0x1A00000   ; 512 byte sector buffer
+FAT16_FAT_CACHE     equ 0x1A01000   ; FAT table cache (up to 64KB)
+FAT16_ROOT_CACHE    equ 0x1A11000   ; Root directory cache (up to 32 sectors = 16KB)
+FAT16_FILE_BUF      equ 0x1A21000   ; File read buffer (up to 64KB)
+FAT16_DIR_CACHE     equ 0x1A31000   ; Current directory listing cache
+%else
+; Moved to 13MB region to avoid XHCI conflict (0x900000-0x9F0000)
 FAT16_SECTOR_BUF    equ 0xD00000   ; 512 byte sector buffer
 FAT16_FAT_CACHE     equ 0xD01000   ; FAT table cache (up to 64KB)
 FAT16_ROOT_CACHE    equ 0xD11000   ; Root directory cache (up to 32 sectors = 16KB)
 FAT16_FILE_BUF      equ 0xD21000   ; File read buffer (up to 64KB)
 FAT16_DIR_CACHE     equ 0xD31000   ; Current directory listing cache
+%endif
 
 ; ============================================================================
 ; fat16_init - Initialize FAT16 driver, read BPB and cache FAT + root dir

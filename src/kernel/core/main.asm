@@ -19,10 +19,16 @@ extern pic_init
 extern pit_init
 extern acpi_init
 extern apic_init
+extern smp_ap_startup
 extern ioapic_init
 extern spi_init
 extern spi_hid_init
 extern acpi_pci_init
+extern perfdiag_init
+extern perfdiag_print_profile
+extern perfdiag_print_memory
+extern perfdiag_print_smp
+extern perfdiag_benchmark
 
 ; Drivers
 extern mouse_init
@@ -151,25 +157,6 @@ debug_print:
     
     mov r12, rsi     ; Preserve RSI
     
-    ; Serial Output
-    mov rdx, r12
-.serial_loop:
-    movzx eax, byte [rdx]
-    test al, al
-    jz .serial_done
-    push rdx
-    mov dx, 0x3F8
-    out dx, al
-    pop rdx
-    inc rdx
-    jmp .serial_loop
-.serial_done:
-    mov dx, 0x3F8
-    mov al, 13
-    out dx, al
-    mov al, 10
-    out dx, al
-
     ; Screen Output
     mov rax, [bb_addr]
     test rax, rax
@@ -237,13 +224,15 @@ kmain:
     call spi_init
     call spi_hid_init
     
-    mov rsi, szBootMsg
-    call debug_print
     call usb_hid_init
     call i2c_hid_init
     call fat16_init
 
+%ifdef NEXUS_CACHE32_MAX
+    call smp_ap_startup
+%endif
     sti
+    call perfdiag_init
     call keyboard_init
     call mouse_init
 
@@ -344,10 +333,61 @@ serial_dispatch_control:
     ret
 
 .check_close:
+    cmp al, 'o'
+    je .desktop_open_first
+    cmp al, 'q'
+    je .dump_windows
+    cmp al, 'p'
+    je .diag_profile
+    cmp al, 'm'
+    je .diag_memory
+    cmp al, 's'
+    je .diag_smp
+    cmp al, 'b'
+    je .diag_bench
     cmp al, 'x'
     je .close_focused
     cmp al, 'X'
     jne .control_done
+
+.dump_windows:
+    SER 'Q'
+    push rax
+    mov rdi, [wm_window_count]
+    call ser_print_hex64
+    SER ','
+    mov rdi, [wm_focused_window]
+    call ser_print_hex64
+    pop rax
+    ret
+
+.desktop_open_first:
+    mov edi, 48
+    mov esi, 48
+    call desktop_handle_click
+    SER 'O'
+    push rax
+    mov rdi, rax
+    call ser_print_hex64
+    pop rax
+    mov byte [scene_dirty], 1
+    ret
+
+.diag_profile:
+    call perfdiag_print_profile
+    ret
+
+.diag_memory:
+    call perfdiag_print_memory
+    ret
+
+.diag_smp:
+    call perfdiag_print_smp
+    ret
+
+.diag_bench:
+    call perfdiag_benchmark
+    ret
 
 .close_focused:
     mov rdi, [wm_focused_window]
@@ -391,12 +431,10 @@ serial_forward_input:
     test r9, r9
     jz .input_done
 
-    movzx ecx, dl
-    shl ecx, 8
-    or ecx, 0x01000000
-    mov edx, ecx
+    movzx edx, dl
+    shl edx, 8
+    or edx, 0x01000000
     mov rsi, rax
-    mov ecx, edx
     mov rdi, r9
     call call_app_l3
 .input_dispatch_done:
@@ -428,7 +466,11 @@ process_mouse:
     jnz .pm_set_dirty
     test dl, 1
     jz .pm_check_rclick
+    push rdi
+    push rsi
     call tb_handle_submenu_click
+    pop rsi
+    pop rdi
     test eax, eax
     jnz .pm_set_dirty
     push rdx
@@ -491,6 +533,7 @@ process_keyboard:
     call keyboard_read
     test eax, eax
     jz .pk_done
+    mov r15d, eax
     mov ecx, eax
     shr ecx, 24
     test cl, cl
@@ -522,10 +565,9 @@ process_keyboard:
     mov r9, [rax + WIN_OFF_KEYFN]
     test r9, r9
     jz .pk_done
-    mov edx, ecx
     mov rsi, rax
-    mov ecx, edx
     mov rdi, r9
+    mov edx, r15d
     call call_app_l3
 .pk_forward_done:
     mov byte [scene_dirty], 1
@@ -693,37 +735,26 @@ render_frame:
     mov eax, FPS_REGION_Y
     imul eax, [scr_pitch]
     add eax, FPS_REGION_X * 4
-    mov rdi, [bb_addr]
-    add rdi, rax
-    mov rsi, BACK_BUFFER_SAVE_ADDR
-    add rsi, rax
-    mov eax, FPS_REGION_H
+    mov r8, [bb_addr]
+    add r8, rax
+    mov r9, BACK_BUFFER_SAVE_ADDR
+    add r9, rax
+    movsxd r10, dword [scr_pitch]
+    mov r11d, FPS_REGION_H
 .rfr_row:
-    push rdi
-    push rsi
-    push rax
+    mov rdi, r8
+    mov rsi, r9
     mov ecx, FPS_REGION_W
     rep movsd
-    pop rax
-    pop rsi
-    pop rdi
-    movsxd rcx, dword [scr_pitch]
-    add rdi, rcx
-    add rsi, rcx
-    dec eax
+    add r8, r10
+    add r9, r10
+    dec r11d
     jnz .rfr_row
     ret
 
 section .data
 szFPSPrefix db "FPS:", 0
 fps_str     times 16 db 0
-global szBootMsg, szUsbInit, szUsbDone, szI2cInit, szI2cDone, szUsermodeIn
-szBootMsg db "Booting NexusOS v3.0...", 0
-szUsbInit db "Initializing USB HID (XHCI)...", 0
-szUsbDone db "USB HID Init Complete.", 0
-szI2cInit db "Initializing I2C HID (Touchpad)...", 0
-szI2cDone db "I2C HID Init Complete.", 0
-szUsermodeIn db "-> Entering Usermode (Ring 3)...", 0
 
 section .bss
 serial_command_armed resb 1

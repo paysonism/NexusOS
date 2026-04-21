@@ -281,17 +281,17 @@ szCmdMouse db "mouse", 0
 szCmdTouchpad db "touchpad", 0
 szCmdIdebug db "idebug", 0
 
-section .bss
-term_input:     resb 64
-notepad_buf:    resb NP_BUF_SIZE
-np_line_len:    resd NP_MAX_LINES
-np_saved_content: resb NP_BUF_SIZE
-np_saved_line_len: resd NP_MAX_LINES
-fat16_name_buf: resb 16
-fat16_size_buf: resb 20
-exp_rename_buf: resb 24
-exp_newfolder_buf: resb 24
-np_saveas_buf: resb 24
-np_saveas_83:  resb 12
-
+section .text
+align 8
+term_input:        times 64 db 0
+notepad_buf:       times NP_BUF_SIZE db 0
+np_line_len:       times (NP_MAX_LINES*4) db 0
+np_saved_content:  times NP_BUF_SIZE db 0
+np_saved_line_len: times (NP_MAX_LINES*4) db 0
+fat16_name_buf:    times 16 db 0
+fat16_size_buf:    times 20 db 0
+exp_rename_buf:    times 24 db 0
+exp_newfolder_buf: times 24 db 0
+np_saveas_buf:     times 24 db 0
+np_saveas_83:      times 12 db 0
 section .text
