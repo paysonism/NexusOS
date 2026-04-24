@@ -1,0 +1,514 @@
+# NexusHL port of Notepad. Full functionality — menu, text buffer, save dialog.
+
+use core
+
+app "Notepad" { stack = 8192; }
+
+# -------- constants (mirror src/user/apps/common.inc + state.inc) --------
+const NP_MAX_LINES    = 32
+const NP_MAX_COLS     = 80
+const NP_MENU_H       = 18
+const NP_EDIT_TOP     = 20
+const CTX_ITEM_H      = 20
+const BORDER_WIDTH    = 2
+const TITLEBAR_HEIGHT = 24
+const FONT_WIDTH      = 8
+const LINE_H          = 14
+
+# colors (0x00RRGGBB)
+const C_WHITE       = 0x00FFFFFF
+const C_BLACK       = 0x00000000
+const C_MENU        = 0x00E8E8E8
+const C_MENUTEXT    = 0x00333333
+const C_DROP        = 0x00F0F0F0
+const C_DROPBRD     = 0x00999999
+const C_ITEMTEXT    = 0x00222222
+const C_DIALOGBG    = 0x00223344
+const C_DIALOGBRD   = 0x004488AA
+const C_DIALOGTTL   = 0x00AADDFF
+const C_DIALOGHINT  = 0x00888888
+const C_DIALOGLBL   = 0x00CCCCCC
+const C_SAVED_BG    = 0x00228B22
+
+# keys
+const K_ESC   = 27
+const K_ENTER = 13
+const K_BS    = 8
+const K_TAB   = 9
+const SC_UP    = 0xC8
+const SC_DOWN  = 0xD0
+const SC_LEFT  = 0xCB
+const SC_RIGHT = 0xCD
+const SC_ESC_RAW = 0x01
+
+# -------- state / helper externs (defined in kernel .asm) --------
+extern notepad_buf;
+extern np_line_len;
+extern np_cursor_row;
+extern np_cursor_col;
+extern np_num_lines;
+extern np_scroll_top;
+extern np_menu_open;
+extern np_save_done_msg;
+extern np_save_dialog;
+extern np_saveas_cursor;
+extern np_saveas_buf;
+extern np_saveas_83;
+extern np_has_saved;
+extern np_save_total_bytes;
+extern np_saved_content;
+extern np_open_entry;
+extern szNoteMenuFile;
+extern szNoteMenuEdit;
+extern szFileNew;
+extern szFileSave;
+extern szFileClose;
+extern szEditSelAll;
+extern szEditClear;
+extern szSaveAsTitle;
+extern szSaveAsFilename;
+extern szSaveAsHint;
+extern szSavedMsg;
+extern szCursor;
+extern render_rect;
+extern render_text;
+extern fat16_write_file;
+extern filename_to_83;
+
+# ============================================================
+# helpers
+# ============================================================
+fn line_ptr(row) { return &notepad_buf + row * NP_MAX_COLS; }
+fn len_ptr(row)  { return &np_line_len + row * 4; }
+
+fn clear_buffer() {
+    let i = 0;
+    while i < NP_MAX_LINES * NP_MAX_COLS {
+        sb(&notepad_buf + i, 0);
+        i = i + 1;
+    }
+    let j = 0;
+    while j < NP_MAX_LINES {
+        sw(&np_line_len + j * 4, 0);
+        j = j + 1;
+    }
+    sw(&np_cursor_row, 0);
+    sw(&np_cursor_col, 0);
+    sw(&np_num_lines, 1);
+    sw(&np_scroll_top, 0);
+}
+
+fn ensure_visible() {
+    let row = lw(&np_cursor_row);
+    let top = lw(&np_scroll_top);
+    if row < top {
+        sw(&np_scroll_top, row);
+        return;
+    }
+    if row >= top + 15 {
+        sw(&np_scroll_top, row - 14);
+    }
+}
+
+fn insert_char(ch) {
+    let row = lw(&np_cursor_row);
+    let col = lw(&np_cursor_col);
+    let lp = len_ptr(row);
+    let len = lw(lp);
+    if len >= NP_MAX_COLS - 1 { return; }
+    let bp = line_ptr(row);
+    let i = len;
+    while i > col {
+        sb(bp + i, lb(bp + i - 1));
+        i = i - 1;
+    }
+    sb(bp + col, ch);
+    sw(lp, len + 1);
+    sb(bp + len + 1, 0);
+    sw(&np_cursor_col, col + 1);
+}
+
+fn do_backspace() {
+    let col = lw(&np_cursor_col);
+    let row = lw(&np_cursor_row);
+    if col > 0 {
+        let bp = line_ptr(row);
+        let lp = len_ptr(row);
+        let len = lw(lp);
+        let i = col;
+        while i < len {
+            sb(bp + i - 1, lb(bp + i));
+            i = i + 1;
+        }
+        sw(lp, len - 1);
+        sb(bp + len - 1, 0);
+        sw(&np_cursor_col, col - 1);
+        return;
+    }
+    if row == 0 { return; }
+    let prev = row - 1;
+    let pp = line_ptr(prev);
+    let plen = lw(len_ptr(prev));
+    let cp = line_ptr(row);
+    let clen = lw(len_ptr(row));
+    if plen + clen >= NP_MAX_COLS - 1 { return; }
+    let k = 0;
+    while k < clen {
+        sb(pp + plen + k, lb(cp + k));
+        k = k + 1;
+    }
+    sw(len_ptr(prev), plen + clen);
+    sb(pp + plen + clen, 0);
+    let n = lw(&np_num_lines);
+    let r = row;
+    while r + 1 < n {
+        let src = line_ptr(r + 1);
+        let dst = line_ptr(r);
+        let x = 0;
+        while x < NP_MAX_COLS {
+            sb(dst + x, lb(src + x));
+            x = x + 1;
+        }
+        sw(len_ptr(r), lw(len_ptr(r + 1)));
+        r = r + 1;
+    }
+    sw(&np_num_lines, n - 1);
+    sw(&np_cursor_row, prev);
+    sw(&np_cursor_col, plen);
+    ensure_visible();
+}
+
+fn do_enter() {
+    let n = lw(&np_num_lines);
+    if n >= NP_MAX_LINES - 1 { return; }
+    let row = lw(&np_cursor_row);
+    let col = lw(&np_cursor_col);
+    let i = n - 1;
+    while i > row {
+        let src = line_ptr(i);
+        let dst = line_ptr(i + 1);
+        let x = 0;
+        while x < NP_MAX_COLS {
+            sb(dst + x, lb(src + x));
+            x = x + 1;
+        }
+        sw(len_ptr(i + 1), lw(len_ptr(i)));
+        i = i - 1;
+    }
+    let bp = line_ptr(row);
+    let np2 = line_ptr(row + 1);
+    let lp = len_ptr(row);
+    let len = lw(lp);
+    let j = col;
+    let w = 0;
+    while j < len {
+        sb(np2 + w, lb(bp + j));
+        j = j + 1;
+        w = w + 1;
+    }
+    sb(np2 + w, 0);
+    sw(len_ptr(row + 1), len - col);
+    sb(bp + col, 0);
+    sw(lp, col);
+    sw(&np_num_lines, n + 1);
+    sw(&np_cursor_row, row + 1);
+    sw(&np_cursor_col, 0);
+    ensure_visible();
+}
+
+fn do_tab() {
+    let k = 0;
+    while k < 4 { insert_char(32); k = k + 1; }
+}
+
+fn arrow_up() {
+    let r = lw(&np_cursor_row);
+    if r == 0 { return; }
+    r = r - 1;
+    sw(&np_cursor_row, r);
+    let ll = lw(len_ptr(r));
+    if lw(&np_cursor_col) > ll { sw(&np_cursor_col, ll); }
+    ensure_visible();
+}
+fn arrow_down() {
+    let r = lw(&np_cursor_row);
+    r = r + 1;
+    if r >= lw(&np_num_lines) { return; }
+    sw(&np_cursor_row, r);
+    let ll = lw(len_ptr(r));
+    if lw(&np_cursor_col) > ll { sw(&np_cursor_col, ll); }
+    ensure_visible();
+}
+fn arrow_left() {
+    let c = lw(&np_cursor_col);
+    if c > 0 { sw(&np_cursor_col, c - 1); return; }
+    let r = lw(&np_cursor_row);
+    if r == 0 { return; }
+    r = r - 1;
+    sw(&np_cursor_row, r);
+    sw(&np_cursor_col, lw(len_ptr(r)));
+    ensure_visible();
+}
+fn arrow_right() {
+    let r = lw(&np_cursor_row);
+    let c = lw(&np_cursor_col);
+    let ll = lw(len_ptr(r));
+    if c < ll { sw(&np_cursor_col, c + 1); return; }
+    r = r + 1;
+    if r >= lw(&np_num_lines) { return; }
+    sw(&np_cursor_row, r);
+    sw(&np_cursor_col, 0);
+    ensure_visible();
+}
+
+fn build_save_content() {
+    let n = lw(&np_num_lines);
+    let i = 0;
+    let w = 0;
+    while i < n {
+        let lp = line_ptr(i);
+        let ll = lw(len_ptr(i));
+        let x = 0;
+        while x < ll {
+            sb(&np_saved_content + w, lb(lp + x));
+            w = w + 1; x = x + 1;
+        }
+        if i + 1 < n {
+            sb(&np_saved_content + w, 13); w = w + 1;
+            sb(&np_saved_content + w, 10); w = w + 1;
+        }
+        i = i + 1;
+    }
+    sw(&np_save_total_bytes, w);
+    return w;
+}
+
+fn do_save_to(name83) {
+    let total = build_save_content();
+    fat16_write_file(name83, &np_saved_content, total);
+    sb(&np_has_saved, 1);
+    sb(&np_save_done_msg, 1);
+}
+
+# ============================================================
+# draw
+# ============================================================
+fn draw(win) {
+    let x = lq(win + 8);
+    let y = lq(win + 16);
+    let w = lq(win + 24);
+    let h = lq(win + 32);
+
+    # menu bar
+    render_rect(x + BORDER_WIDTH, y + TITLEBAR_HEIGHT, w - BORDER_WIDTH * 2, NP_MENU_H, C_MENU);
+    render_text(x + BORDER_WIDTH + 4,  y + TITLEBAR_HEIGHT + 2, &szNoteMenuFile, C_MENUTEXT, C_MENU);
+    render_text(x + BORDER_WIDTH + 52, y + TITLEBAR_HEIGHT + 2, &szNoteMenuEdit, C_MENUTEXT, C_MENU);
+
+    # edit area
+    let edit_h = h - TITLEBAR_HEIGHT - NP_EDIT_TOP - BORDER_WIDTH;
+    if edit_h <= 0 { return; }
+    render_rect(x + BORDER_WIDTH, y + TITLEBAR_HEIGHT + NP_EDIT_TOP, w - BORDER_WIDTH * 2, edit_h, C_WHITE);
+
+    let max_lines = edit_h / LINE_H;
+    if max_lines == 0 { return; }
+
+    # draw text lines
+    let top = lw(&np_scroll_top);
+    let n = lw(&np_num_lines);
+    let dl = 0;
+    let li = top;
+    while dl < max_lines {
+        if li >= n { dl = max_lines; }
+        if dl < max_lines {
+            let lp = line_ptr(li);
+            if lb(lp) != 0 {
+                render_text(
+                    x + BORDER_WIDTH + 4,
+                    y + TITLEBAR_HEIGHT + NP_EDIT_TOP + 2 + dl * LINE_H,
+                    lp, C_BLACK, C_WHITE);
+            }
+            li = li + 1;
+            dl = dl + 1;
+        }
+    }
+
+    # cursor
+    let cr = lw(&np_cursor_row);
+    let cc = lw(&np_cursor_col);
+    let drow = cr - top;
+    if drow >= 0 {
+        if drow < max_lines {
+            render_text(
+                x + BORDER_WIDTH + 4 + cc * FONT_WIDTH,
+                y + TITLEBAR_HEIGHT + NP_EDIT_TOP + 2 + drow * LINE_H,
+                &szCursor, C_BLACK, C_WHITE);
+        }
+    }
+
+    # dropdown menus
+    let m = lb(&np_menu_open);
+    if m == 1 {
+        render_rect(x + BORDER_WIDTH, y + TITLEBAR_HEIGHT + NP_MENU_H, 100, CTX_ITEM_H * 3 + 4, C_DROP);
+        render_rect(x + BORDER_WIDTH, y + TITLEBAR_HEIGHT + NP_MENU_H, 100, 1, C_DROPBRD);
+        render_text(x + BORDER_WIDTH + 8, y + TITLEBAR_HEIGHT + NP_MENU_H + 4,                   &szFileNew,   C_ITEMTEXT, C_DROP);
+        render_text(x + BORDER_WIDTH + 8, y + TITLEBAR_HEIGHT + NP_MENU_H + 4 + CTX_ITEM_H,      &szFileSave,  C_ITEMTEXT, C_DROP);
+        render_text(x + BORDER_WIDTH + 8, y + TITLEBAR_HEIGHT + NP_MENU_H + 4 + CTX_ITEM_H * 2,  &szFileClose, C_ITEMTEXT, C_DROP);
+    }
+    if m == 2 {
+        render_rect(x + BORDER_WIDTH + 48, y + TITLEBAR_HEIGHT + NP_MENU_H, 110, CTX_ITEM_H * 2 + 4, C_DROP);
+        render_rect(x + BORDER_WIDTH + 48, y + TITLEBAR_HEIGHT + NP_MENU_H, 110, 1, C_DROPBRD);
+        render_text(x + BORDER_WIDTH + 56, y + TITLEBAR_HEIGHT + NP_MENU_H + 4,              &szEditSelAll, C_ITEMTEXT, C_DROP);
+        render_text(x + BORDER_WIDTH + 56, y + TITLEBAR_HEIGHT + NP_MENU_H + 4 + CTX_ITEM_H, &szEditClear,  C_ITEMTEXT, C_DROP);
+    }
+
+    # save-as dialog
+    if lb(&np_save_dialog) == 1 {
+        let dlg_w = w - BORDER_WIDTH * 2 - 40;
+        render_rect(x + BORDER_WIDTH + 20, y + TITLEBAR_HEIGHT + 40, dlg_w, 80, C_DIALOGBG);
+        render_rect(x + BORDER_WIDTH + 20, y + TITLEBAR_HEIGHT + 40, dlg_w, 1,  C_DIALOGBRD);
+        render_text(x + BORDER_WIDTH + 30, y + TITLEBAR_HEIGHT + 46, &szSaveAsTitle,    C_DIALOGTTL, C_DIALOGBG);
+        render_text(x + BORDER_WIDTH + 30, y + TITLEBAR_HEIGHT + 66, &szSaveAsFilename, C_DIALOGLBL, C_DIALOGBG);
+        let in_w = w - BORDER_WIDTH * 2 - 140;
+        render_rect(x + BORDER_WIDTH + 104, y + TITLEBAR_HEIGHT + 62, in_w, 18, C_WHITE);
+        render_text(x + BORDER_WIDTH + 108, y + TITLEBAR_HEIGHT + 65, &np_saveas_buf, C_BLACK, C_WHITE);
+        let sc = lw(&np_saveas_cursor);
+        render_text(x + BORDER_WIDTH + 108 + sc * FONT_WIDTH, y + TITLEBAR_HEIGHT + 65, &szCursor, C_BLACK, C_WHITE);
+        render_text(x + BORDER_WIDTH + 30, y + TITLEBAR_HEIGHT + 86, &szSaveAsHint, C_DIALOGHINT, C_DIALOGBG);
+    }
+
+    # saved! overlay
+    if lb(&np_save_done_msg) == 1 {
+        let ox = x + (w - 120) / 2;
+        render_rect(ox, y + TITLEBAR_HEIGHT + 60, 120, 30, C_SAVED_BG);
+        render_text(x + (w - 48) / 2, y + TITLEBAR_HEIGHT + 68, &szSavedMsg, C_WHITE, C_SAVED_BG);
+    }
+}
+
+# ============================================================
+# click
+# ============================================================
+fn click(win, cx, cy) {
+    # dismiss saved overlay
+    if lb(&np_save_done_msg) == 1 {
+        sb(&np_save_done_msg, 0);
+        return;
+    }
+    let m = lb(&np_menu_open);
+    if m != 0 {
+        # dropdown click routing
+        if m == 1 {
+            let dy = cy - NP_MENU_H;
+            if dy < 4 { sb(&np_menu_open, 0); return; }
+            let idx = (dy - 4) / CTX_ITEM_H;
+            sb(&np_menu_open, 0);
+            if idx == 0 { clear_buffer(); return; }
+            if idx == 1 {
+                let ent = lq(&np_open_entry);
+                if ent == 0 {
+                    sb(&np_save_dialog, 1);
+                    sw(&np_saveas_cursor, 0);
+                    sb(&np_saveas_buf, 0);
+                    return;
+                }
+                let total = build_save_content();
+                fat16_write_file(ent, &np_saved_content, total);
+                sb(&np_has_saved, 1);
+                sb(&np_save_done_msg, 1);
+                return;
+            }
+            if idx == 2 { return; }
+            return;
+        }
+        if m == 2 {
+            let dy = cy - NP_MENU_H;
+            if dy < 4 { sb(&np_menu_open, 0); return; }
+            let idx = (dy - 4) / CTX_ITEM_H;
+            sb(&np_menu_open, 0);
+            if idx == 1 { clear_buffer(); }
+            return;
+        }
+        sb(&np_menu_open, 0);
+        return;
+    }
+    # menu-bar click
+    if cy < NP_EDIT_TOP {
+        if cx < 48  { sb(&np_menu_open, 1); return; }
+        if cx < 96  { sb(&np_menu_open, 2); return; }
+        return;
+    }
+    # text-area click
+    sb(&np_menu_open, 0);
+    let ry = cy - NP_EDIT_TOP - 2;
+    if ry < 0 { return; }
+    let dl = ry / LINE_H;
+    let row = dl + lw(&np_scroll_top);
+    let n = lw(&np_num_lines);
+    if row >= n { row = n - 1; }
+    sw(&np_cursor_row, row);
+    let rx = cx - 4;
+    if rx < 0 { rx = 0; }
+    let col = rx / FONT_WIDTH;
+    let ll = lw(len_ptr(row));
+    if col > ll { col = ll; }
+    sw(&np_cursor_col, col);
+}
+
+# ============================================================
+# save-as dialog key input
+# ============================================================
+fn saveas_key(k) {
+    let sc = k & 0xFF;
+    let ch = (k >> 8) & 0xFF;
+    if sc == SC_ESC_RAW {
+        sb(&np_save_dialog, 0);
+        return;
+    }
+    if ch == K_ENTER {
+        sb(&np_save_dialog, 0);
+        if lb(&np_saveas_buf) == 0 { return; }
+        filename_to_83(&np_saveas_buf, &np_saveas_83);
+        do_save_to(&np_saveas_83);
+        return;
+    }
+    if ch == K_BS {
+        let cur = lw(&np_saveas_cursor);
+        if cur == 0 { return; }
+        cur = cur - 1;
+        sb(&np_saveas_buf + cur, 0);
+        sw(&np_saveas_cursor, cur);
+        return;
+    }
+    if ch < 32 { return; }
+    if ch > 126 { return; }
+    let cur = lw(&np_saveas_cursor);
+    if cur >= 22 { return; }
+    sb(&np_saveas_buf + cur, ch);
+    sb(&np_saveas_buf + cur + 1, 0);
+    sw(&np_saveas_cursor, cur + 1);
+}
+
+# ============================================================
+# key
+# ============================================================
+fn key(win, k) {
+    if lb(&np_save_dialog) == 1 {
+        saveas_key(k);
+        return;
+    }
+    sb(&np_menu_open, 0);
+    let sc = k & 0xFF;
+    let ch = (k >> 8) & 0xFF;
+
+    if sc == SC_UP    { arrow_up();    return; }
+    if sc == SC_DOWN  { arrow_down();  return; }
+    if sc == SC_LEFT  { arrow_left();  return; }
+    if sc == SC_RIGHT { arrow_right(); return; }
+
+    if ch == 0 { return; }
+    if ch == K_BS    { do_backspace(); return; }
+    if ch == K_ENTER { do_enter();     return; }
+    if ch == K_TAB   { do_tab();       return; }
+    if ch < 32  { return; }
+    if ch > 126 { return; }
+    insert_char(ch);
+}

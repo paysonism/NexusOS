@@ -1,22 +1,49 @@
+param(
+    [switch]$Release,
+    [ValidateSet('Default', 'Cache32Max')]
+    [string]$PerfProfile = 'Default'
+)
+
 $ErrorActionPreference = 'Stop'
 
 $NASM = 'C:\Tools\nasm-2.16.03\nasm.exe'
 $SRC_DIR = Join-Path $PSScriptRoot 'src'
 $BUILD_DIR = Join-Path $PSScriptRoot 'build'
 $INCLUDE_DIR = Join-Path $SRC_DIR 'include'
+$USER_LIB_DIR = Join-Path $SRC_DIR 'user\lib'
 $ESP = Join-Path $BUILD_DIR 'esp\EFI\BOOT'
+$KernelDefines = @()
+$LoaderDefines = @()
+if (-not $Release) {
+    $KernelDefines += '-dENABLE_DEBUG_SERIAL'
+    $KernelDefines += '-dENABLE_USER_DEBUG_SYSCALL'
+}
+else {
+    $KernelDefines += '-dRELEASE_BUILD'
+}
+if ($PerfProfile -eq 'Cache32Max') {
+    $KernelDefines += '-dNEXUS_CACHE32_MAX'
+    $KernelDefines += '-dNEXUS_CACHE32_AP_STARTUP'
+    $LoaderDefines += '-dNEXUS_CACHE32_MAX'
+}
 
 Write-Host ''
 Write-Host '  NexusOS UEFI Build System' -ForegroundColor Cyan
 Write-Host '  =========================' -ForegroundColor Cyan
+Write-Host ("  Mode: " + ($(if ($Release) { 'release' } else { 'debug' }))) -ForegroundColor DarkGray
+Write-Host "  Perf: $PerfProfile" -ForegroundColor DarkGray
 Write-Host ''
 
 New-Item -Path $ESP -ItemType Directory -Force | Out-Null
 
+# 0. Compile NexusHL apps -> build/nxh/*.asm (included by src/user/apps.asm)
+& powershell -NoProfile -File (Join-Path $PSScriptRoot 'build_nxh.ps1')
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED NexusHL compile' -ForegroundColor Red; exit 1 }
+
 # 1. Assemble UEFI Loader -> BOOTX64.EFI
 Write-Host '[1/2] Assembling UEFI Loader...' -ForegroundColor Yellow
 $ErrorActionPreference = 'Continue'
-& $NASM -f bin -o "$ESP\BOOTX64.EFI" "$SRC_DIR\boot\uefi_loader.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
+& $NASM @LoaderDefines -f bin -o "$ESP\BOOTX64.EFI" "$SRC_DIR\boot\uefi_loader.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
 $ErrorActionPreference = 'Stop'
 if ($LASTEXITCODE -ne 0) {
     Write-Host '  FAILED' -ForegroundColor Red
@@ -28,7 +55,7 @@ Write-Host "  OK - BOOTX64.EFI ($sz bytes)" -ForegroundColor Green
 # 2. Assemble Kernel -> KERNEL.BIN
 Write-Host '[2/2] Assembling Kernel...' -ForegroundColor Yellow
 $ErrorActionPreference = 'Continue'
-& $NASM -f bin -o "$ESP\KERNEL.BIN" -I "$INCLUDE_DIR\" -I "$SRC_DIR\boot\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
+& $NASM @KernelDefines -w-pp-macro-redef-multi -f bin -o "$ESP\KERNEL.BIN" -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
 $ErrorActionPreference = 'Stop'
 if ($LASTEXITCODE -ne 0) {
     Write-Host '  FAILED' -ForegroundColor Red
@@ -36,6 +63,18 @@ if ($LASTEXITCODE -ne 0) {
 }
 $sz = (Get-Item "$ESP\KERNEL.BIN").Length
 Write-Host "  OK - KERNEL.BIN ($sz bytes)" -ForegroundColor Green
+
+# 2b. Extract app blob -> APPS.BIN and strip bytes from KERNEL.BIN.
+Write-Host '[2b] Extracting APPS.BIN...' -ForegroundColor Yellow
+& powershell -NoProfile -File (Join-Path $PSScriptRoot 'extract_apps.ps1') `
+    -KernelPath "$ESP\KERNEL.BIN" `
+    -OutPath "$ESP\APPS.BIN"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '  FAILED' -ForegroundColor Red
+    exit 1
+}
+$sz = (Get-Item "$ESP\APPS.BIN").Length
+Write-Host "  OK - APPS.BIN ($sz bytes)" -ForegroundColor Green
 
 # 3. Create data disk image with FAT16 filesystem (for ATA PIO access by kernel)
 Write-Host '[3/3] Creating FAT16 data disk (data.img)...' -ForegroundColor Yellow

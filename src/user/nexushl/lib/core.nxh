@@ -1,0 +1,47 @@
+# NexusHL core library — thin typed wrappers over NexusOS syscalls.
+# Each wrapper emits exactly one syscall. No hidden allocation.
+# Syscall numbers match src/include/syscall_user.inc.
+
+const SYS_PRINT          = 0
+const SYS_EXIT           = 1
+const SYS_GUI_RECT       = 2
+const SYS_GUI_TEXT       = 3
+const SYS_FS_COUNT       = 4
+const SYS_FS_ENTRY       = 5
+const SYS_FS_CHDIR       = 6
+const SYS_WM_CREATE      = 7
+const SYS_FS_READ        = 8
+const SYS_WM_HANDLERS    = 9
+const SYS_APP_DONE       = 10
+const SYS_FS_FORMAT_NAME = 11
+const SYS_APP_LAUNCH     = 12
+const SYS_FS_WRITE       = 13
+const SYS_FS_SYNC_ROOT   = 14
+const SYS_WM_CLOSE       = 15
+const SYS_DISPLAY_MODE   = 16
+const SYS_CURSOR_INIT    = 17
+
+# Window struct offsets (shadow window in app slot).
+const WIN_X        = 8
+const WIN_Y        = 16
+const WIN_W        = 24
+const WIN_H        = 32
+const WIN_FLAGS    = 40
+const WIN_DRAWFN   = 112
+const WIN_KEYFN    = 120
+const WIN_CLICKFN  = 128
+const WIN_APPDATA  = 136
+
+# Key codes commonly needed in apps.
+const KEY_ESC  = 27
+const KEY_ENTER = 13
+const KEY_BACK = 8
+const KEY_TAB  = 9
+
+# Colors — 0x00RRGGBB.
+const COL_BLACK = 0x00000000
+const COL_WHITE = 0x00FFFFFF
+const COL_GRAY  = 0x00404040
+const COL_DARK  = 0x00202020
+const COL_BLUE  = 0x003060A0
+const COL_RED   = 0x00C03030

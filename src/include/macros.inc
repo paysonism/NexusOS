@@ -7,6 +7,7 @@
 
 ; Output character to COM1 for debugging
 %macro SER 1
+%ifdef ENABLE_DEBUG_SERIAL
     push rax
     push rdx
     mov dx, 0x3F8
@@ -14,6 +15,7 @@
     out dx, al
     pop rdx
     pop rax
+%endif
 %endmacro
 
 ; Save all general-purpose registers (64-bit)
@@ -85,11 +87,6 @@ ALL_RAX equ 112
 ; I/O wait (small delay for PIC/PIT programming)
 %macro IO_WAIT 0
     out 0x80, al
-%endmacro
-
-; Bochs magic breakpoint
-%macro BOCHS_BREAK 0
-    xchg bx, bx
 %endmacro
 
 ; ISR stub that pushes a dummy error code (for exceptions without one)
