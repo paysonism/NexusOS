@@ -55,6 +55,8 @@ extern display_set_mode
 extern cursor_init
 extern render_rect
 extern render_text
+extern scr_width
+extern scr_height
 extern l3_current_slot
 extern l3_runtime
 extern l3_syscall_stacks
@@ -414,13 +416,41 @@ syscall_entry:
     jmp .done
 
 .sc_gui_rect:
+    ; rdi=x, rsi=y, rdx=w, r10=h, r8=color.  User syscalls must not feed
+    ; negative or high-half values into the renderer's clipping arithmetic.
+    mov rax, rdi
+    or  rax, rsi
+    or  rax, rdx
+    or  rax, r10
+    shr rax, 32
+    jnz .sc_gui_rect_reject
+    cmp edi, [scr_width]
+    ja .sc_gui_rect_reject
+    cmp esi, [scr_height]
+    ja .sc_gui_rect_reject
+    cmp edx, [scr_width]
+    ja .sc_gui_rect_reject
+    cmp r10d, [scr_height]
+    ja .sc_gui_rect_reject
     mov rcx, r10
     call render_rect
     xor eax, eax
     mov [rsp + ALL_RAX], rax
     jmp .done
+.sc_gui_rect_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
 
 .sc_gui_text:
+    ; rdi=x, rsi=y, rdx=cstring, r10=color
+    mov rax, rdi
+    or  rax, rsi
+    shr rax, 32
+    jnz .sc_gui_text_reject
+    cmp edi, [scr_width]
+    ja .sc_gui_text_reject
+    cmp esi, [scr_height]
+    ja .sc_gui_text_reject
     mov rdi, rdx
     mov rsi, SYSCALL_MAX_STR_LEN
     call sc_validate_user_cstring

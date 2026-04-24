@@ -92,6 +92,7 @@ extern display_flip_rect
 extern call_app_l3
 extern bb_addr
 extern scr_pitch
+extern scr_pitch_q
 extern display_flip
 extern wait_vsync
 extern vsync_enabled
@@ -732,14 +733,14 @@ render_frame:
     ret
 
 .rf_restore_fps_region:
-    mov eax, FPS_REGION_Y
-    imul eax, [scr_pitch]
-    add eax, FPS_REGION_X * 4
+    mov rax, FPS_REGION_Y
+    imul rax, [scr_pitch_q]
+    add rax, FPS_REGION_X * 4
     mov r8, [bb_addr]
     add r8, rax
     mov r9, BACK_BUFFER_SAVE_ADDR
     add r9, rax
-    movsxd r10, dword [scr_pitch]
+    mov r10, [scr_pitch_q]
     mov r11d, FPS_REGION_H
 .rfr_row:
     mov rdi, r8
