@@ -28,6 +28,7 @@ display_init:
     mov [scr_height], eax
     mov eax, [abs 0x9010]
     mov [scr_pitch], eax
+    mov [scr_pitch_q], rax
 
     ; SAFETY: Check for zero dimensions/pitch (loader failure)
     cmp dword [scr_width], 0
@@ -44,6 +45,7 @@ display_init:
     mov eax, [scr_width]
     shl eax, 2
     mov [scr_pitch], eax
+    mov [scr_pitch_q], rax
 
 .init_ok:
     ; Set back buffer address
@@ -72,9 +74,10 @@ pixel_set:
     jge .done
 
     ; Calculate offset: y * pitch + x * 4
-    mov eax, esi
-    imul eax, [scr_pitch]
-    lea eax, [eax + edi * 4]
+    movsxd rax, esi
+    imul rax, [scr_pitch_q]
+    movsxd rbx, edi
+    lea rax, [rax + rbx * 4]
     mov rbx, [bb_addr]
     mov [rbx + rax], edx
 
@@ -99,48 +102,61 @@ fill_rect:
     push r12
     push r13
 
-    ; Clip to screen bounds
-    mov r9d, edi             ; x
-    mov r10d, esi            ; y
-    mov r11d, edx            ; w
-    mov r12d, ecx            ; h
+    ; Clip to screen bounds.  Keep all geometry and address math in 64-bit
+    ; registers so hostile 32-bit inputs cannot wrap back into kernel memory.
+    movsxd r9, edi           ; x
+    movsxd r10, esi          ; y
+    movsxd r11, edx          ; w
+    movsxd r12, ecx          ; h
     mov r13d, r8d            ; color
 
     ; Clip left
-    cmp r9d, 0
+    cmp r9, 0
     jge .clip_right
-    add r11d, r9d            ; Reduce width
+    add r11, r9              ; Reduce width
     xor r9d, r9d             ; x = 0
 .clip_right:
-    mov eax, r9d
-    add eax, r11d
-    cmp eax, [scr_width]
-    jle .clip_top
-    mov r11d, [scr_width]
-    sub r11d, r9d
+    cmp r11, 0
+    jle .rect_done
+    mov eax, [scr_width]
+    cmp r9, rax
+    jae .rect_done
+    mov rbx, rax
+    mov rax, r9
+    add rax, r11
+    cmp rax, rbx
+    jbe .clip_top
+    mov r11, rbx
+    sub r11, r9
 .clip_top:
-    cmp r10d, 0
+    cmp r10, 0
     jge .clip_bottom
-    add r12d, r10d
+    add r12, r10
     xor r10d, r10d
 .clip_bottom:
-    mov eax, r10d
-    add eax, r12d
-    cmp eax, [scr_height]
-    jle .clip_done
-    mov r12d, [scr_height]
-    sub r12d, r10d
+    cmp r12, 0
+    jle .rect_done
+    mov eax, [scr_height]
+    cmp r10, rax
+    jae .rect_done
+    mov rbx, rax
+    mov rax, r10
+    add rax, r12
+    cmp rax, rbx
+    jbe .clip_done
+    mov r12, rbx
+    sub r12, r10
 .clip_done:
     ; Validate dimensions
-    cmp r11d, 0
+    cmp r11, 0
     jle .rect_done
-    cmp r12d, 0
+    cmp r12, 0
     jle .rect_done
 
     ; Calculate starting offset
-    mov eax, r10d
-    imul eax, [scr_pitch]
-    lea eax, [eax + r9d * 4]
+    mov rax, r10
+    imul rax, [scr_pitch_q]
+    lea rax, [rax + r9 * 4]
     mov rbx, [bb_addr]
     add rbx, rax
 
@@ -148,11 +164,11 @@ fill_rect:
     movd xmm0, r13d
     pshufd xmm0, xmm0, 0    ; xmm0 = [color, color, color, color]
 
-    movsxd rsi, dword [scr_pitch]
+    mov rsi, [scr_pitch_q]
 
     ; Simple robust fill using rep stosd
     mov rdi, rbx             ; RDI = starting address in back buffer
-    mov ecx, r11d            ; ECX = width in pixels
+    mov rcx, r11             ; RCX = width in pixels
 .row_loop:
     push rdi
     push rcx
@@ -162,7 +178,7 @@ fill_rect:
     pop rdi
 
     add rdi, rsi             ; Next row (add pitch)
-    dec r12d
+    dec r12
     jnz .row_loop
 
 .rect_done:
@@ -242,13 +258,13 @@ draw_char:
 
     ; === FAST PATH: No clipping needed ===
     ; Pre-calculate row start in back buffer
-    mov eax, r11d
-    imul eax, [scr_pitch]
-    lea eax, [eax + r10d * 4]
+    movsxd rax, r11d
+    imul rax, [scr_pitch_q]
+    lea rax, [rax + r10 * 4]
     mov r14, [bb_addr]
     add r14, rax              ; r14 = pointer to first pixel of char in BB
 
-    movsxd r15, dword [scr_pitch]  ; pitch for row advance
+    mov r15, [scr_pitch_q]     ; pitch for row advance
 
     mov r9d, 16               ; 16 rows
 .fast_row:
@@ -358,9 +374,10 @@ draw_char:
 
     ; Calculate row start pointer
     push r9
-    mov r9d, r11d
-    imul r9d, [scr_pitch]
-    lea r9d, [r9d + r10d * 4]
+    movsxd r9, r11d
+    imul r9, [scr_pitch_q]
+    movsxd rax, r10d
+    lea r9, [r9 + rax * 4]
     mov rdi, [bb_addr]
     add rdi, r9
     pop r9
@@ -502,8 +519,9 @@ draw_vline:
 
     ; Write pixel
     push rax
-    imul eax, [scr_pitch]
-    lea eax, [eax + edi * 4]
+    imul rax, [scr_pitch_q]
+    movsxd rcx, edi
+    lea rax, [rax + rcx * 4]
     mov rcx, [bb_addr]
     mov [rcx + rax], r8d
     pop rax
@@ -686,9 +704,10 @@ display_flip_rect:
     jle .fr_done
 
     ; Calculate starting offset
-    mov eax, esi
-    imul eax, [scr_pitch]
-    lea r8d, [eax + edi * 4]
+    movsxd r8, esi
+    imul r8, [scr_pitch_q]
+    movsxd rax, edi
+    lea r8, [r8 + rax * 4]
 
     mov r9, [fb_addr]
     add r9, r8
@@ -820,13 +839,14 @@ display_clear:
     ret
 
 section .data
-global fb_addr, bb_addr, scr_width, scr_height, scr_pitch
+global fb_addr, bb_addr, scr_width, scr_height, scr_pitch, scr_pitch_q
 
 fb_addr:    dq 0
 bb_addr:    dq BACK_BUFFER_ADDR
 scr_width:  dd SCREEN_WIDTH
 scr_height: dd SCREEN_HEIGHT
 scr_pitch:  dd SCREEN_PITCH
+scr_pitch_q: dq SCREEN_PITCH
 vsync_enabled: db 0        ; Disabled by default (uses PIT fallback on AMD/UEFI)
 fps_show:      db 1
 last_vsync_tick: dq 0      ; PIT tick count at last vsync
@@ -1013,6 +1033,8 @@ display_set_mode:
     mov [scr_height], esi
     imul edi, 4
     mov [scr_pitch], edi
+    mov eax, edi
+    mov [scr_pitch_q], rax
 
     ; Clear back buffer completely (using new resolution)
     xor edi, edi
