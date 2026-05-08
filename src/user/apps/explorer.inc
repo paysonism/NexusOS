@@ -104,10 +104,10 @@ app_explorer_draw:
 
 .entry_loop:
     cmp edx, r8d
-    jge .entries_done
+    jae .entries_done            ; unsigned: indices/counts are non-negative
     ; Max 20 entries visible
     cmp edx, 20
-    jge .entries_done
+    jae .entries_done
 
     push rdx
     push r8
@@ -784,39 +784,20 @@ app_explorer_key:
     jmp .exp_key_done
 
 .exp_rename_confirm:
-    ; Apply rename: copy rename_buf into the VFS entry name (24 bytes)
+    ; Apply rename through the filesystem syscall so the current FAT16 cache and
+    ; disk state are updated together.
     mov byte [exp_rename_active], 0
     mov edi, [explorer_sel]
-    call fat16_get_entry
+    SYS_FS_ENTRY rdi
     test rax, rax
     jz .exp_key_done
-    ; Copy new name into entry (up to 23 chars, pad with 0)
-    push rsi
-    push rdi
-    push rcx
-    lea rsi, [exp_rename_buf]
-    mov rdi, rax              ; destination = entry start (name field)
-    xor ecx, ecx
-.rename_copy:
-    cmp ecx, 23
-    jge .rename_pad
-    mov al, [rsi + rcx]
-    test al, al
-    jz .rename_pad
-    mov [rdi + rcx], al
-    inc ecx
-    jmp .rename_copy
-.rename_pad:
-    ; Null-pad remaining bytes up to 24
-    cmp ecx, 24
-    jge .rename_done_copy
-    mov byte [rdi + rcx], 0
-    inc ecx
-    jmp .rename_pad
-.rename_done_copy:
-    pop rcx
+    push rax
+    lea rdi, [exp_rename_buf]
+    lea rsi, [fat16_name_buf]
+    call filename_to_83
     pop rdi
-    pop rsi
+    lea rsi, [fat16_name_buf]
+    SYS_FS_RENAME rdi, rsi
     jmp .exp_key_done
 
 ; --- New Folder input key handler ---
@@ -871,86 +852,19 @@ app_explorer_key:
     jmp .exp_key_done
 
 .exp_newfolder_confirm:
-    ; Create folder: add a VFS dir entry at end of current directory listing
+    ; Create a real FAT16 directory in the current directory listing.
     mov byte [exp_newfolder_active], 0
     ; Check name is not empty
     cmp byte [exp_newfolder_buf], 0
     je .exp_key_done
-    ; For VFS: we add an entry after the current directory entries
-    ; This is a cosmetic VFS, so we just show a "Created!" message
-    ; (Real filesystem operations would need FAT16 write support)
-    mov byte [exp_newfolder_done_msg], 1
-    
-    ; Create actual directory on disk/FAT16
-    ; 1. Format name to 8.3
-    lea rdi, [fat16_name_buf]
-    lea rsi, [exp_newfolder_buf]
-    ; Space pad
-    push rdi
-    mov ecx, 11
-    mov al, ' '
-    rep stosb
-    pop rdi
-    ; Copy name (up to 8 chars, simple)
-    mov ecx, 0
-.fmt_loop:
-    cmp ecx, 8
-    jge .fmt_fill
-    mov al, [rsi + rcx]
-    test al, al
-    jz .fmt_fill
-    ; Toupper
-    cmp al, 'a'
-    jl .fmt_cpy
-    cmp al, 'z'
-    jg .fmt_cpy
-    sub al, 32
-.fmt_cpy:
-    mov [rdi + rcx], al
-    inc ecx
-    jmp .fmt_loop
-.fmt_fill:
-    
-    ; 2. Create 0-byte file
-    lea rdi, [fat16_name_buf]
-    mov rsi, exp_newfolder_buf ; dummy src
-    xor edx, edx ; size 0
-    call fat16_write_file
-    
-    ; 3. Hack: Find the entry and flip Attribute to Directory (0x10)
-    ; fat16_write_file updates FAT16_ROOT_CACHE. We can find it there.
-    mov rbx, 0x920000 ; FAT16_ROOT_CACHE
-    movzx r8d, word [fat16_root_entries] ; usually 512
-    xor ecx, ecx
-.find_new_loop:
-    cmp ecx, r8d
-    jge .find_done
-    cmp byte [rbx], 0
-    je .find_done
-    
-    ; Check name match (11 chars)
-    push rcx
-    push rdi
-    push rsi
-    mov rdi, rbx
+    lea rdi, [exp_newfolder_buf]
     lea rsi, [fat16_name_buf]
-    mov ecx, 11
-    repe cmpsb
-    pop rsi
-    pop rdi
-    pop rcx
-    je .found_to_patch
-    
-    add rbx, 32
-    inc ecx
-    jmp .find_new_loop
-    
-.found_to_patch:
-    mov byte [rbx + 11], 0x10 ; ATTR_DIRECTORY
-    ; Sync root cache to disk
-    call fat16_sync_root
-    
-.find_done:
+    call filename_to_83
+    lea rdi, [fat16_name_buf]
+    SYS_FS_MKDIR rdi
+    cmp eax, -1
+    je .exp_key_done
+    mov byte [exp_newfolder_done_msg], 1
     jmp .exp_key_done
 
 .exp_key_up:

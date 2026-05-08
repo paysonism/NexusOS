@@ -40,8 +40,7 @@ TB_BTN_Y        equ (TASKBAR_Y + 4)
 TB_CLOSE_SIZE   equ 14           ; X button size inside taskbar button
 TB_CLOSE_OFF_X  equ (TB_BTN_W - TB_CLOSE_SIZE - 4) ; X button offset from button left
 
-WIN_OFF_FLAGS   equ 40
-WIN_OFF_TITLE   equ 48
+%include "window_layout.inc"
 
 ; Battery indicator layout (to the left of the clock)
 BAT_IND_W       equ 88           ; total width of battery area
@@ -62,8 +61,8 @@ PLUG_ICON_W     equ 14
 PLUG_ICON_H     equ 14
 
 section .text
-global tb_draw
-global tb_handle_click
+; auto-wrapped (FN_BEGIN emits global): global tb_draw
+; auto-wrapped (FN_BEGIN emits global): global tb_handle_click
 global tb_start_menu_open
 global tb_get_menu_item_at
 
@@ -84,7 +83,7 @@ extern time_hours
 extern time_minutes
 
 ; Draw the taskbar + start menu
-tb_draw:
+FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
     push rbx
     push r12
     push r13
@@ -516,7 +515,7 @@ tb_draw_plug_icon:
 ; Handle click on taskbar / start menu
 ; RDI = Mouse X, RSI = Mouse Y
 ; Returns: RAX = 0 (not handled), 1 (handled, no app), or 2..6 (menu item 0..4 clicked)
-tb_handle_click:
+FN_BEGIN tb_handle_click, 0, 0, FN_RET_SCALAR
     push rbx
     push r12
     push r13
@@ -671,8 +670,8 @@ tb_handle_click:
 ; Handle right-click on start menu: RDI=mouseX, RSI=mouseY
 ; Returns RAX: 0=not handled, 1=handled
 ; ============================================================================
-global tb_handle_rclick
-tb_handle_rclick:
+; auto-wrapped (FN_BEGIN emits global): global tb_handle_rclick
+FN_BEGIN tb_handle_rclick, 0, 0, FN_RET_SCALAR
     push rbx
 
     ; First check if submenu is open and click is inside it
@@ -776,8 +775,8 @@ tb_handle_rclick:
 SM_SUB_W  equ 160
 SM_SUB_H  equ 26
 
-global tb_draw_submenu
-tb_draw_submenu:
+; auto-wrapped (FN_BEGIN emits global): global tb_draw_submenu
+FN_BEGIN tb_draw_submenu, 0, 0, FN_RET_SCALAR
     cmp byte [sm_submenu_open], 0
     je .sub_ret
 
@@ -835,8 +834,8 @@ tb_draw_submenu:
 ; Handle left-click on submenu (called from main loop)
 ; Returns RAX: 0=not in submenu, 1=handled
 ; ============================================================================
-global tb_handle_submenu_click
-tb_handle_submenu_click:
+; auto-wrapped (FN_BEGIN emits global): global tb_handle_submenu_click
+FN_BEGIN tb_handle_submenu_click, 0, 0, FN_RET_SCALAR
     cmp byte [sm_submenu_open], 0
     je .smc_no
 
@@ -920,4 +919,3 @@ section .text
 szSubAdd    db "Add to Desktop", 0
 szSubRemove db "Remove from Desktop", 0
 bat_pct_str times 8 db 0      ; "100%" + null, with room
-

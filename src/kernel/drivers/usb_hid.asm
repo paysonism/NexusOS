@@ -47,16 +47,16 @@ extern scr_width, scr_height
 extern tick_count
 
 section .text
-global usb_hid_init
-global usb_hid_init_same_ctrl
-global usb_hid_init_slot2
-global usb_poll_mouse
+; auto-wrapped (FN_BEGIN emits global): global usb_hid_init
+; auto-wrapped (FN_BEGIN emits global): global usb_hid_init_same_ctrl
+; auto-wrapped (FN_BEGIN emits global): global usb_hid_init_slot2
+; auto-wrapped (FN_BEGIN emits global): global usb_poll_mouse
 
 ; ============================================================================
 ; usb_hid_init_same_ctrl - Re-enumerate on the currently active XHCI controller
 ; Used for hot-plug: device was unplugged and re-plugged on the same port/controller
 ; ============================================================================
-usb_hid_init_same_ctrl:
+FN_BEGIN usb_hid_init_same_ctrl, 0, 0, FN_RET_SCALAR
     ; Restore xhci_pci_search_start to the position of the current controller
     ; so xhci_pci_find will re-find the same one
     mov eax, [xhci_pci_this_start]
@@ -66,7 +66,7 @@ usb_hid_init_same_ctrl:
 ; ============================================================================
 ; usb_hid_init - Initialize USB HID Mouse (full scan from controller 0)
 ; ============================================================================
-usb_hid_init:
+FN_BEGIN usb_hid_init, 0, 0, FN_RET_SCALAR
     ; Reset PCI search to beginning so we scan all controllers fresh
     mov dword [xhci_pci_search_start], 0
 
@@ -448,7 +448,7 @@ usb_delay:
 ; usb_poll_mouse - Check for mouse updates
 ; Called from kernel main loop
 ; ============================================================================
-usb_poll_mouse:
+FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
     cmp byte [usb_mouse_active], 1
     je .loop
 
@@ -845,7 +845,7 @@ usb_queue_mouse_read2:
 ; usb_hid_init_slot2 - Enumerate second USB HID device on next available port
 ; Non-fatal: returns 0 if no second device found
 ; ============================================================================
-usb_hid_init_slot2:
+FN_BEGIN usb_hid_init_slot2, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
@@ -1038,6 +1038,16 @@ usb_hid_init_slot2:
     jmp .slot2_fail
 
 .slot2_fail:
+    ; Slot2 probing is non-fatal, but it reuses shared xHCI globals while
+    ; enumerating.  Always restore slot1 state before returning to polling.
+    mov al, [usb_slot1_id]
+    mov [xhci_slot_id], al
+    mov al, [usb_int_ep1_dci]
+    mov [xhci_int_ep_dci], al
+    mov al, [xhci_port1_num]
+    mov [xhci_port_num], al
+    mov byte [usb_slot2_active], 0
+
     ; Serial: ']' = slot2 init failed
     mov dx, 0x3F8
     mov al, ']'
@@ -1198,7 +1208,15 @@ usb_wait_completion:
 ; ============================================================================
 usb_find_endpoint:
     mov rsi, XHCI_CTRL_BUF_ADDR
+    ; Config descriptor header must include bLength, bDescriptorType, and
+    ; wTotalLength before any descriptor-specific field reads.
+    cmp byte [rsi], 4
+    jb .not_found
     movzx ecx, word [rsi + 2]  ; wTotalLength
+    cmp ecx, 4
+    jb .not_found
+    cmp ecx, 512
+    ja .not_found
     
     ; Parse loop state
     xor edx, edx             ; Offset in buffer
@@ -1210,8 +1228,13 @@ usb_find_endpoint:
     
     ; Read bLength (offset + 0)
     movzx eax, byte [rsi + rdx]
-    test eax, eax
-    jz .not_found            ; Zero length descriptor? Abort to avoid infinite loop
+    cmp eax, 2
+    jb .not_found            ; Zero/short descriptor? Abort to avoid infinite loop
+    mov r8d, edx
+    add r8d, eax
+    jc .not_found
+    cmp r8d, ecx
+    ja .not_found            ; Descriptor must fit inside wTotalLength
     
     ; Read bDescriptorType (offset + 1)
     mov al, [rsi + rdx + 1]
@@ -1228,6 +1251,8 @@ usb_find_endpoint:
     ; Found an interface descriptor.
     ; The primary probe should prefer pointer-class HID devices.
     ; A secondary probe may also accept a keyboard.
+    cmp byte [rsi + rdx], 8
+    jb .not_found
 
     cmp byte [rsi + rdx + 5], 3  ; bInterfaceClass = HID?
     jne .not_hid_interface
@@ -1250,6 +1275,8 @@ usb_find_endpoint:
 .check_endpoint:
     ; Found an endpoint descriptor
     ; Only care if we are currently inside a valid Mouse Interface
+    cmp byte [rsi + rdx], 7
+    jb .not_found
     test ebx, ebx
     jz .next_desc
     

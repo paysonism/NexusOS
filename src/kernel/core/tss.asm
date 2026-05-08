@@ -10,7 +10,8 @@ global tss64
 align 16
 tss64:
     dd 0            ; Reserved
-    dq 0x200000     ; RSP0: Kernel stack top (must match stage2.asm)
+tss64_rsp0:
+    dq 0x200000     ; RSP0 fallback until tss_init installs the dedicated stack.
     dq 0            ; RSP1
     dq 0            ; RSP2
     dq 0            ; Reserved
@@ -33,6 +34,9 @@ tss_init:
     push rax
     push rbx
     push rdi
+
+    lea rax, [rel tss_rsp0_stack_end]
+    mov [rel tss64_rsp0], rax
 
     ; Get TSS address
     lea rax, [tss64]
@@ -69,3 +73,9 @@ tss_init:
     pop rbx
     pop rax
     ret
+
+section .bss
+alignb 16
+tss_rsp0_stack:
+    resb 16384
+tss_rsp0_stack_end:

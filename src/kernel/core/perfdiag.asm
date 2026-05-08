@@ -13,6 +13,7 @@ extern smp_target_cores
 extern smp_started_cores
 extern smp_alive_cores
 extern smp_parked_cores
+extern l3_app_arena_base_v
 
 section .text
 global perfdiag_init
@@ -140,7 +141,7 @@ perfdiag_print_memory:
     SER ' '
     lea rdi, [rel msg_app]
     call serial_puts
-    mov rdi, APP_DATA_ADDR
+    mov rdi, [rel l3_app_arena_base_v]
     call ser_print_hex64
     call serial_crlf
     pop rdi

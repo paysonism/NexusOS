@@ -24,6 +24,10 @@ extern process_keyboard
 extern usb_poll_mouse
 extern battery_poll
 extern gui_initialized
+extern trace_dump_serial
+extern trace_dump_screen
+extern l3_app_arena_base_v
+extern l3_app_arena_size_v
 
 ; ============================================================================
 ; Exception ISR Stubs (0-31)
@@ -63,8 +67,8 @@ ISR_ERRCODE   30    ; Security exception
 ISR_NOERRCODE 31
 
 ; Common ISR handler for exceptions
-global isr_common_stub
-isr_common_stub:
+; auto-wrapped (FN_BEGIN emits global): global isr_common_stub
+FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
     cld
     
     ; Nested exception guard
@@ -147,8 +151,13 @@ isr_common_stub:
     SER 13
     SER 10
 
+%ifdef ENABLE_TRACE
+    call trace_dump_serial
+    call trace_dump_screen
+%endif
+
     ; Paint red pixels to indicate exception
-    mov rdi, [abs 0x9000]    ; Framebuffer address
+    mov rdi, [abs VBE_INFO_ADDR + VBE_FB_ADDR_OFF]
     mov dword [rdi], 0x000000FF
     mov dword [rdi+4], 0x000000FF
     mov dword [rdi+8], 0x000000FF
@@ -172,8 +181,19 @@ isr_common_stub:
 
 .exc_ring3_abort:
     POP_ALL
-    add rsp, 16
+    add rsp, 16              ; RSP now points at the user RIP in the CPU frame.
+    mov rax, [rsp]
+    sub rax, [rel l3_app_arena_base_v]
+    jc .exc_ring3_slot_zero
+    cmp rax, [rel l3_app_arena_size_v]
+    jae .exc_ring3_slot_zero
+    shr rax, 20
+    jmp .exc_ring3_slot_ready
+.exc_ring3_slot_zero:
+    xor eax, eax
+.exc_ring3_slot_ready:
     lock dec dword [rel nested_exc_count]
+    push rax                 ; call_app_l3_return expects the app slot at [rsp].
     extern call_app_l3_return
     jmp call_app_l3_return
 
@@ -199,8 +219,8 @@ IRQ_STUB 15, 47    ; Secondary ATA
 IRQ_STUB 18, 50    ; Advanced Touchpad (APIC)
 
 ; Common IRQ handler
-global irq_common_stub
-irq_common_stub:
+; auto-wrapped (FN_BEGIN emits global): global irq_common_stub
+FN_DECL irq_common_stub, 0, 0, FN_RET_SCALAR
     PUSH_ALL
 
     ; Get IRQ number from interrupt vector on stack
@@ -231,11 +251,14 @@ irq_common_stub:
 .irq_keyboard:
     call keyboard_handler
     call apic_eoi
+    call pic_eoi_master
     jmp .done
 
 .irq_mouse:
     call mouse_handler
     call apic_eoi
+    call pic_eoi_slave
+    call pic_eoi_master
     jmp .done
 
 .send_eoi:

@@ -179,7 +179,7 @@ fn_itoa:
     mov rdi, r8              ; Start
 .rev_loop:
     cmp rdi, rbx
-    jge .itoa_done
+    jae .itoa_done           ; unsigned compare: pointers are unsigned
     mov al, [rdi]
     mov cl, [rbx]
     mov [rdi], cl

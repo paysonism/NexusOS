@@ -9,8 +9,8 @@ bits 64
 section .text
 
 ; --- Initialize page allocator from E820 map ---
-global memory_init
-memory_init:
+; auto-wrapped (FN_BEGIN emits global): global memory_init
+FN_BEGIN memory_init, 0, 0, FN_RET_SCALAR
     push rbx
     push r12
     push r13
@@ -19,7 +19,7 @@ memory_init:
     ; Clear the entire bitmap (mark all pages as USED initially)
     mov rdi, PAGE_BITMAP_ADDR
     mov al, 0xFF             ; All bits set = all pages used
-    mov rcx, 0x100000        ; 1MB of bitmap = covers 32GB of RAM
+    mov rcx, PAGE_BITMAP_SIZE
     rep stosb
 
 
@@ -36,18 +36,18 @@ memory_init:
     cmp ecx, 1
     jne .next_entry
 
-    ; Skip memory below 1MB (reserved for boot structures)
-    cmp rax, 0x100000
+    ; Skip memory below the kernel load floor.
+    cmp rax, KERNEL_LOAD_ADDR
     jge .process_range
     ; Adjust: if range extends above 1MB, clip it
     mov rdx, rax
     add rdx, rbx             ; End address
-    cmp rdx, 0x100000
+    cmp rdx, KERNEL_LOAD_ADDR
     jle .next_entry
     ; Clip start to 1MB
-    sub rdx, 0x100000
+    sub rdx, KERNEL_LOAD_ADDR
     mov rbx, rdx             ; New length
-    mov rax, 0x100000        ; New base
+    mov rax, KERNEL_LOAD_ADDR
 
 .process_range:
     ; Skip pages used by kernel and fixed system structures.
@@ -108,15 +108,15 @@ memory_init:
 
 ; --- Allocate one physical page ---
 ; Returns: RAX = physical address of 4KB page, or 0 if out of memory
-global page_alloc
-page_alloc:
+; auto-wrapped (FN_BEGIN emits global): global page_alloc
+FN_BEGIN page_alloc, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
 
     ; Scan bitmap for first free bit (0 = free)
     mov rdi, PAGE_BITMAP_ADDR
-    mov rcx, 0x100000        ; Bitmap size in bytes
+    mov rcx, PAGE_BITMAP_SIZE
 
 .scan:
     cmp byte [rdi], 0xFF     ; All used?
@@ -165,8 +165,8 @@ page_alloc:
 
 ; --- Free a physical page ---
 ; RDI = physical address
-global page_free
-page_free:
+; auto-wrapped (FN_BEGIN emits global): global page_free
+FN_BEGIN page_free, 0, 0, FN_RET_SCALAR
     push rax
     push rcx
 
@@ -196,7 +196,7 @@ count_free_pages:
 
     xor rax, rax             ; Counter
     mov rdi, PAGE_BITMAP_ADDR
-    mov rcx, 0x100000        ; Bitmap bytes
+    mov rcx, PAGE_BITMAP_SIZE
 
 .count_loop:
     mov bl, [rdi]
@@ -224,8 +224,8 @@ count_free_pages:
     ret
 
 ; --- Get free page count ---
-global memory_get_free
-memory_get_free:
+; auto-wrapped (FN_BEGIN emits global): global memory_get_free
+FN_BEGIN memory_get_free, 0, 0, FN_RET_SCALAR
     mov rax, [free_page_count]
     ret
 

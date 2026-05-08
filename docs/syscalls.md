@@ -3,6 +3,8 @@
 This is the current ring-3 syscall surface exported by
 `C:\Users\user\Documents\new\src\kernel\proc\syscall.asm` and wrapped by
 `C:\Users\user\Documents\new\src\include\syscall_user.inc`.
+Validation helpers live in
+`C:\Users\user\Documents\new\src\kernel\proc\syscall_validation.inc`.
 
 ## Calling convention
 
@@ -123,11 +125,41 @@ Rejected pointer-bearing syscalls now return `-1` in `RAX`.
 `16` `SYS_DISPLAY_SET_MODE`
 - Args: `RDI=width`, `RSI=height`, `RDX=bpp_or_mode`
 - Returns: mode-switch result in `RAX`
+- Validation: width and height must be non-zero 32-bit values, bpp must be 32,
+  and the requested pixel count must fit the boot back buffer.
 
 `17` `SYS_CURSOR_INIT`
 - Args: none
 - Effect: initialize cursor state
 - Returns: `0`
+
+`18` `SYS_TICKS`
+- Args: none
+- Effect: read the kernel PIT tick counter
+- Returns: current tick count in `RAX`
+- Intended use: UI animation such as NexusHL blinking carets
+
+`19` `SYS_FS_DELETE`
+- Args: `RDI=entry`
+- Effect: delete a file or empty directory from the current FAT16 directory
+- Returns: `0` on success, `-1` on validation failure, non-empty directory, or
+  invalid entry
+- Validation: `entry` must be an opaque FAT16 handle from `SYS_FS_ENTRY`
+
+`20` `SYS_FS_RENAME`
+- Args: `RDI=entry`, `RSI=name83_ptr`
+- Effect: rename an entry in the current FAT16 directory
+- Returns: `0` on success, `-1` on validation failure or duplicate name
+- Validation: `entry` must be an opaque FAT16 handle; `name83_ptr` must point
+  to an 11-byte, space-padded FAT 8.3 name in app-owned memory
+
+`21` `SYS_FS_MKDIR`
+- Args: `RDI=name83_ptr`
+- Effect: create a real single-cluster FAT16 directory in the current directory
+- Returns: `0` on success, `-1` on validation failure, duplicate name, full
+  directory, or full FAT
+- Validation: `name83_ptr` must point to an 11-byte, space-padded FAT 8.3 name
+  in app-owned memory
 
 ## Current hardening notes
 
@@ -135,6 +167,8 @@ Rejected pointer-bearing syscalls now return `-1` in `RAX`.
   handlers on inactive slots.
 - Pointer-taking syscalls validate app-owned strings, buffers, callback
   pointers, and opaque FAT16 handles before calling kernel helpers.
+- Mutating filesystem syscalls translate slot-local opaque entry copies back to
+  the kernel's current-directory cache before writing metadata.
 - Window close uses unsigned validation for the same reason.
 - The usermode callback return path depends on the runtime layout in
   `src/kernel/proc/usermode.asm`; if `L3_RT_SIZE` changes, keep the allocation
@@ -149,5 +183,8 @@ Rejected pointer-bearing syscalls now return `-1` in `RAX`.
   and app-owned strings.
 - Treat FAT16 entry pointers as opaque handles. They are kernel objects, not
   user-owned memory.
+- Use `src/user/lib/nexus_fs.inc` helpers such as `NFS_NAME83` when converting
+  user-visible filenames to the 11-byte FAT 8.3 names accepted by write,
+  rename, and mkdir.
 - Return from callbacks with `ret` unless you intentionally end the callback
   via `SYS_APP_DONE`.

@@ -1,0 +1,33 @@
+{
+    "sdk":  "NexusHL",
+    "generatedBy":  "build_nxh.ps1",
+    "apps":  [
+                 {
+                     "name":  "explorer",
+                     "source":  "src/user/nexushl/apps/explorer.nxh",
+                     "asm":  "build/nxh/explorer.asm",
+                     "prefix":  "app_hl_explorer",
+                     "draw":  "app_hl_explorer_draw",
+                     "click":  "app_hl_explorer_click",
+                     "key":  "app_hl_explorer_key"
+                 },
+                 {
+                     "name":  "hello",
+                     "source":  "src/user/nexushl/apps/hello.nxh",
+                     "asm":  "build/nxh/hello.asm",
+                     "prefix":  "app_hl_hello",
+                     "draw":  "app_hl_hello_draw",
+                     "click":  "app_hl_hello_click",
+                     "key":  "app_hl_hello_key"
+                 },
+                 {
+                     "name":  "notepad",
+                     "source":  "src/user/nexushl/apps/notepad.nxh",
+                     "asm":  "build/nxh/notepad.asm",
+                     "prefix":  "app_hl_notepad",
+                     "draw":  "app_hl_notepad_draw",
+                     "click":  "app_hl_notepad_click",
+                     "key":  "app_hl_notepad_key"
+                 }
+             ]
+}

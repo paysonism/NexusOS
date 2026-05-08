@@ -1,0 +1,605 @@
+[
+  {
+    "name": "app_hl_explorer_ui_win_x",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_win_y",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_win_w",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_win_h",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_rect",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_text",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "fg",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "bg",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_rect_at",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_text_at",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "fg",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "bg",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_fill_client_below",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "top",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_menu_bar",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_menu_label",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_dropdown",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "item_count",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_dropdown_item",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "index",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_caret",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_ticks",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_ui_caret_blink",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_input",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "cursor_col",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_selected_entry",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_file_count",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_current_is_root",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_clamp_selection",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_clear_text",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cap",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_start_rename",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_start_new_folder",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_enter_selected",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_draw_overlay",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "label",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "cursor",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "xoff",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_draw",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_click",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_edit_key",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "active",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cursor_ptr",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "k",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_key",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "k",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  }
+]

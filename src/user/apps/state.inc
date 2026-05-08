@@ -113,6 +113,19 @@ explorer_cur_idx   dd 0          ; temp: current draw index
 
 ; File open state
 np_open_entry   dq 0             ; FAT16 dir entry of last opened file
+app_open_cmd_buf   times APP_SLOT_PARAM_SZ db 0
+app_open_param_buf times APP_SLOT_PARAM_SZ db 0
+app_open_comp_buf  times 64 db 0
+app_open_83_buf    times 11 db 0
+szAppNameExplorer db "explorer", 0
+szAppNameTerminal db "terminal", 0
+szAppNameNotepad  db "notepad", 0
+szAppNameSettings db "settings", 0
+szAppNamePaint    db "paint", 0
+szAppNameAbout    db "about", 0
+szAppNameSecurity db "security", 0
+szAppNameSecurityProbe db "security_probe", 0
+szAppNameRoot     db "root", 0
 
 ; Context menu state
 ctx_menu_visible db 0
@@ -179,6 +192,8 @@ np_has_saved    db 0            ; 1 if file has been saved
 np_save_done_msg db 0           ; 1 = show "Saved!" overlay
 np_save_dialog  db 0            ; 1 = save-as dialog is showing
 np_saveas_cursor dd 0
+np_saveloc_cursor dd 0
+np_save_field dd 0              ; 0 = filename, 1 = location
 np_saved_num_lines dd 0
 np_save_total_bytes dd 0
 
@@ -294,4 +309,6 @@ exp_rename_buf:    times 24 db 0
 exp_newfolder_buf: times 24 db 0
 np_saveas_buf:     times 24 db 0
 np_saveas_83:      times 12 db 0
+np_saveloc_buf:    times 24 db 0
+np_saveloc_83:     times 12 db 0
 section .text

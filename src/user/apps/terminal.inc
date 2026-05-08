@@ -6,101 +6,124 @@ app_terminal_draw:
     push r12
     push r13
     push r14
+    push r15
 
     mov rbx, rdi
-    mov r14, rdi
-    mov r12, [r14 + TERM_CTX_X]
-    mov r13, [r14 + TERM_CTX_Y]
-    mov r10, [r14 + TERM_CTX_W]
-    mov r11, [r14 + TERM_CTX_H]
+    mov r12, [rbx + WIN_OFF_X]
+    mov r13, [rbx + WIN_OFF_Y]
+    mov r14, [rbx + WIN_OFF_W]
+    mov r15, [rbx + WIN_OFF_H]
 
-    ; Background
+    ; Background (sc_gui_rect: rdi=x, rsi=y, rdx=w, r10=h, r8=color)
     mov rdi, r12
     add rdi, BORDER_WIDTH
     mov rsi, r13
     add rsi, TITLEBAR_HEIGHT
-    mov rdx, r10
+    mov rdx, r14
     sub rdx, BORDER_WIDTH * 2
-    mov rcx, r11
+    mov rcx, r15
     sub rcx, TITLEBAR_HEIGHT + BORDER_WIDTH
     cmp rcx, 0
     jle .term_draw_done
+    mov r10, rcx
     mov r8, 0x00111111
     mov rax, 2
-    mov r10, rcx
     syscall
 
-    ; Simple header
+    ; Header (sc_gui_text: rdi=x, rsi=y, rdx=str, r10=color)
     mov rdi, r12
     add rdi, BORDER_WIDTH + 6
     mov rsi, r13
     add rsi, TITLEBAR_HEIGHT + 4
     lea rdx, [rel term_blob_welcome]
-    mov ecx, 0x0000DD00
-    mov r8, 0x00111111
+    mov r10, 0x0000DD00
     mov rax, 3
-    mov r10, rcx
     syscall
 
-    ; Last echoed command or hint
+    ; History lines, or help hint when empty
+    mov ecx, [rel term_blob_hist_count]
+    test ecx, ecx
+    jnz .term_draw_hist
     mov rdi, r12
     add rdi, BORDER_WIDTH + 6
     mov rsi, r13
     add rsi, TITLEBAR_HEIGHT + 20
-    lea rdx, [r14 + TERM_STATE_ECHO]
-    cmp byte [rdx], 0
-    jne .term_have_echo
     lea rdx, [rel term_blob_help_hint]
-.term_have_echo:
-    mov ecx, 0x00CCCCCC
-    mov r8, 0x00111111
+    mov r10, 0x00CCCCCC
     mov rax, 3
-    mov r10, rcx
     syscall
-
-    ; Draw prompt "C:\> "
+    jmp .term_after_hist
+.term_draw_hist:
+    xor r14d, r14d                   ; line index
+.term_hist_loop:
+    cmp r14d, [rel term_blob_hist_count]
+    jge .term_after_hist
     mov rdi, r12
     add rdi, BORDER_WIDTH + 6
     mov rsi, r13
-    add rsi, TITLEBAR_HEIGHT + 4
-    add rsi, 28
-    lea rdx, [rel term_blob_prompt]
-    mov rcx, 0x0000FF00
-    mov r8, 0x00111111
+    add rsi, TITLEBAR_HEIGHT + 20
+    mov eax, r14d
+    imul eax, 14
+    add esi, eax
+    mov eax, r14d
+    imul eax, TERM_HIST_LINE
+    lea rdx, [rel term_blob_hist_buf]
+    add rdx, rax
+    mov r10, 0x00CCCCCC
     mov rax, 3
-    mov r10, rcx
+    syscall
+    inc r14d
+    jmp .term_hist_loop
+.term_after_hist:
+
+    ; Prompt y = below history (or default 28 below header if empty)
+    mov eax, [rel term_blob_hist_count]
+    test eax, eax
+    jnz .term_prompt_y_have
+    mov eax, 1                       ; reserve one line for help-hint
+.term_prompt_y_have:
+    imul eax, 14
+    add eax, 24                       ; 20 (hist_y0) + 4 padding
+    mov r15d, eax                    ; r15d = prompt y offset
+
+    ; Prompt "C:\> "
+    mov rdi, r12
+    add rdi, BORDER_WIDTH + 6
+    mov rsi, r13
+    add rsi, TITLEBAR_HEIGHT
+    add esi, r15d
+    lea rdx, [rel term_blob_prompt]
+    mov r10, 0x0000FF00
+    mov rax, 3
     syscall
 
-    ; Draw input text
+    ; Input text
     mov rdi, r12
     add rdi, BORDER_WIDTH + 6 + 40
     mov rsi, r13
-    add rsi, TITLEBAR_HEIGHT + 4
-    add rsi, 28
-    lea rdx, [r14 + TERM_STATE_INPUT]
-    mov rcx, 0x00FFFFFF
-    mov r8, 0x00111111
+    add rsi, TITLEBAR_HEIGHT
+    add esi, r15d
+    lea rdx, [rel term_blob_input_buf]
+    mov r10, 0x00FFFFFF
     mov rax, 3
-    mov r10, rcx
     syscall
 
-    ; Draw cursor
-    mov eax, [r14 + TERM_STATE_CURSOR]
+    ; Cursor
+    mov eax, [rel term_blob_cursor_val]
     imul eax, FONT_WIDTH
     add eax, BORDER_WIDTH + 6 + 40
     mov rdi, r12
     add edi, eax
     mov rsi, r13
-    add rsi, TITLEBAR_HEIGHT + 4
-    add rsi, 28
+    add rsi, TITLEBAR_HEIGHT
+    add esi, r15d
     lea rdx, [rel term_blob_cursor]
-    mov rcx, 0x00FFFFFF
-    mov r8, 0x00111111
+    mov r10, 0x00FFFFFF
     mov rax, 3
-    mov r10, rcx
     syscall
 
 .term_draw_done:
+    pop r15
     pop r14
     pop r13
     pop r12
@@ -118,10 +141,6 @@ app_terminal_key:
     push rbx
     push rcx
     push rdx
-    push r14
-
-    mov rbx, rdi
-    mov r14, rdi
 
     ; Extract ASCII
     mov eax, esi
@@ -143,66 +162,137 @@ app_terminal_key:
     cmp al, 126
     jg .term_key_done
 
-    mov ecx, [r14 + TERM_STATE_CURSOR]
+    mov ecx, [rel term_blob_cursor_val]
     cmp ecx, TERM_INPUT_MAX
     jge .term_key_done
-    lea rbx, [r14 + TERM_STATE_INPUT]
+    lea rbx, [rel term_blob_input_buf]
     mov [rbx + rcx], al
     inc ecx
     mov byte [rbx + rcx], 0
-    mov dword [r14 + TERM_STATE_CURSOR], ecx
+    mov [rel term_blob_cursor_val], ecx
     jmp .term_key_done
 
 .term_backspace:
-    mov ecx, [r14 + TERM_STATE_CURSOR]
+    mov ecx, [rel term_blob_cursor_val]
     test ecx, ecx
     jz .term_key_done
     dec ecx
-    lea rbx, [r14 + TERM_STATE_INPUT]
+    lea rbx, [rel term_blob_input_buf]
     mov byte [rbx + rcx], 0
-    mov dword [r14 + TERM_STATE_CURSOR], ecx
+    mov [rel term_blob_cursor_val], ecx
     jmp .term_key_done
 
 .term_enter:
-    lea rbx, [r14 + TERM_STATE_INPUT]
+    lea rbx, [rel term_blob_input_buf]
     lea rsi, [rel term_blob_cmd_cls]
     mov rdi, rbx
     call .term_str_eq
     test al, al
     jnz .term_cls
     lea rsi, [rel term_blob_cmd_ver]
-    mov rdi, rbx
+    lea rdi, [rel term_blob_input_buf]
     call .term_str_eq
     test al, al
     jnz .term_ver
     lea rsi, [rel term_blob_cmd_help]
-    mov rdi, rbx
+    lea rdi, [rel term_blob_input_buf]
     call .term_str_eq
     test al, al
     jnz .term_help
-    ; Default: build "C:\> <input>" into the echo buffer.
-    lea rdi, [r14 + TERM_STATE_ECHO]
+    lea rdi, [rel term_blob_input_buf]
+    mov rax, 23
+    syscall
+    cmp rax, -1
+    jne .term_launched
+    ; Default: push "C:\> <input>" as a history line.
+    lea rdi, [rel term_blob_line_tmp]
     lea rsi, [rel term_blob_prompt]
     call .term_copy_str
-    lea rsi, [r14 + TERM_STATE_INPUT]
+    lea rsi, [rel term_blob_input_buf]
     call .term_append_str
+    lea rsi, [rel term_blob_line_tmp]
+    call .term_push_hist
+    jmp .term_clear_input
+
+.term_launched:
+    lea rdi, [rel term_blob_line_tmp]
+    lea rsi, [rel term_blob_prompt]
+    call .term_copy_str
+    lea rsi, [rel term_blob_input_buf]
+    call .term_append_str
+    lea rsi, [rel term_blob_line_tmp]
+    call .term_push_hist
     jmp .term_clear_input
 
 .term_cls:
-    mov byte [r14 + TERM_STATE_ECHO], 0
+    mov dword [rel term_blob_hist_count], 0
     jmp .term_clear_input
 
 .term_ver:
-    lea rdi, [r14 + TERM_STATE_ECHO]
     lea rsi, [rel term_blob_welcome]
-    call .term_copy_str
+    call .term_push_hist
     jmp .term_clear_input
 
 .term_help:
-    lea rdi, [r14 + TERM_STATE_ECHO]
     lea rsi, [rel term_blob_help_hint]
-    call .term_copy_str
+    call .term_push_hist
     jmp .term_clear_input
+
+; Push string at RSI as a new history line. Shifts older lines up if full.
+.term_push_hist:
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    push r9
+
+    mov ecx, [rel term_blob_hist_count]
+    cmp ecx, TERM_HIST_MAX
+    jl .term_ph_have_slot
+    ; Full: shift entries [1..N-1] -> [0..N-2]
+    push rsi
+    lea rdi, [rel term_blob_hist_buf]
+    lea rsi, [rdi + TERM_HIST_LINE]
+    mov rcx, (TERM_HIST_MAX - 1) * TERM_HIST_LINE
+    cld
+    rep movsb
+    pop rsi
+    mov ecx, TERM_HIST_MAX - 1
+.term_ph_have_slot:
+    mov eax, ecx
+    imul eax, TERM_HIST_LINE
+    lea rdi, [rel term_blob_hist_buf]
+    add rdi, rax
+    xor edx, edx
+.term_ph_copy:
+    cmp edx, TERM_HIST_LINE - 1
+    jge .term_ph_end
+    mov al, [rsi]
+    test al, al
+    jz .term_ph_end
+    mov [rdi], al
+    inc rdi
+    inc rsi
+    inc edx
+    jmp .term_ph_copy
+.term_ph_end:
+    mov byte [rdi], 0
+    mov eax, [rel term_blob_hist_count]
+    cmp eax, TERM_HIST_MAX
+    jge .term_ph_done
+    inc eax
+    mov [rel term_blob_hist_count], eax
+.term_ph_done:
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
+    ret
 
 .term_copy_str:
 .copy_loop:
@@ -240,11 +330,10 @@ app_terminal_key:
     ret
 
 .term_clear_input:
-    mov byte [r14 + TERM_STATE_INPUT], 0
-    mov dword [r14 + TERM_STATE_CURSOR], 0
+    mov byte [rel term_blob_input_buf], 0
+    mov dword [rel term_blob_cursor_val], 0
 
 .term_key_done:
-    pop r14
     pop rdx
     pop rcx
     pop rbx
@@ -267,6 +356,22 @@ term_blob_cmd_ver:
     db "ver", 0
 term_blob_cmd_cls:
     db "cls", 0
+
+; Per-slot mutable state (lives inside the blob image so each L3 slot gets its
+; own copy after l3_copy_app_blob_to_slot). Zero-initialised at boot.
+TERM_HIST_MAX  equ 8
+TERM_HIST_LINE equ 64
+align 8
+term_blob_cursor_val: dd 0
+term_blob_hist_count: dd 2
+term_blob_input_buf:  times 64  db 0
+term_blob_line_tmp:   times TERM_HIST_LINE db 0
+term_blob_hist_buf:
+    db "NexusOS Terminal v3.0", 0
+    times TERM_HIST_LINE - 22 db 0
+    db "Type 'help', 'ver', or 'cls'", 0
+    times TERM_HIST_LINE - 29 db 0
+    times (TERM_HIST_MAX - 2) * TERM_HIST_LINE db 0
 
 app_terminal_blob_end:
 

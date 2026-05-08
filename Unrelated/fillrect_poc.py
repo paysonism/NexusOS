@@ -118,6 +118,8 @@ def main() -> None:
     for case in cases:
         assert_inside(case)
 
+    # The original minimal PoC must now be clipped away by the hardened math
+    # and rejected before render_rect at the syscall boundary.
     poc_case = (0x7FFFFFFF, 0x7FFFFFFF, 1, 1)
     assert fill_rect_fixed(*poc_case, BB, SCR_W, SCR_H, PITCH) is None
     assert not syscall_rect_accepts(*poc_case, SCR_W, SCR_H)

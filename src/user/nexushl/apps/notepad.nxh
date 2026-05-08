@@ -1,19 +1,21 @@
 # NexusHL port of Notepad. Full functionality — menu, text buffer, save dialog.
 
-use core
+use gui
 
 app "Notepad" { stack = 8192; }
 
 # -------- constants (mirror src/user/apps/common.inc + state.inc) --------
 const NP_MAX_LINES    = 32
 const NP_MAX_COLS     = 80
-const NP_MENU_H       = 18
-const NP_EDIT_TOP     = 20
+const NP_MENU_H       = 22
+const NP_EDIT_TOP     = 24
 const CTX_ITEM_H      = 20
 const BORDER_WIDTH    = 2
 const TITLEBAR_HEIGHT = 24
 const FONT_WIDTH      = 8
 const LINE_H          = 14
+const CARET_W         = 2
+const CARET_H         = 14
 
 # colors (0x00RRGGBB)
 const C_WHITE       = 0x00FFFFFF
@@ -29,12 +31,14 @@ const C_DIALOGTTL   = 0x00AADDFF
 const C_DIALOGHINT  = 0x00888888
 const C_DIALOGLBL   = 0x00CCCCCC
 const C_SAVED_BG    = 0x00228B22
+const C_ERROR_BG    = 0x00902020
 
 # keys
 const K_ESC   = 27
 const K_ENTER = 13
 const K_BS    = 8
 const K_TAB   = 9
+const CH_SLASH = 47
 const SC_UP    = 0xC8
 const SC_DOWN  = 0xD0
 const SC_LEFT  = 0xCB
@@ -54,21 +58,14 @@ extern np_save_dialog;
 extern np_saveas_cursor;
 extern np_saveas_buf;
 extern np_saveas_83;
+extern np_saveloc_cursor;
+extern np_saveloc_buf;
+extern np_saveloc_83;
+extern np_save_field;
 extern np_has_saved;
 extern np_save_total_bytes;
 extern np_saved_content;
 extern np_open_entry;
-extern szNoteMenuFile;
-extern szNoteMenuEdit;
-extern szFileNew;
-extern szFileSave;
-extern szFileClose;
-extern szEditSelAll;
-extern szEditClear;
-extern szSaveAsTitle;
-extern szSaveAsFilename;
-extern szSaveAsHint;
-extern szSavedMsg;
 extern szCursor;
 extern render_rect;
 extern render_text;
@@ -111,10 +108,21 @@ fn ensure_visible() {
 }
 
 fn insert_char(ch) {
+    # Bootstrap: app data starts zeroed, so the first keystroke needs to
+    # initialise the line count before the bounds check rejects it.
+    if lw(&np_num_lines) == 0 { sw(&np_num_lines, 1); }
     let row = lw(&np_cursor_row);
     let col = lw(&np_cursor_col);
+    if row < 0 { return; }
+    if row >= NP_MAX_LINES { return; }
+    if row >= lw(&np_num_lines) { return; }
+    if col < 0 { return; }
+    if col >= NP_MAX_COLS { return; }
     let lp = len_ptr(row);
     let len = lw(lp);
+    if len < 0 { return; }
+    if len >= NP_MAX_COLS { return; }
+    if col > len { return; }
     if len >= NP_MAX_COLS - 1 { return; }
     let bp = line_ptr(row);
     let i = len;
@@ -131,10 +139,18 @@ fn insert_char(ch) {
 fn do_backspace() {
     let col = lw(&np_cursor_col);
     let row = lw(&np_cursor_row);
+    if row < 0 { return; }
+    if row >= NP_MAX_LINES { return; }
+    if row >= lw(&np_num_lines) { return; }
+    if col < 0 { return; }
+    if col > NP_MAX_COLS { return; }
     if col > 0 {
         let bp = line_ptr(row);
         let lp = len_ptr(row);
         let len = lw(lp);
+        if len < 0 { return; }
+        if len >= NP_MAX_COLS { return; }
+        if col > len { return; }
         let i = col;
         while i < len {
             sb(bp + i - 1, lb(bp + i));
@@ -151,6 +167,10 @@ fn do_backspace() {
     let plen = lw(len_ptr(prev));
     let cp = line_ptr(row);
     let clen = lw(len_ptr(row));
+    if plen < 0 { return; }
+    if clen < 0 { return; }
+    if plen >= NP_MAX_COLS { return; }
+    if clen >= NP_MAX_COLS { return; }
     if plen + clen >= NP_MAX_COLS - 1 { return; }
     let k = 0;
     while k < clen {
@@ -290,6 +310,74 @@ fn do_save_to(name83) {
     sb(&np_save_done_msg, 1);
 }
 
+fn str_is_root_or_empty(s) {
+    if lb(s) == 0 { return 1; }
+    if lb(s) == CH_SLASH {
+        if lb(s + 1) == 0 { return 1; }
+    }
+    return 0;
+}
+
+fn entry_name_eq(ent, name83) {
+    let i = 0;
+    while i < 11 {
+        if lb(ent + i) != lb(name83 + i) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn find_root_dir_cluster(name83) {
+    syscall(SYS_FS_CHDIR, 0);
+    let count = syscall(SYS_FS_COUNT);
+    let i = 0;
+    while i < count {
+        let ent = syscall(SYS_FS_ENTRY, i);
+        if ent != 0 {
+            if entry_name_eq(ent, name83) == 1 {
+                if (lb(ent + 11) & 0x10) != 0 {
+                    return lw(ent + 26);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn save_dialog_reset() {
+    sb(&np_save_dialog, 1);
+    sb(&np_save_field, 0);
+    sw(&np_saveas_cursor, 0);
+    sw(&np_saveloc_cursor, 1);
+    sb(&np_saveas_buf, 0);
+    sb(&np_saveloc_buf, CH_SLASH);
+    sb(&np_saveloc_buf + 1, 0);
+}
+
+fn save_dialog_commit() {
+    sb(&np_save_dialog, 0);
+    if lb(&np_saveas_buf) == 0 { return; }
+
+    let target_cluster = 0;
+    if str_is_root_or_empty(&np_saveloc_buf) == 0 {
+        let loc_ptr = &np_saveloc_buf;
+        if lb(loc_ptr) == CH_SLASH { loc_ptr = loc_ptr + 1; }
+        filename_to_83(loc_ptr, &np_saveloc_83);
+        target_cluster = find_root_dir_cluster(&np_saveloc_83);
+        if target_cluster == 0 {
+            sb(&np_save_done_msg, 2);
+            syscall(SYS_FS_CHDIR, 0);
+            return;
+        }
+    }
+
+    syscall(SYS_FS_CHDIR, target_cluster);
+    filename_to_83(&np_saveas_buf, &np_saveas_83);
+    do_save_to(&np_saveas_83);
+    syscall(SYS_FS_CHDIR, 0);
+}
+
 # ============================================================
 # draw
 # ============================================================
@@ -300,9 +388,9 @@ fn draw(win) {
     let h = lq(win + 32);
 
     # menu bar
-    render_rect(x + BORDER_WIDTH, y + TITLEBAR_HEIGHT, w - BORDER_WIDTH * 2, NP_MENU_H, C_MENU);
-    render_text(x + BORDER_WIDTH + 4,  y + TITLEBAR_HEIGHT + 2, &szNoteMenuFile, C_MENUTEXT, C_MENU);
-    render_text(x + BORDER_WIDTH + 52, y + TITLEBAR_HEIGHT + 2, &szNoteMenuEdit, C_MENUTEXT, C_MENU);
+    ui_menu_bar(win);
+    ui_menu_label(win, 6, "File");
+    ui_menu_label(win, 54, "Edit");
 
     # edit area
     let edit_h = h - TITLEBAR_HEIGHT - NP_EDIT_TOP - BORDER_WIDTH;
@@ -338,49 +426,58 @@ fn draw(win) {
     let drow = cr - top;
     if drow >= 0 {
         if drow < max_lines {
-            render_text(
-                x + BORDER_WIDTH + 4 + cc * FONT_WIDTH,
-                y + TITLEBAR_HEIGHT + NP_EDIT_TOP + 2 + drow * LINE_H,
-                &szCursor, C_BLACK, C_WHITE);
+            ui_caret_blink(win, 4 + cc * FONT_WIDTH, NP_EDIT_TOP + 2 + drow * LINE_H);
         }
     }
 
     # dropdown menus
     let m = lb(&np_menu_open);
     if m == 1 {
-        render_rect(x + BORDER_WIDTH, y + TITLEBAR_HEIGHT + NP_MENU_H, 100, CTX_ITEM_H * 3 + 4, C_DROP);
-        render_rect(x + BORDER_WIDTH, y + TITLEBAR_HEIGHT + NP_MENU_H, 100, 1, C_DROPBRD);
-        render_text(x + BORDER_WIDTH + 8, y + TITLEBAR_HEIGHT + NP_MENU_H + 4,                   &szFileNew,   C_ITEMTEXT, C_DROP);
-        render_text(x + BORDER_WIDTH + 8, y + TITLEBAR_HEIGHT + NP_MENU_H + 4 + CTX_ITEM_H,      &szFileSave,  C_ITEMTEXT, C_DROP);
-        render_text(x + BORDER_WIDTH + 8, y + TITLEBAR_HEIGHT + NP_MENU_H + 4 + CTX_ITEM_H * 2,  &szFileClose, C_ITEMTEXT, C_DROP);
+        ui_dropdown(win, 0, NP_MENU_H, 100, 3);
+        ui_dropdown_item(win, 0, NP_MENU_H, 0, "New");
+        ui_dropdown_item(win, 0, NP_MENU_H, 1, "Save");
+        ui_dropdown_item(win, 0, NP_MENU_H, 2, "Close");
     }
     if m == 2 {
-        render_rect(x + BORDER_WIDTH + 48, y + TITLEBAR_HEIGHT + NP_MENU_H, 110, CTX_ITEM_H * 2 + 4, C_DROP);
-        render_rect(x + BORDER_WIDTH + 48, y + TITLEBAR_HEIGHT + NP_MENU_H, 110, 1, C_DROPBRD);
-        render_text(x + BORDER_WIDTH + 56, y + TITLEBAR_HEIGHT + NP_MENU_H + 4,              &szEditSelAll, C_ITEMTEXT, C_DROP);
-        render_text(x + BORDER_WIDTH + 56, y + TITLEBAR_HEIGHT + NP_MENU_H + 4 + CTX_ITEM_H, &szEditClear,  C_ITEMTEXT, C_DROP);
+        ui_dropdown(win, 48, NP_MENU_H, 110, 2);
+        ui_dropdown_item(win, 48, NP_MENU_H, 0, "Select All");
+        ui_dropdown_item(win, 48, NP_MENU_H, 1, "Clear All");
     }
 
     # save-as dialog
     if lb(&np_save_dialog) == 1 {
         let dlg_w = w - BORDER_WIDTH * 2 - 40;
-        render_rect(x + BORDER_WIDTH + 20, y + TITLEBAR_HEIGHT + 40, dlg_w, 80, C_DIALOGBG);
+        render_rect(x + BORDER_WIDTH + 20, y + TITLEBAR_HEIGHT + 40, dlg_w, 112, C_DIALOGBG);
         render_rect(x + BORDER_WIDTH + 20, y + TITLEBAR_HEIGHT + 40, dlg_w, 1,  C_DIALOGBRD);
-        render_text(x + BORDER_WIDTH + 30, y + TITLEBAR_HEIGHT + 46, &szSaveAsTitle,    C_DIALOGTTL, C_DIALOGBG);
-        render_text(x + BORDER_WIDTH + 30, y + TITLEBAR_HEIGHT + 66, &szSaveAsFilename, C_DIALOGLBL, C_DIALOGBG);
+        render_text(x + BORDER_WIDTH + 30, y + TITLEBAR_HEIGHT + 46, "Save As",    C_DIALOGTTL, C_DIALOGBG);
+        render_text(x + BORDER_WIDTH + 30, y + TITLEBAR_HEIGHT + 66, "Name:", C_DIALOGLBL, C_DIALOGBG);
         let in_w = w - BORDER_WIDTH * 2 - 140;
         render_rect(x + BORDER_WIDTH + 104, y + TITLEBAR_HEIGHT + 62, in_w, 18, C_WHITE);
         render_text(x + BORDER_WIDTH + 108, y + TITLEBAR_HEIGHT + 65, &np_saveas_buf, C_BLACK, C_WHITE);
-        let sc = lw(&np_saveas_cursor);
-        render_text(x + BORDER_WIDTH + 108 + sc * FONT_WIDTH, y + TITLEBAR_HEIGHT + 65, &szCursor, C_BLACK, C_WHITE);
-        render_text(x + BORDER_WIDTH + 30, y + TITLEBAR_HEIGHT + 86, &szSaveAsHint, C_DIALOGHINT, C_DIALOGBG);
+        render_text(x + BORDER_WIDTH + 30, y + TITLEBAR_HEIGHT + 88, "Location:", C_DIALOGLBL, C_DIALOGBG);
+        render_rect(x + BORDER_WIDTH + 104, y + TITLEBAR_HEIGHT + 84, in_w, 18, C_WHITE);
+        render_text(x + BORDER_WIDTH + 108, y + TITLEBAR_HEIGHT + 87, &np_saveloc_buf, C_BLACK, C_WHITE);
+        if lb(&np_save_field) == 0 {
+            let sc = lw(&np_saveas_cursor);
+            ui_caret_blink(win, 108 + sc * FONT_WIDTH, 64);
+        }
+        if lb(&np_save_field) == 1 {
+            let lc = lw(&np_saveloc_cursor);
+            ui_caret_blink(win, 108 + lc * FONT_WIDTH, 86);
+        }
+        render_text(x + BORDER_WIDTH + 30, y + TITLEBAR_HEIGHT + 112, "Tab=Field  Enter=Save  Esc=Cancel", C_DIALOGHINT, C_DIALOGBG);
     }
 
     # saved! overlay
     if lb(&np_save_done_msg) == 1 {
         let ox = x + (w - 120) / 2;
         render_rect(ox, y + TITLEBAR_HEIGHT + 60, 120, 30, C_SAVED_BG);
-        render_text(x + (w - 48) / 2, y + TITLEBAR_HEIGHT + 68, &szSavedMsg, C_WHITE, C_SAVED_BG);
+        render_text(x + (w - 48) / 2, y + TITLEBAR_HEIGHT + 68, "Saved!", C_WHITE, C_SAVED_BG);
+    }
+    if lb(&np_save_done_msg) == 2 {
+        let ex = x + (w - 176) / 2;
+        render_rect(ex, y + TITLEBAR_HEIGHT + 60, 176, 30, C_ERROR_BG);
+        render_text(ex + 8, y + TITLEBAR_HEIGHT + 68, "Location not found", C_WHITE, C_ERROR_BG);
     }
 }
 
@@ -388,9 +485,26 @@ fn draw(win) {
 # click
 # ============================================================
 fn click(win, cx, cy) {
+    # WM passes coordinates relative to the client area below the title bar.
+    let content_y = NP_EDIT_TOP;
     # dismiss saved overlay
-    if lb(&np_save_done_msg) == 1 {
+    if lb(&np_save_done_msg) != 0 {
         sb(&np_save_done_msg, 0);
+        return;
+    }
+    if lb(&np_save_dialog) == 1 {
+        if cy >= 62 {
+            if cy < 82 {
+                sb(&np_save_field, 0);
+                return;
+            }
+        }
+        if cy >= 84 {
+            if cy < 104 {
+                sb(&np_save_field, 1);
+                return;
+            }
+        }
         return;
     }
     let m = lb(&np_menu_open);
@@ -403,17 +517,7 @@ fn click(win, cx, cy) {
             sb(&np_menu_open, 0);
             if idx == 0 { clear_buffer(); return; }
             if idx == 1 {
-                let ent = lq(&np_open_entry);
-                if ent == 0 {
-                    sb(&np_save_dialog, 1);
-                    sw(&np_saveas_cursor, 0);
-                    sb(&np_saveas_buf, 0);
-                    return;
-                }
-                let total = build_save_content();
-                fat16_write_file(ent, &np_saved_content, total);
-                sb(&np_has_saved, 1);
-                sb(&np_save_done_msg, 1);
+                save_dialog_reset();
                 return;
             }
             if idx == 2 { return; }
@@ -431,14 +535,15 @@ fn click(win, cx, cy) {
         return;
     }
     # menu-bar click
-    if cy < NP_EDIT_TOP {
-        if cx < 48  { sb(&np_menu_open, 1); return; }
-        if cx < 96  { sb(&np_menu_open, 2); return; }
+    if cy < content_y {
+        let mx = cx - BORDER_WIDTH;
+        if mx < 48  { sb(&np_menu_open, 1); return; }
+        if mx < 96  { sb(&np_menu_open, 2); return; }
         return;
     }
     # text-area click
     sb(&np_menu_open, 0);
-    let ry = cy - NP_EDIT_TOP - 2;
+    let ry = cy - content_y - 2;
     if ry < 0 { return; }
     let dl = ry / LINE_H;
     let row = dl + lw(&np_scroll_top);
@@ -464,13 +569,23 @@ fn saveas_key(k) {
         return;
     }
     if ch == K_ENTER {
-        sb(&np_save_dialog, 0);
-        if lb(&np_saveas_buf) == 0 { return; }
-        filename_to_83(&np_saveas_buf, &np_saveas_83);
-        do_save_to(&np_saveas_83);
+        save_dialog_commit();
+        return;
+    }
+    if ch == K_TAB {
+        if lb(&np_save_field) == 0 { sb(&np_save_field, 1); return; }
+        sb(&np_save_field, 0);
         return;
     }
     if ch == K_BS {
+        if lb(&np_save_field) == 1 {
+            let lcur = lw(&np_saveloc_cursor);
+            if lcur == 0 { return; }
+            lcur = lcur - 1;
+            sb(&np_saveloc_buf + lcur, 0);
+            sw(&np_saveloc_cursor, lcur);
+            return;
+        }
         let cur = lw(&np_saveas_cursor);
         if cur == 0 { return; }
         cur = cur - 1;
@@ -480,6 +595,14 @@ fn saveas_key(k) {
     }
     if ch < 32 { return; }
     if ch > 126 { return; }
+    if lb(&np_save_field) == 1 {
+        let lcur = lw(&np_saveloc_cursor);
+        if lcur >= 22 { return; }
+        sb(&np_saveloc_buf + lcur, ch);
+        sb(&np_saveloc_buf + lcur + 1, 0);
+        sw(&np_saveloc_cursor, lcur + 1);
+        return;
+    }
     let cur = lw(&np_saveas_cursor);
     if cur >= 22 { return; }
     sb(&np_saveas_buf + cur, ch);

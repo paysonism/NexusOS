@@ -70,11 +70,12 @@ madt_init:
     jz .next
 .lapic_enabled:
 %ifdef NEXUS_CACHE32_MAX
-    mov ecx, [madt_enabled_cpu_count]
-    cmp ecx, SMP_MAX_CORES
+    ; rcx holds the table-end pointer; use rdi for the count to avoid clobber.
+    mov edi, [madt_enabled_cpu_count]
+    cmp edi, SMP_MAX_CORES
     jae .skip_store_lapic
     mov al, [rbx + 3]
-    mov [madt_lapic_ids + rcx], al
+    mov [madt_lapic_ids + rdi], al
 .skip_store_lapic:
 %endif
     inc dword [madt_enabled_cpu_count]
@@ -89,11 +90,11 @@ madt_init:
     jz .next
 .x2_enabled:
 %ifdef NEXUS_CACHE32_MAX
-    mov ecx, [madt_enabled_cpu_count]
-    cmp ecx, SMP_MAX_CORES
+    mov edi, [madt_enabled_cpu_count]
+    cmp edi, SMP_MAX_CORES
     jae .skip_store_x2
     mov eax, [rbx + 4]
-    mov [madt_lapic_ids + rcx], al
+    mov [madt_lapic_ids + rdi], al
 .skip_store_x2:
 %endif
     inc dword [madt_enabled_cpu_count]

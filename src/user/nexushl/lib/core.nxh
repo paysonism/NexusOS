@@ -20,6 +20,12 @@ const SYS_FS_SYNC_ROOT   = 14
 const SYS_WM_CLOSE       = 15
 const SYS_DISPLAY_MODE   = 16
 const SYS_CURSOR_INIT    = 17
+const SYS_TICKS          = 18
+const SYS_FS_DELETE      = 19
+const SYS_FS_RENAME      = 20
+const SYS_FS_MKDIR       = 21
+const SYS_OPEN_FILE_NP   = 22
+const SYS_APP_OPEN       = 23
 
 # Window struct offsets (shadow window in app slot).
 const WIN_X        = 8

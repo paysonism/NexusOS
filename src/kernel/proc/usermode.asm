@@ -7,6 +7,7 @@ bits 64
 %include "constants.inc"
 %include "macros.inc"
 %include "syscall_user.inc"
+%include "l3_runtime.inc"
 
 extern ser_print_hex64
 extern app_terminal_blob_end
@@ -20,63 +21,56 @@ extern app_terminal_kernel_key
 ; code now resolves the live blob through the loaded pointer at VBE_INFO+0x20.
 extern app_blob_start
 extern app_blob_end
+extern app_l3_done_trampoline
 ; Variables moved to the end of file to avoid segment clobbering in monolithic build.
 
-L3_RT_ENTRY          equ 0
-L3_RT_ARG0           equ 8
-L3_RT_ARG1           equ 16
-L3_RT_ARG2           equ 24
-L3_RT_KERNEL_RSP     equ 32
-L3_RT_KERNEL_RFLAGS  equ 40
-L3_RT_USER_RSP       equ 48
-L3_RT_USER_RIP       equ 56
-L3_RT_USER_RFLAGS    equ 64
-L3_RT_APP_BASE       equ 72
-L3_RT_SYSCALL_NUM    equ 80
-L3_RT_USER_RDX       equ 88
-L3_RT_USER_R8        equ 96
-L3_RT_USER_R9        equ 104
-L3_RT_USER_R10       equ 112
-L3_RT_SIZE           equ 120
 L3_APP_CODE_OFF      equ 512
 L3_SHADOW_WIN_OFF    equ (APP_SLOT_SIZE - 512)
+L3_APP_BLOB_COPY_CAP equ L3_SHADOW_WIN_OFF
 L3_SLOT_META_OFF     equ 0
 L3_SLOT_MAGIC_OFF    equ 0
 L3_SLOT_TERM_CTX_OFF equ 160
-L3_SLOT_USER_STACK_TOP equ (APP_SLOT_SIZE - 256)
+L3_SLOT_USER_STACK_TOP equ (L3_SHADOW_WIN_OFF - 16)
 TERM_CTX_X           equ 160
 TERM_CTX_Y           equ 168
 TERM_CTX_W           equ 176
 TERM_CTX_H           equ 184
 L3_SLOT_MAGIC        equ 0x30544F4C5358414E
 
+%if L3_APP_BLOB_COPY_CAP > L3_SHADOW_WIN_OFF
+%error "L3 app blob copy cap must stay below the shadow/window/stack area"
+%endif
+
 section .text
 
-global enter_usermode
-global call_app_l3
-global call_app_l3_return
-global l3_prepare_test_callback
-global l3_runtime_ptr
-global l3_user_stack_top
-global l3_syscall_stack_top
-global l3_install_app_done_trampoline
-global l3_translate_target
-global l3_copy_app_blob_to_slot
-global l3_slot_resolve_app_ptr
-global app_blob_init
+; auto-wrapped (FN_BEGIN emits global): global enter_usermode
+; auto-wrapped (FN_BEGIN emits global): global call_app_l3
+; auto-wrapped (FN_BEGIN emits global): global call_app_l3_return
+; auto-wrapped (FN_BEGIN emits global): global l3_prepare_test_callback
+; auto-wrapped (FN_BEGIN emits global): global l3_runtime_ptr
+; auto-wrapped (FN_BEGIN emits global): global l3_slot_base
+; auto-wrapped (FN_BEGIN emits global): global l3_user_stack_top
+; auto-wrapped (FN_BEGIN emits global): global l3_syscall_stack_top
+; auto-wrapped (FN_BEGIN emits global): global l3_install_app_done_trampoline
+; auto-wrapped (FN_BEGIN emits global): global l3_translate_target
+; auto-wrapped (FN_BEGIN emits global): global l3_copy_app_blob_to_slot
+; auto-wrapped (FN_BEGIN emits global): global l3_slot_resolve_app_ptr
+; auto-wrapped (FN_BEGIN emits global): global app_blob_init
 global app_blob_base_v
 global app_blob_end_v
 global app_blob_size_v
+global l3_app_arena_base_v
+global l3_app_arena_size_v
 
 ; Populate app_blob_base_v / size_v from VBE_INFO+0x20/+0x28 (filled by the
 ; UEFI loader after reading APPS.BIN). Falls back to the (now-zeroed) embedded
 ; symbols if no blob was loaded — in that case the apps are effectively absent
 ; but the kernel still boots.
-app_blob_init:
+FN_BEGIN app_blob_init, 0, 0, FN_RET_SCALAR
     push rax
     push rcx
-    mov rax, [abs 0x9000 + 0x20]        ; VBE_INFO + 0x20 = apps base
-    mov rcx, [abs 0x9000 + 0x28]        ; VBE_INFO + 0x28 = apps size
+    mov rax, [abs VBE_INFO_ADDR + VBE_APPS_BASE_OFF]
+    mov rcx, [abs VBE_INFO_ADDR + VBE_APPS_SIZE_OFF]
     test rax, rax
     jnz .have_loaded
     ; Fallback: embedded symbols (bytes zeroed post-build, but size still valid)
@@ -88,16 +82,28 @@ app_blob_init:
     mov [rel app_blob_size_v], rcx
     add rax, rcx
     mov [rel app_blob_end_v], rax
+    mov rax, [abs VBE_INFO_ADDR + VBE_APP_ARENA_BASE_OFF]
+    test rax, rax
+    jnz .have_arena_base
+    mov rax, APP_DATA_ADDR
+.have_arena_base:
+    mov [rel l3_app_arena_base_v], rax
+    mov rcx, [abs VBE_INFO_ADDR + VBE_APP_ARENA_SIZE_OFF]
+    test rcx, rcx
+    jnz .have_arena_size
+    mov rcx, MAX_WINDOWS * APP_SLOT_SIZE
+.have_arena_size:
+    mov [rel l3_app_arena_size_v], rcx
     pop rcx
     pop rax
     ret
 
 ; l3_prepare_test_callback - copy demo user code into slot app arena
 ; EDI = slot, RAX = entry pointer in APP_DATA space
-l3_prepare_test_callback:
+FN_BEGIN l3_prepare_test_callback, 0, 0, FN_RET_SCALAR
     mov eax, edi
     imul rax, APP_SLOT_SIZE
-    add rax, APP_DATA_ADDR
+    add rax, [rel l3_app_arena_base_v]
     mov rdi, rax
     mov r8, rax
     lea rsi, [rel l3_test_blob]
@@ -106,12 +112,17 @@ l3_prepare_test_callback:
     mov rax, r8
     ret
 
-; enter_usermode - generic helper, currently uses slot 0 stack
-; RDI = user RIP
-enter_usermode:
+; enter_usermode - generic helper
+; RDI = user RIP, RSI = slot
+FN_DECL enter_usermode, 0, 0, FN_RET_SCALAR
     mov r10, rdi
+    mov r11d, esi
+    cmp r11d, MAX_WINDOWS
+    jb .slot_ok
+    xor r11d, r11d
+.slot_ok:
     push qword GDT64_USER_DATA
-    mov edi, 0
+    mov edi, r11d
     call l3_user_stack_top
     push rax
     pushfq
@@ -124,18 +135,25 @@ enter_usermode:
     iretq
 
 ; l3_runtime_ptr - EDI=slot -> RAX=runtime ptr
-l3_runtime_ptr:
+FN_BEGIN l3_runtime_ptr, 0, 0, FN_RET_SCALAR
     mov eax, edi
     imul rax, L3_RT_SIZE
     lea rdx, [rel l3_runtime]
     add rax, rdx
     ret
 
+; l3_slot_base - EDI=slot -> RAX=APP_DATA slot base
+FN_BEGIN l3_slot_base, 0, 0, FN_RET_SCALAR
+    mov eax, edi
+    imul rax, APP_SLOT_SIZE
+    add rax, [rel l3_app_arena_base_v]
+    ret
+
 ; l3_user_stack_top - EDI=slot -> RAX=top of user stack
-l3_user_stack_top:
+FN_BEGIN l3_user_stack_top, 0, 0, FN_RET_SCALAR
     mov eax, edi
     imul rax, L3_USER_STACK_SIZE
-    mov rdx, APP_DATA_ADDR
+    mov rdx, [rel l3_app_arena_base_v]
     imul rcx, rdi, APP_SLOT_SIZE
     add rdx, rcx
     add rdx, L3_SLOT_USER_STACK_TOP
@@ -146,7 +164,7 @@ l3_user_stack_top:
     ret
 
 ; l3_syscall_stack_top - EDI=slot -> RAX=top of syscall stack
-l3_syscall_stack_top:
+FN_BEGIN l3_syscall_stack_top, 0, 0, FN_RET_SCALAR
     mov eax, edi
     imul rax, L3_SYSCALL_STACK_SIZE
     lea rdx, [rel l3_syscall_stacks]
@@ -155,43 +173,27 @@ l3_syscall_stack_top:
     and rax, -16
     ret
 
-l3_install_app_done_trampoline:
-    push rcx
-    push rdi
-    push rsi
-    mov eax, edi
-    imul rax, APP_SLOT_SIZE
-    add rax, APP_DATA_ADDR
-    ; Place trampoline inside the first-page meta region so it stays in the
-    ; slot's executable half (W^X: upper 512KB of each slot is NX).
-    ; Meta region 0xC0..0x1FF is unused (magic at 0x00, term_ctx at 0xA0..0xC0,
-    ; app code blob starts at 0x200).
-    add rax, 0x1C0
-    mov rdi, rax
-    lea rsi, [rel l3_app_done_blob]
-    mov ecx, l3_app_done_blob_end - l3_app_done_blob
-    rep movsb
-    mov rax, rdi
-    sub rax, l3_app_done_blob_end - l3_app_done_blob
-    pop rsi
-    pop rdi
-    pop rcx
+FN_DECL l3_install_app_done_trampoline, 0, 0, FN_RET_SCALAR
+    call l3_slot_base
+    add rax, app_l3_done_trampoline - app_blob_start
     ret
 
 ; l3_copy_app_blob_to_slot - copy the built-in user blob into a slot arena
 ; EDI = slot
-l3_copy_app_blob_to_slot:
+FN_BEGIN l3_copy_app_blob_to_slot, 0, 0, FN_RET_SCALAR
     push rcx
     push rdi
     push rsi
     push r8
-    mov eax, edi
-    imul rax, APP_SLOT_SIZE
-    add rax, APP_DATA_ADDR
+    call l3_slot_base
     mov r8, rax
     mov rdi, rax
     mov rsi, [rel app_blob_base_v]
     mov rcx, [rel app_blob_size_v]
+    cmp rcx, L3_APP_BLOB_COPY_CAP
+    jbe .copy_len_ok
+    mov rcx, L3_APP_BLOB_COPY_CAP
+.copy_len_ok:
     cld
     rep movsb
     mov rax, L3_SLOT_MAGIC
@@ -206,7 +208,7 @@ l3_copy_app_blob_to_slot:
 ; l3_slot_resolve_app_ptr
 ; EDI = slot, RSI = kernel pointer inside the built-in user blob
 ; Returns: RAX = slot-local pointer, or RSI unchanged if outside blob
-l3_slot_resolve_app_ptr:
+FN_BEGIN l3_slot_resolve_app_ptr, 0, 0, FN_RET_SCALAR
     lea r8, [rel app_blob_start]
     lea r9, [rel app_blob_end]
     mov rax, rsi
@@ -218,7 +220,7 @@ l3_slot_resolve_app_ptr:
     sub rax, r8
     mov edx, edi
     imul rdx, APP_SLOT_SIZE
-    add rdx, APP_DATA_ADDR
+    add rdx, [rel l3_app_arena_base_v]
     add rax, rdx
     pop rdx
 .slot_resolve_done:
@@ -228,7 +230,7 @@ l3_slot_resolve_app_ptr:
 ; RDI = kernel callback target
 ; RSI = slot app base
 ; Returns: RAX = translated user target (or original target if no mapping applies)
-l3_translate_target:
+FN_BEGIN l3_translate_target, 0, 0, FN_RET_SCALAR
     lea r8, [rel app_blob_start]
     lea r9, [rel app_blob_end]
     mov rax, rdi
@@ -247,7 +249,7 @@ l3_translate_target:
 ; RSI = arg0 (window ptr)
 ; RDX = arg1
 ; RCX = arg2
-call_app_l3:
+FN_DECL call_app_l3, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     push rbx
@@ -268,7 +270,7 @@ call_app_l3:
     test r14, r14
     jz .slot_ready
     mov rax, [r14 + WIN_OFF_APPDATA]
-    sub rax, APP_DATA_ADDR
+    sub rax, [rel l3_app_arena_base_v]
     js .slot_zero
     shr rax, 20
     cmp eax, MAX_WINDOWS
@@ -276,8 +278,8 @@ call_app_l3:
 .slot_zero:
     xor eax, eax
 .slot_ready:
-    mov [l3_current_slot], eax
-    mov edi, eax
+    mov r11d, eax
+    mov edi, r11d
     call l3_runtime_ptr
     mov r12, rax
 
@@ -288,14 +290,13 @@ call_app_l3:
     mov [r12 + L3_RT_KERNEL_RSP], rsp
     pushfq
     pop qword [r12 + L3_RT_KERNEL_RFLAGS]
-    mov eax, [l3_current_slot]
-    imul rax, APP_SLOT_SIZE
-    add rax, APP_DATA_ADDR
+    mov edi, r11d
+    call l3_slot_base
     mov [r12 + L3_RT_APP_BASE], rax
     mov rdx, L3_SLOT_MAGIC
     cmp [rax + L3_SLOT_MAGIC_OFF], rdx
     je .translate_generic
-    mov edi, [l3_current_slot]
+    mov edi, r11d
     call l3_copy_app_blob_to_slot
 .translate_generic:
     mov rdi, r13
@@ -306,17 +307,23 @@ call_app_l3:
     mov [r12 + L3_RT_ENTRY], r13
 
     ; Ring-3 code cannot dereference the kernel window struct directly.
-    ; Mirror the current window into the slot arena and repoint arg0 there.
+    ; Build the slot-local shadow once; later callbacks reuse it.
     test r14, r14
     jz .args_ready
+    mov rax, [r12 + L3_RT_APP_BASE]
+    ; Re-sync the shadow window from the live kernel struct on every call.
+    ; Caching it on first use leaves the app reading stale x/y/w/h after the
+    ; WM moves or resizes the window (e.g. during drag).
     mov rsi, r14
-    mov rdi, [r12 + L3_RT_APP_BASE]
+    mov rdi, rax
     add rdi, L3_SHADOW_WIN_OFF
     mov rcx, WINDOW_STRUCT_SIZE / 8
     cld
     rep movsq
     mov rax, [r12 + L3_RT_APP_BASE]
     mov [rdi - WINDOW_STRUCT_SIZE + WIN_OFF_APPDATA], rax
+.shadow_ready:
+    mov rax, [r12 + L3_RT_APP_BASE]
     lea r14, [rax + L3_SHADOW_WIN_OFF]
     mov [r12 + L3_RT_ARG0], r14
 .args_ready:
@@ -335,11 +342,11 @@ call_app_l3:
     SER 13
     SER 10
 
-    mov edi, [l3_current_slot]
+    mov edi, r11d
     call l3_user_stack_top
     sub rax, 8
     push rax
-    mov edi, [l3_current_slot]
+    mov edi, r11d
     call l3_install_app_done_trampoline
     mov rdx, rax
     pop rax
@@ -368,13 +375,12 @@ call_app_l3_app_done:
     SYS_APP_DONE
     ud2
 
-call_app_l3_return:
-    mov eax, [l3_current_slot]
+FN_DECL call_app_l3_return, 0, 0, FN_RET_SCALAR
+    mov eax, [rsp]
     cmp eax, MAX_WINDOWS
     jb .ret_slot_ready
     xor eax, eax
 .ret_slot_ready:
-    mov [l3_current_slot], eax
     mov edi, eax
     call l3_runtime_ptr
     mov r12, rax
@@ -409,15 +415,9 @@ call_app_l3_return:
     ret
 
 ; --- Dummy usermode code for testing ---
-global test_usermode_proc
-test_usermode_proc:
+; auto-wrapped (FN_BEGIN emits global): global test_usermode_proc
+FN_BEGIN test_usermode_proc, 0, 0, FN_RET_SCALAR
     jmp $
-
-l3_app_done_blob:
-    mov eax, 10
-    syscall
-    ud2
-l3_app_done_blob_end:
 
 l3_test_blob:
     lea rdi, [rel .msg]
@@ -430,32 +430,12 @@ l3_test_blob_end:
 ; --- Data Sections ---
 section .data
 align 8
+l3_app_blob_copy_cap_guard: dq L3_APP_BLOB_COPY_CAP
 app_blob_base_v:     dq 0
 app_blob_end_v:      dq 0
 app_blob_size_v:     dq 0
-global l3_current_slot
-l3_current_slot:     dd -1
-align 8
-global l3_tmp_user_rip
-l3_tmp_user_rip:     dq 0
-global l3_tmp_user_rflags
-l3_tmp_user_rflags:  dq 0
-global l3_tmp_user_rsp
-l3_tmp_user_rsp:     dq 0
-global l3_tmp_syscall_num
-l3_tmp_syscall_num:  dq 0
-global l3_tmp_user_rdi
-l3_tmp_user_rdi:     dq 0
-global l3_tmp_user_rsi
-l3_tmp_user_rsi:     dq 0
-global l3_tmp_user_rdx
-l3_tmp_user_rdx:     dq 0
-global l3_tmp_user_r8
-l3_tmp_user_r8:      dq 0
-global l3_tmp_user_r9
-l3_tmp_user_r9:      dq 0
-global l3_tmp_user_r10
-l3_tmp_user_r10:     dq 0
+l3_app_arena_base_v: dq APP_DATA_ADDR
+l3_app_arena_size_v: dq (MAX_WINDOWS * APP_SLOT_SIZE)
 
 ; --- BSS Section (Always last) ---
 section .bss

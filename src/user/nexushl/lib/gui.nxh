@@ -1,0 +1,122 @@
+# NexusHL GUI library.
+#
+# This is the shared UI layer for NexusHL apps. Apps should prefer these
+# helpers over direct render_rect/render_text calls so layout, colors, and
+# widget behavior have one place to be fixed.
+#
+# Contract:
+# - Coordinates passed to ui_*_at are client-area coordinates.
+# - Coordinates passed to ui_rect/ui_text are absolute screen coordinates.
+# - Functions allocate nothing and keep no hidden widget state.
+# - All drawing is immediate-mode: draw the same controls each frame from app
+#   state, then update that state from click/key callbacks.
+
+use core
+
+# Window chrome constants mirrored from the kernel window manager.
+const UI_BORDER       = 2
+const UI_TITLEBAR     = 24
+const UI_FONT_W       = 8
+const UI_FONT_H       = 12
+const UI_LINE_H       = 14
+
+# Standard widget metrics.
+const UI_MENU_H       = 22
+const UI_MENU_PAD_X   = 6
+const UI_MENU_TEXT_Y  = 5
+const UI_DROPDOWN_PAD = 4
+const UI_ITEM_H       = 20
+const UI_CARET_W      = 2
+const UI_CARET_H      = 14
+
+# Standard colors. 0x00RRGGBB.
+const UI_COL_TEXT        = 0x00000000
+const UI_COL_TEXT_MUTED  = 0x00888888
+const UI_COL_TEXT_INVERT = 0x00FFFFFF
+const UI_COL_SURFACE     = 0x00FFFFFF
+const UI_COL_MENU        = 0x00E8E8E8
+const UI_COL_DROPDOWN    = 0x00F0F0F0
+const UI_COL_BORDER      = 0x00999999
+const UI_COL_FOCUS       = 0x00000000
+
+extern render_rect;
+extern render_text;
+
+# Read window geometry from the per-slot shadow window.
+fn ui_win_x(win) { return lq(win + WIN_X); }
+fn ui_win_y(win) { return lq(win + WIN_Y); }
+fn ui_win_w(win) { return lq(win + WIN_W); }
+fn ui_win_h(win) { return lq(win + WIN_H); }
+
+# Absolute drawing primitives. Use these for overlays and custom controls.
+fn ui_rect(x, y, w, h, color) {
+    render_rect(x, y, w, h, color);
+}
+
+fn ui_text(x, y, text, fg, bg) {
+    render_text(x, y, text, fg, bg);
+}
+
+# Client-area drawing primitives. Client origin is inside the window border
+# and below the titlebar, matching click callback coordinates.
+fn ui_rect_at(win, x, y, w, h, color) {
+    ui_rect(ui_win_x(win) + UI_BORDER + x, ui_win_y(win) + UI_TITLEBAR + y, w, h, color);
+}
+
+fn ui_text_at(win, x, y, text, fg, bg) {
+    ui_text(ui_win_x(win) + UI_BORDER + x, ui_win_y(win) + UI_TITLEBAR + y, text, fg, bg);
+}
+
+# Fill the content area below a top inset such as a menu bar.
+fn ui_fill_client_below(win, top, color) {
+    let w = ui_win_w(win) - UI_BORDER * 2;
+    let h = ui_win_h(win) - UI_TITLEBAR - top - UI_BORDER;
+    if h <= 0 { return; }
+    ui_rect_at(win, 0, top, w, h, color);
+}
+
+# Menu bar and menu labels. Use labels at fixed x positions for deterministic
+# hit testing in click handlers.
+fn ui_menu_bar(win) {
+    ui_rect_at(win, 0, 0, ui_win_w(win) - UI_BORDER * 2, UI_MENU_H, UI_COL_MENU);
+}
+
+fn ui_menu_label(win, x, text) {
+    ui_text_at(win, x, UI_MENU_TEXT_Y, text, UI_COL_TEXT, UI_COL_MENU);
+}
+
+# Dropdown surface with a one-pixel top border. Items are intentionally drawn
+# separately so click handlers can keep simple index math.
+fn ui_dropdown(win, x, y, w, item_count) {
+    ui_rect_at(win, x, y, w, item_count * UI_ITEM_H + UI_DROPDOWN_PAD, UI_COL_DROPDOWN);
+    ui_rect_at(win, x, y, w, 1, UI_COL_BORDER);
+}
+
+fn ui_dropdown_item(win, x, y, index, text) {
+    ui_text_at(win, x + 8, y + UI_DROPDOWN_PAD + index * UI_ITEM_H, text, UI_COL_TEXT, UI_COL_DROPDOWN);
+}
+
+# Text insertion caret. It is a drawn rectangle instead of a text glyph so it
+# aligns with editor columns and can be blinked later by the library when a
+# stable time source is exposed to NexusHL.
+fn ui_caret(win, x, y) {
+    ui_rect_at(win, x, y, UI_CARET_W, UI_CARET_H, UI_COL_FOCUS);
+}
+
+fn ui_ticks() {
+    return syscall(SYS_TICKS);
+}
+
+fn ui_caret_blink(win, x, y) {
+    let phase = (ui_ticks() / 30) % 2;
+    if phase == 0 {
+        ui_caret(win, x, y);
+    }
+}
+
+# Basic text input field. Caller owns the buffer and cursor; this only draws.
+fn ui_input(win, x, y, w, text, cursor_col) {
+    ui_rect_at(win, x, y, w, 18, UI_COL_SURFACE);
+    ui_text_at(win, x + 4, y + 3, text, UI_COL_TEXT, UI_COL_SURFACE);
+    ui_caret_blink(win, x + 4 + cursor_col * UI_FONT_W, y + 2);
+}

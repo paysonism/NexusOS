@@ -6,6 +6,7 @@
 %define STAGE2_BUILD
 bits 16
 org 0x7E00
+%include "src/include/boot_memory.inc"
 
 stage2_start:
     dw 0x4E58               ; 'NX' magic number (verified by MBR)
@@ -521,8 +522,6 @@ msg_a20_ok:  db 'A20 ', 0
 msg_e820_ok: db 'E820 ', 0
 msg_kern_ok: db 'Kern ', 0
 msg_load_err: db 'LoadErr', 0
-
-BOOT_DRIVE_ADDR equ 0x0600
 
 ; ============================================================================
 ; Include boot helper files

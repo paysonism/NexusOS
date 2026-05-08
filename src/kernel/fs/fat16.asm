@@ -8,13 +8,16 @@ bits 64
 
 section .text
 
-global fat16_init
+; auto-wrapped (FN_BEGIN emits global): global fat16_init
 global fat16_list_dir
-global fat16_read_file
-global fat16_write_file
-global fat16_get_file_size
-global fat16_file_count
-global fat16_get_entry
+; auto-wrapped (FN_BEGIN emits global): global fat16_read_file
+; auto-wrapped (FN_BEGIN emits global): global fat16_write_file
+; auto-wrapped (FN_BEGIN emits global): global fat16_delete_entry
+; auto-wrapped (FN_BEGIN emits global): global fat16_rename_entry
+; auto-wrapped (FN_BEGIN emits global): global fat16_mkdir
+; auto-wrapped (FN_BEGIN emits global): global fat16_get_file_size
+; auto-wrapped (FN_BEGIN emits global): global fat16_file_count
+; auto-wrapped (FN_BEGIN emits global): global fat16_get_entry
 
 extern ata_read_sectors
 extern ata_write_sectors
@@ -22,6 +25,9 @@ extern ata_drive_sel
 
 ; The FAT16 partition starts at this LBA sector on the disk image
 FAT16_PART_LBA  equ 320           ; After MBR + Stage2 + Kernel (sector 320 = byte 163840)
+FAT16_FAT_CACHE_SECTORS equ 128
+FAT16_ROOT_CACHE_SECTORS equ 32
+FAT16_MAX_FAT_ENTRIES equ (FAT16_FAT_CACHE_SECTORS * 256)
 
 ; FAT16 BPB offsets (from start of boot sector)
 BPB_BYTES_PER_SECT  equ 11        ; word
@@ -71,7 +77,7 @@ FAT16_DIR_CACHE     equ 0xD31000   ; Current directory listing cache
 ; fat16_init - Initialize FAT16 driver, read BPB and cache FAT + root dir
 ; Returns: eax = 0 on success
 ; ============================================================================
-fat16_init:
+FN_BEGIN fat16_init, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
@@ -113,17 +119,41 @@ fat16_init:
     ; Parse BPB
     mov rbx, FAT16_SECTOR_BUF
     movzx eax, word [rbx + BPB_BYTES_PER_SECT]
+    cmp eax, 512
+    jne .init_fail
     mov [fat16_bytes_per_sect], ax
     movzx eax, byte [rbx + BPB_SECT_PER_CLUS]
+    test eax, eax
+    jz .init_fail
+    cmp eax, 128
+    ja .init_fail
     mov [fat16_sect_per_clus], al
     movzx eax, word [rbx + BPB_RESERVED_SECTS]
+    test eax, eax
+    jz .init_fail
     mov [fat16_reserved_sects], ax
     movzx eax, byte [rbx + BPB_NUM_FATS]
+    cmp eax, 1
+    jb .init_fail
+    cmp eax, 2
+    ja .init_fail
     mov [fat16_num_fats], al
     movzx eax, word [rbx + BPB_ROOT_ENTRIES]
+    test eax, eax
+    jz .init_fail
+    cmp eax, FAT16_ROOT_CACHE_SECTORS * 16
+    ja .init_fail
     mov [fat16_root_entries], ax
     movzx eax, word [rbx + BPB_FAT_SIZE16]
+    test eax, eax
+    jz .init_fail
+    cmp eax, FAT16_FAT_CACHE_SECTORS
+    ja .init_fail
     mov [fat16_fat_size], ax
+    movzx eax, word [rbx + BPB_TOTAL_SECTS16]
+    test eax, eax
+    jz .init_fail
+    mov [fat16_total_sects], eax
 
     ; Calculate key offsets (all relative to partition start)
     ; FAT start = reserved sectors
@@ -134,7 +164,11 @@ fat16_init:
     movzx ecx, byte [fat16_num_fats]
     movzx edx, word [fat16_fat_size]
     imul ecx, edx
+    jo .init_fail
     add eax, ecx
+    jc .init_fail
+    cmp eax, [fat16_total_sects]
+    jae .init_fail
     mov [fat16_root_start_sect], eax
 
     ; Root dir sectors = (root_entries * 32 + 511) / 512
@@ -146,18 +180,28 @@ fat16_init:
 
     ; Data region start = root_start + root_sectors
     add eax, ecx
+    jc .init_fail
+    cmp eax, [fat16_total_sects]
+    jae .init_fail
     mov [fat16_data_start_sect], eax
+    mov edx, [fat16_total_sects]
+    sub edx, eax
+    movzx ecx, byte [fat16_sect_per_clus]
+    mov eax, edx
+    xor edx, edx
+    div ecx
+    add eax, 2
+    cmp eax, FAT16_MAX_FAT_ENTRIES
+    jbe .fat_entries_ok
+    mov eax, FAT16_MAX_FAT_ENTRIES
+.fat_entries_ok:
+    mov [fat16_fat_entries], eax
 
     ; Cache the FAT table
     mov edi, [fat16_fat_start_sect]
     add edi, FAT16_PART_LBA
     mov rsi, FAT16_FAT_CACHE
     movzx edx, word [fat16_fat_size]
-    ; Limit to 128 sectors (64KB) for safety
-    cmp edx, 128
-    jle .fat_size_ok
-    mov edx, 128
-.fat_size_ok:
     call ata_read_sectors
 
     ; Cache the root directory
@@ -165,6 +209,8 @@ fat16_init:
     add edi, FAT16_PART_LBA
     mov rsi, FAT16_ROOT_CACHE
     mov edx, [fat16_root_sectors]
+    cmp edx, FAT16_ROOT_CACHE_SECTORS
+    ja .init_fail
     call ata_read_sectors
 
     ; Count files in root dir
@@ -219,7 +265,7 @@ fat16_count_root_files:
 ; fat16_file_count - Return number of files in root directory
 ; Returns: eax = file count
 ; ============================================================================
-fat16_file_count:
+FN_BEGIN fat16_file_count, 0, 0, FN_RET_SCALAR
     mov eax, [fat16_file_count_val]
     ret
 
@@ -228,7 +274,7 @@ fat16_file_count:
 ; edi = index (0-based)
 ; Returns: rax = pointer to 32-byte dir entry, or 0 if not found
 ; ============================================================================
-fat16_get_entry:
+FN_BEGIN fat16_get_entry, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
@@ -280,7 +326,7 @@ fat16_get_entry:
 ; edx = max bytes to read
 ; Returns: eax = bytes read, or -1 on error
 ; ============================================================================
-fat16_read_file:
+FN_BEGIN fat16_read_file, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
@@ -309,13 +355,19 @@ fat16_read_file:
 
     xor ecx, ecx           ; bytes read so far
     movzx r8d, byte [fat16_sect_per_clus]
+    mov r10d, [fat16_fat_entries]
 
 .rf_cluster_loop:
+    test r10d, r10d
+    jz .rf_done
+    dec r10d
     ; Check cluster validity
     cmp ebx, 2
     jl .rf_done
     cmp ebx, 0xFFF8
     jge .rf_done
+    cmp ebx, [fat16_fat_entries]
+    jae .rf_done
 
     ; Calculate LBA for this cluster
     ; LBA = data_start + (cluster - 2) * sect_per_clus + PART_LBA
@@ -323,21 +375,42 @@ fat16_read_file:
     sub eax, 2
     movzx edx, byte [fat16_sect_per_clus]
     imul eax, edx
+    jo .rf_done
     add eax, [fat16_data_start_sect]
+    jc .rf_done
+    mov edx, eax
+    movzx r11d, byte [fat16_sect_per_clus]
+    add edx, r11d
+    jc .rf_done
+    cmp edx, [fat16_total_sects]
+    ja .rf_done
     add eax, FAT16_PART_LBA
 
-    ; Read all sectors in this cluster
+    ; Read the cluster into a kernel scratch buffer, then copy only the
+    ; requested bytes so a final partial read cannot overwrite the caller.
     push rcx
     mov edi, eax
-    lea rsi, [r13 + rcx]   ; dest = buffer + bytes_read
+    mov rsi, FAT16_FILE_BUF
     movzx edx, byte [fat16_sect_per_clus]
     call ata_read_sectors
     pop rcx
 
-    ; Update bytes read
     movzx eax, byte [fat16_sect_per_clus]
     shl eax, 9             ; * 512
-    add ecx, eax
+    mov r11d, r14d
+    sub r11d, ecx           ; remaining requested bytes
+    cmp r11d, eax
+    jbe .rf_copy_len_ok
+    mov r11d, eax
+.rf_copy_len_ok:
+    push rcx
+    lea rdi, [r13 + rcx]
+    mov rsi, FAT16_FILE_BUF
+    mov ecx, r11d
+    cld
+    rep movsb
+    pop rcx
+    add ecx, r11d
 
     ; Check if we've read enough
     cmp ecx, r14d
@@ -379,7 +452,7 @@ fat16_read_file:
 ; edx = number of bytes to write
 ; Returns: eax = 0 on success, -1 on error
 ; ============================================================================
-fat16_write_file:
+FN_BEGIN fat16_write_file, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
@@ -464,11 +537,17 @@ fat16_write_file:
 
     ; Free existing cluster chain
     movzx ebx, word [r15 + DIR_FIRST_CLUS_LO]
+    mov r9d, [fat16_fat_entries]
 .wf_free_chain:
+    test r9d, r9d
+    jz .wf_new_entry
+    dec r9d
     cmp ebx, 2
     jl .wf_new_entry
     cmp ebx, 0xFFF8
     jge .wf_new_entry
+    cmp ebx, [fat16_fat_entries]
+    jae .wf_new_entry
     mov eax, ebx
     shl eax, 1
     movzx ebx, word [FAT16_FAT_CACHE + rax]
@@ -502,8 +581,7 @@ fat16_write_file:
     ; Find first free cluster
     xor ebx, ebx           ; first cluster (will store here)
     mov ecx, 2             ; start searching from cluster 2
-    movzx r8d, word [fat16_fat_size]
-    shl r8d, 8             ; fat_size * 256 = max entries (512 bytes / 2 per entry * fat_size)
+    mov r8d, [fat16_fat_entries]
 
 .wf_find_first_free:
     cmp ecx, r8d
@@ -525,13 +603,30 @@ fat16_write_file:
     mov r10d, ebx           ; current cluster
 
 .wf_write_cluster:
-    ; Write this cluster's data
+    cmp r10d, [fat16_fat_entries]
+    jae .wf_error_full
+    ; Write this cluster's data. Final partial clusters are padded from a
+    ; zero-filled kernel scratch buffer so the disk write never overreads the
+    ; caller's source buffer.
     mov eax, r10d
     sub eax, 2
     movzx edx, byte [fat16_sect_per_clus]
     imul eax, edx
+    jo .wf_error_full
     add eax, [fat16_data_start_sect]
+    jc .wf_error_full
+    mov edx, eax
+    movzx r11d, byte [fat16_sect_per_clus]
+    add edx, r11d
+    jc .wf_error_full
+    cmp edx, [fat16_total_sects]
+    ja .wf_error_full
     add eax, FAT16_PART_LBA
+
+    movzx r11d, byte [fat16_sect_per_clus]
+    shl r11d, 9
+    cmp r8d, r11d
+    jb .wf_write_partial_cluster
 
     push rcx
     mov edi, eax
@@ -541,17 +636,47 @@ fat16_write_file:
     pop rcx
 
     ; Advance source pointer
-    movzx eax, byte [fat16_sect_per_clus]
-    shl eax, 9
-    add r9, rax
-    sub r8d, eax
+    add r9, r11
+    sub r8d, r11d
     jle .wf_last_cluster     ; no more data
+    jmp .wf_alloc_next
+
+.wf_write_partial_cluster:
+    push rax
+    push rcx
+    push rdi
+    push rsi
+    mov rdi, FAT16_FILE_BUF
+    mov ecx, r11d
+    xor eax, eax
+    cld
+    rep stosb
+    mov rdi, FAT16_FILE_BUF
+    mov rsi, r9
+    mov ecx, r8d
+    rep movsb
+    pop rsi
+    pop rdi
+    pop rcx
+    pop rax
+
+    push rcx
+    mov edi, eax
+    mov rsi, FAT16_FILE_BUF
+    movzx edx, byte [fat16_sect_per_clus]
+    call ata_write_sectors
+    pop rcx
+
+    add r9, r8
+    xor r8d, r8d
+    jmp .wf_last_cluster
 
     ; Allocate next cluster
+.wf_alloc_next:
     mov ecx, r10d
     inc ecx                  ; start search after current
 .wf_find_next:
-    cmp ecx, 0xFFF0
+    cmp ecx, [fat16_fat_entries]
     jge .wf_error_full
     mov eax, ecx
     shl eax, 1
@@ -602,12 +727,9 @@ fat16_write_file:
     call ata_write_sectors
 .wf_skip_fat2:
 
-    ; Write updated root directory back to disk
-    mov edi, [fat16_root_start_sect]
-    add edi, FAT16_PART_LBA
-    mov rsi, FAT16_ROOT_CACHE
-    mov edx, [fat16_root_sectors]
-    call ata_write_sectors
+    ; Write updated current directory back to disk. The cache may contain the
+    ; root directory or a loaded subdirectory.
+    call fat16_flush_current_dir
 
     ; Recount files
     call fat16_count_root_files
@@ -631,6 +753,472 @@ fat16_write_file:
     pop rbx
     ret
 
+; ============================================================================
+; fat16_flush_fats - Write cached FAT table to every on-disk FAT copy
+; Returns: eax = 0 on success
+; ============================================================================
+FN_BEGIN fat16_flush_fats, 0, 0, FN_RET_SCALAR
+    push rdi
+    push rsi
+    push rdx
+    push rax
+
+    mov edi, [fat16_fat_start_sect]
+    add edi, FAT16_PART_LBA
+    mov rsi, FAT16_FAT_CACHE
+    movzx edx, word [fat16_fat_size]
+    cmp edx, FAT16_FAT_CACHE_SECTORS
+    jbe .ff_fat1_len_ok
+    mov edx, FAT16_FAT_CACHE_SECTORS
+.ff_fat1_len_ok:
+    call ata_write_sectors
+
+    cmp byte [fat16_num_fats], 2
+    jl .ff_done
+    mov edi, [fat16_fat_start_sect]
+    movzx eax, word [fat16_fat_size]
+    add edi, eax
+    add edi, FAT16_PART_LBA
+    mov rsi, FAT16_FAT_CACHE
+    movzx edx, word [fat16_fat_size]
+    cmp edx, FAT16_FAT_CACHE_SECTORS
+    jbe .ff_fat2_len_ok
+    mov edx, FAT16_FAT_CACHE_SECTORS
+.ff_fat2_len_ok:
+    call ata_write_sectors
+
+.ff_done:
+    pop rax
+    xor eax, eax
+    pop rdx
+    pop rsi
+    pop rdi
+    ret
+
+; ============================================================================
+; fat16_flush_current_dir - Write the current directory cache back to disk
+; Returns: eax = 0 on success, -1 on unsupported/invalid current dir
+; ============================================================================
+FN_BEGIN fat16_flush_current_dir, 0, 0, FN_RET_SCALAR
+    push rbx
+    push rdi
+    push rsi
+    push rdx
+    push r8
+    push r9
+
+    movzx ebx, word [fat16_cur_dir_cluster]
+    test ebx, ebx
+    jnz .fcd_subdir
+
+    mov edi, [fat16_root_start_sect]
+    add edi, FAT16_PART_LBA
+    mov rsi, FAT16_ROOT_CACHE
+    mov edx, [fat16_root_sectors]
+    cmp edx, FAT16_ROOT_CACHE_SECTORS
+    ja .fcd_fail
+    call ata_write_sectors
+    xor eax, eax
+    jmp .fcd_done
+
+.fcd_subdir:
+    cmp ebx, 2
+    jb .fcd_fail
+    cmp ebx, 0xFFF8
+    jae .fcd_fail
+    cmp ebx, [fat16_fat_entries]
+    jae .fcd_fail
+
+    mov r9d, ebx
+    mov eax, r9d
+    sub eax, 2
+    movzx edx, byte [fat16_sect_per_clus]
+    imul eax, edx
+    jo .fcd_fail
+    add eax, [fat16_data_start_sect]
+    jc .fcd_fail
+    mov r8d, eax
+    movzx edx, byte [fat16_sect_per_clus]
+    add r8d, edx
+    jc .fcd_fail
+    cmp r8d, [fat16_total_sects]
+    ja .fcd_fail
+    add eax, FAT16_PART_LBA
+    mov edi, eax
+    mov rsi, FAT16_ROOT_CACHE
+    movzx edx, byte [fat16_sect_per_clus]
+    call ata_write_sectors
+    xor eax, eax
+    jmp .fcd_done
+
+.fcd_fail:
+    mov eax, -1
+.fcd_done:
+    pop r9
+    pop r8
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbx
+    ret
+
+; ============================================================================
+; fat16_delete_entry - Delete a file or empty directory from the current view
+; rdi = pointer to 32-byte directory entry from fat16_get_entry/SYS_FS_ENTRY
+; Returns: eax = 0 on success, -1 on error
+; ============================================================================
+FN_BEGIN fat16_delete_entry, 0, 0, FN_RET_SCALAR
+    push rbx
+    push r12
+    push r13
+
+    mov r12, rdi
+    cmp byte [r12], 0
+    je .de_error
+    cmp byte [r12], 0xE5
+    je .de_error
+
+    mov al, [r12 + DIR_ATTR]
+    test al, ATTR_DIRECTORY
+    jz .de_free_chain
+    movzx ebx, word [r12 + DIR_FIRST_CLUS_LO]
+    test ebx, ebx
+    jz .de_mark_deleted
+    call fat16_dir_cluster_is_empty
+    test eax, eax
+    jz .de_error
+
+.de_free_chain:
+    movzx ebx, word [r12 + DIR_FIRST_CLUS_LO]
+    mov r13d, [fat16_fat_entries]
+.de_chain_loop:
+    test r13d, r13d
+    jz .de_mark_deleted
+    dec r13d
+    cmp ebx, 2
+    jb .de_mark_deleted
+    cmp ebx, 0xFFF8
+    jae .de_mark_deleted
+    cmp ebx, [fat16_fat_entries]
+    jae .de_mark_deleted
+    mov eax, ebx
+    shl eax, 1
+    movzx ebx, word [FAT16_FAT_CACHE + rax]
+    mov word [FAT16_FAT_CACHE + rax], 0
+    jmp .de_chain_loop
+
+.de_mark_deleted:
+    mov byte [r12], 0xE5
+    call fat16_flush_fats
+    call fat16_flush_current_dir
+    call fat16_count_root_files
+    xor eax, eax
+    jmp .de_done
+
+.de_error:
+    mov eax, -1
+.de_done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; ============================================================================
+; fat16_rename_entry - Rename an entry in the current directory
+; rdi = directory entry pointer, rsi = 11-byte FAT 8.3 name
+; Returns: eax = 0 on success, -1 on error/duplicate name
+; ============================================================================
+FN_BEGIN fat16_rename_entry, 0, 0, FN_RET_SCALAR
+    push rbx
+    push rcx
+    push rdi
+    push rsi
+    push r12
+    push r13
+
+    mov r12, rdi
+    mov r13, rsi
+    cmp byte [r12], 0
+    je .ren_error
+    cmp byte [r12], 0xE5
+    je .ren_error
+
+    mov rbx, FAT16_ROOT_CACHE
+    xor edx, edx
+    movzx r8d, word [fat16_root_entries]
+.ren_dup_loop:
+    cmp edx, r8d
+    jge .ren_copy
+    cmp byte [rbx], 0
+    je .ren_copy
+    cmp byte [rbx], 0xE5
+    je .ren_dup_next
+    cmp rbx, r12
+    je .ren_dup_next
+    push rdi
+    push rsi
+    push rcx
+    mov rdi, rbx
+    mov rsi, r13
+    mov ecx, 11
+    repe cmpsb
+    pop rcx
+    pop rsi
+    pop rdi
+    je .ren_error
+.ren_dup_next:
+    add rbx, DIR_ENTRY_SIZE
+    inc edx
+    jmp .ren_dup_loop
+
+.ren_copy:
+    mov rdi, r12
+    mov rsi, r13
+    mov ecx, 11
+    cld
+    rep movsb
+    call fat16_flush_current_dir
+    xor eax, eax
+    jmp .ren_done
+
+.ren_error:
+    mov eax, -1
+.ren_done:
+    pop r13
+    pop r12
+    pop rsi
+    pop rdi
+    pop rcx
+    pop rbx
+    ret
+
+; ============================================================================
+; fat16_mkdir - Create a single-cluster directory in the current directory
+; rdi = pointer to 11-byte FAT 8.3 directory name
+; Returns: eax = 0 on success, -1 on error
+; ============================================================================
+FN_BEGIN fat16_mkdir, 0, 0, FN_RET_SCALAR
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov r12, rdi
+    xor r13d, r13d          ; free dir-entry slot
+
+    mov rbx, FAT16_ROOT_CACHE
+    xor ecx, ecx
+    movzx r8d, word [fat16_root_entries]
+.md_scan_loop:
+    cmp ecx, r8d
+    jge .md_scan_done
+    cmp byte [rbx], 0
+    je .md_found_free
+    cmp byte [rbx], 0xE5
+    je .md_found_free
+
+    push rcx
+    push rdi
+    push rsi
+    mov rdi, rbx
+    mov rsi, r12
+    mov ecx, 11
+    repe cmpsb
+    pop rsi
+    pop rdi
+    pop rcx
+    je .md_error
+
+    add rbx, DIR_ENTRY_SIZE
+    inc ecx
+    jmp .md_scan_loop
+
+.md_found_free:
+    test r13, r13
+    jnz .md_skip_free
+    mov r13, rbx
+.md_skip_free:
+    cmp byte [rbx], 0
+    je .md_scan_done
+    add rbx, DIR_ENTRY_SIZE
+    inc ecx
+    jmp .md_scan_loop
+
+.md_scan_done:
+    test r13, r13
+    jz .md_error
+
+    mov ecx, 2
+    mov r8d, [fat16_fat_entries]
+.md_find_cluster:
+    cmp ecx, r8d
+    jge .md_error
+    mov eax, ecx
+    shl eax, 1
+    cmp word [FAT16_FAT_CACHE + rax], 0
+    je .md_cluster_found
+    inc ecx
+    jmp .md_find_cluster
+
+.md_cluster_found:
+    mov r14d, ecx
+    mov eax, r14d
+    shl eax, 1
+    mov word [FAT16_FAT_CACHE + rax], 0xFFFF
+
+    ; Clear one directory cluster and seed "." and ".." entries.
+    mov rdi, FAT16_FILE_BUF
+    movzx ecx, byte [fat16_sect_per_clus]
+    shl ecx, 9
+    xor eax, eax
+    cld
+    rep stosb
+
+    mov rdi, FAT16_FILE_BUF
+    mov byte [rdi + 0], '.'
+    mov ecx, 10
+    mov rdi, FAT16_FILE_BUF + 1
+    mov al, ' '
+    rep stosb
+    mov byte [abs FAT16_FILE_BUF + DIR_ATTR], ATTR_DIRECTORY
+    mov word [abs FAT16_FILE_BUF + DIR_FIRST_CLUS_LO], r14w
+
+    mov rdi, FAT16_FILE_BUF + DIR_ENTRY_SIZE
+    mov byte [rdi + 0], '.'
+    mov byte [rdi + 1], '.'
+    mov ecx, 9
+    mov rdi, FAT16_FILE_BUF + DIR_ENTRY_SIZE + 2
+    mov al, ' '
+    rep stosb
+    mov byte [abs FAT16_FILE_BUF + DIR_ENTRY_SIZE + DIR_ATTR], ATTR_DIRECTORY
+    mov ax, [fat16_cur_dir_cluster]
+    mov word [abs FAT16_FILE_BUF + DIR_ENTRY_SIZE + DIR_FIRST_CLUS_LO], ax
+
+    mov eax, r14d
+    sub eax, 2
+    movzx edx, byte [fat16_sect_per_clus]
+    imul eax, edx
+    jo .md_error
+    add eax, [fat16_data_start_sect]
+    jc .md_error
+    mov r15d, eax
+    movzx edx, byte [fat16_sect_per_clus]
+    add r15d, edx
+    jc .md_error
+    cmp r15d, [fat16_total_sects]
+    ja .md_error
+    add eax, FAT16_PART_LBA
+    mov edi, eax
+    mov rsi, FAT16_FILE_BUF
+    movzx edx, byte [fat16_sect_per_clus]
+    call ata_write_sectors
+
+    mov rdi, r13
+    mov rsi, r12
+    mov ecx, 11
+    cld
+    rep movsb
+    mov byte [r13 + DIR_ATTR], ATTR_DIRECTORY
+    mov word [r13 + DIR_FIRST_CLUS_HI], 0
+    mov word [r13 + DIR_FIRST_CLUS_LO], r14w
+    mov dword [r13 + DIR_FILE_SIZE], 0
+
+    call fat16_flush_fats
+    call fat16_flush_current_dir
+    call fat16_count_root_files
+    xor eax, eax
+    jmp .md_done
+
+.md_error:
+    mov eax, -1
+.md_done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
+
+; EBX=directory cluster. Returns eax=1 if it contains only "."/".." or empty.
+fat16_dir_cluster_is_empty:
+    push rbx
+    push rcx
+    push rdi
+    push rsi
+    push r8
+    push r9
+
+    cmp ebx, 2
+    jb .dce_fail
+    cmp ebx, 0xFFF8
+    jae .dce_fail
+    cmp ebx, [fat16_fat_entries]
+    jae .dce_fail
+
+    mov eax, ebx
+    sub eax, 2
+    movzx edx, byte [fat16_sect_per_clus]
+    imul eax, edx
+    jo .dce_fail
+    add eax, [fat16_data_start_sect]
+    jc .dce_fail
+    mov r8d, eax
+    movzx edx, byte [fat16_sect_per_clus]
+    add r8d, edx
+    jc .dce_fail
+    cmp r8d, [fat16_total_sects]
+    ja .dce_fail
+    add eax, FAT16_PART_LBA
+    mov edi, eax
+    mov rsi, FAT16_FILE_BUF
+    movzx edx, byte [fat16_sect_per_clus]
+    call ata_read_sectors
+
+    mov rdi, FAT16_FILE_BUF
+    movzx ecx, byte [fat16_sect_per_clus]
+    shl ecx, 4              ; sectors * 512 / 32 entries
+.dce_loop:
+    test ecx, ecx
+    jz .dce_empty
+    cmp byte [rdi], 0
+    je .dce_empty
+    cmp byte [rdi], 0xE5
+    je .dce_next
+    cmp byte [rdi], '.'
+    jne .dce_fail
+    mov al, [rdi + 1]
+    cmp al, ' '
+    je .dce_next
+    cmp al, '.'
+    jne .dce_fail
+.dce_next:
+    add rdi, DIR_ENTRY_SIZE
+    dec ecx
+    jmp .dce_loop
+
+.dce_empty:
+    mov eax, 1
+    jmp .dce_done
+.dce_fail:
+    xor eax, eax
+.dce_done:
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rcx
+    pop rbx
+    ret
+
 
 
 ; ============================================================================
@@ -638,8 +1226,8 @@ fat16_write_file:
 ; ax = cluster number (0 = root)
 ; Returns: eax = 0 on success
 ; ============================================================================
-global fat16_change_dir
-fat16_change_dir:
+; auto-wrapped (FN_BEGIN emits global): global fat16_change_dir
+FN_BEGIN fat16_change_dir, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
@@ -648,6 +1236,7 @@ fat16_change_dir:
     push r8
     push r9
     push r10
+    push r11
 
     movzx ebx, ax          ; cluster
     mov [fat16_cur_dir_cluster], bx
@@ -661,6 +1250,8 @@ fat16_change_dir:
     add edi, FAT16_PART_LBA
     mov rsi, FAT16_ROOT_CACHE
     mov edx, [fat16_root_sectors]
+    cmp edx, FAT16_ROOT_CACHE_SECTORS
+    ja .cd_fail
     call ata_read_sectors
     
     ; Reset file count
@@ -679,19 +1270,33 @@ fat16_change_dir:
     
     mov rsi, FAT16_ROOT_CACHE ; Dest
     xor r10d, r10d            ; Total bytes read
+    mov r11d, [fat16_fat_entries]
     
 .cd_loop:
+    test r11d, r11d
+    jz .cd_finish
+    dec r11d
     cmp ebx, 2
     jl .cd_finish
     cmp ebx, 0xFFF8
     jge .cd_finish
+    cmp ebx, [fat16_fat_entries]
+    jae .cd_finish
     
     ; Read cluster
     mov eax, ebx
     sub eax, 2
     movzx edx, byte [fat16_sect_per_clus]
     imul eax, edx
+    jo .cd_finish
     add eax, [fat16_data_start_sect]
+    jc .cd_finish
+    mov edx, eax
+    movzx r9d, byte [fat16_sect_per_clus]
+    add edx, r9d
+    jc .cd_finish
+    cmp edx, [fat16_total_sects]
+    ja .cd_finish
     add eax, FAT16_PART_LBA
     
     mov edi, eax
@@ -724,6 +1329,7 @@ fat16_change_dir:
     xor eax, eax
 
 .cd_done:
+    pop r11
     pop r10
 
     pop r9
@@ -735,33 +1341,25 @@ fat16_change_dir:
     pop rbx
     ret
 
+.cd_fail:
+    mov eax, -1
+    jmp .cd_done
+
 ; ============================================================================
 ; fat16_get_file_size - Get file size from directory entry
 ; rdi = pointer to directory entry
 ; Returns: eax = file size in bytes
 ; ============================================================================
-fat16_get_file_size:
+FN_BEGIN fat16_get_file_size, 0, 0, FN_RET_SCALAR
     mov eax, [rdi + DIR_FILE_SIZE]
     ret
 
 ; ============================================================================
 ; fat16_sync_root - Write root directory cache to disk
 ; ============================================================================
-global fat16_sync_root
-fat16_sync_root:
-    push rdi
-    push rsi
-    push rdx
-    
-    mov edi, [fat16_root_start_sect]
-    add edi, FAT16_PART_LBA
-    mov rsi, FAT16_ROOT_CACHE
-    mov edx, [fat16_root_sectors]
-    call ata_write_sectors
-    
-    pop rdx
-    pop rsi
-    pop rdi
+; auto-wrapped (FN_BEGIN emits global): global fat16_sync_root
+FN_BEGIN fat16_sync_root, 0, 0, FN_RET_SCALAR
+    call fat16_flush_current_dir
     ret
 
 ; ============================================================================
@@ -779,6 +1377,8 @@ fat16_fat_start_sect  dd 0
 fat16_root_start_sect dd 0
 fat16_root_sectors    dd 0
 fat16_data_start_sect dd 0
+fat16_total_sects     dd 0
+fat16_fat_entries     dd 0
 fat16_file_count_val  dd 0
 fat16_cur_dir_cluster dw 0
 
@@ -786,8 +1386,8 @@ fat16_cur_dir_cluster dw 0
 ; ============================================================================
 ; fat16_debug_dump_root - Dump details about FAT16 init to buffer
 ; ============================================================================
-global fat16_debug_dump_root
-fat16_debug_dump_root:
+; auto-wrapped (FN_BEGIN emits global): global fat16_debug_dump_root
+FN_BEGIN fat16_debug_dump_root, 0, 0, FN_RET_SCALAR
     push rdi
     push rsi
     push rax

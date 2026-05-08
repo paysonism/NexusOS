@@ -118,6 +118,21 @@ app_sys_fs_sync_root:
     syscall
     ret
 
+app_sys_fs_delete:
+    mov rax, 19
+    syscall
+    ret
+
+app_sys_fs_rename:
+    mov rax, 20
+    syscall
+    ret
+
+app_sys_fs_mkdir:
+    mov rax, 21
+    syscall
+    ret
+
 app_sys_wm_close_window:
     mov rax, 15
     syscall
@@ -141,6 +156,9 @@ app_sys_cursor_init:
 %xdefine fat16_change_dir app_sys_fs_change_dir
 %xdefine fat16_write_file app_sys_fs_write_file
 %xdefine fat16_sync_root app_sys_fs_sync_root
+%xdefine fat16_delete_entry app_sys_fs_delete
+%xdefine fat16_rename_entry app_sys_fs_rename
+%xdefine fat16_mkdir app_sys_fs_mkdir
 %xdefine wm_close_window app_sys_wm_close_window
 %xdefine display_set_mode app_sys_display_set_mode
 %xdefine cursor_init app_sys_cursor_init

@@ -9,6 +9,7 @@
 
 %include "constants.inc"
 %include "syscall_user.inc"
+%include "nexus_fs.inc"
 
 ; Callback ABI
 ; ------------

@@ -5,6 +5,8 @@
 bits 64
 default rel
 
+%include "src/include/boot_memory.inc"
+
 ; --- PE image layout ---
 %define HDR_SZ       0x200
 %define TEXT_RAW     0x10000
@@ -46,13 +48,12 @@ default rel
 %define FP_CLOSE     16
 %define FP_READ      32
 
-; --- Physical memory map ---
-%define VBE_INFO     0x9000
-%define PT_BASE      0x70000
-%define KERN_DEST    0x100000
-%define KERN_STACK   0x200000
-%define APPS_DEST    0x2000000          ; APPS.BIN loaded here (32MB)
-%define APPS_MAX_SZ  0x100000           ; 1MB cap for app blob
+; --- Physical memory aliases ---
+%define VBE_INFO     VBE_INFO_ADDR
+%define PT_BASE      PAGE_TABLE_ADDR
+%define KERN_DEST    KERNEL_LOAD_ADDR
+%define KERN_STACK   KERNEL_STACK_TOP
+%define APPS_MAX_SZ  APPS_BLOB_MAX_SIZE
 
 ; --- UCS-2 string macro ---
 %macro ustr 1+
@@ -226,6 +227,9 @@ _start:
     rep stosd
 .gop_done:
 
+    ; === S1.25: Allocate dynamic boot-owned buffers ===
+    call alloc_boot_regions
+
     ; === S1.5: Locate EFI_SIMPLE_POINTER_PROTOCOL and save for kernel ===
     call locate_spp
 
@@ -373,9 +377,9 @@ claim_pages:
       call rax
     %endmacro
 
-    DO_CLAIM 0x9000,     1          ; VBE info block
+    DO_CLAIM VBE_INFO,   1          ; Boot info block
     DO_CLAIM PT_BASE,    9          ; Page tables (PML4+PDPT0+PDPT1+PD0+PT0+4 app PTs)
-    DO_CLAIM 0x8000,     1          ; Trampoline
+    DO_CLAIM SMP_TRAMPOLINE_ADDR, 1 ; Trampoline
     ; NOTE: Do NOT claim KERN_DEST (0x100000) here — UEFI loaded our own
     ; PE image at ImageBase=0x100000.  Claiming it could corrupt memory
     ; protections on our code/data/stack while we're still executing.
@@ -383,6 +387,52 @@ claim_pages:
     DO_CLAIM KERN_STACK, 16         ; Kernel stack + IDT space
 
     add rsp, 32
+    pop rbx
+    ret
+
+; ============================================================================
+; ALLOC_BOOT_REGIONS - allocate variable physical regions and publish boot info
+; ============================================================================
+alloc_boot_regions:
+    push rbx
+    sub rsp, 40
+
+    mov qword [abs VBE_INFO + VBE_BACKBUF_OFF], BACK_BUFFER_ADDR
+    mov qword [abs VBE_INFO + VBE_BACKBUF_SIZE_OFF], BOOT_BACK_BUFFER_SIZE
+    mov qword [abs VBE_INFO + VBE_APP_ARENA_BASE_OFF], APP_DATA_ADDR
+    mov qword [abs VBE_INFO + VBE_APP_ARENA_SIZE_OFF], (APP_SLOT_SIZE * 8)
+
+    ; App arena uses 2MB PDE permissions today, so keep it 2MB-aligned.
+    mov qword [v_tmp_addr], APP_DATA_ADDR
+    mov rcx, [v_bs]
+    mov rax, [rcx + BS_ALLOCPG]
+    mov ecx, 2                      ; AllocateAddress
+    mov edx, 2                      ; EfiLoaderData
+    mov r8, (APP_SLOT_SIZE * 8) / 0x1000
+    lea r9, [v_tmp_addr]
+    call rax
+    test rax, rax
+    jnz .alloc_backbuf
+    mov rax, [v_tmp_addr]
+    mov [abs VBE_INFO + VBE_APP_ARENA_BASE_OFF], rax
+
+.alloc_backbuf:
+    mov qword [v_tmp_addr], 0
+    mov rcx, [v_bs]
+    mov rax, [rcx + BS_ALLOCPG]
+    mov ecx, 0                      ; AllocateAnyPages
+    mov edx, 2                      ; EfiLoaderData
+    mov r8, (BOOT_BACK_BUFFER_SIZE + 0xFFF) / 0x1000
+    lea r9, [v_tmp_addr]
+    call rax
+    test rax, rax
+    jnz .done
+
+    mov rax, [v_tmp_addr]
+    mov [abs VBE_INFO + VBE_BACKBUF_OFF], rax
+
+.done:
+    add rsp, 40
     pop rbx
     ret
 
@@ -554,7 +604,7 @@ gop_init:
     mov dword [v_pitch], 1024
 
 .fill_vbe:
-    ; Fill VBE info block at 0x9000:
+    ; Fill boot info block:
     ;   [+0]  fb_addr   (qword)
     ;   [+8]  width     (dword)
     ;   [+12] height    (dword)
@@ -562,15 +612,15 @@ gop_init:
     ;   [+20] bpp       (dword)
     mov rdi, VBE_INFO
     mov rax, [v_fb]
-    mov [rdi],    rax
+    mov [rdi + VBE_FB_ADDR_OFF], rax
     mov eax, [v_scrw]
-    mov [rdi+8],  eax
+    mov [rdi + VBE_WIDTH_OFF], eax
     mov eax, [v_scrh]
-    mov [rdi+12], eax
+    mov [rdi + VBE_HEIGHT_OFF], eax
     mov eax, [v_pitch]
     shl eax, 2                      ; pixels/line -> bytes/line
-    mov [rdi+16], eax
-    mov dword [rdi+20], 32
+    mov [rdi + VBE_PITCH_OFF], eax
+    mov dword [rdi + VBE_BPP_OFF], 32
 
     xor eax, eax
     jmp .done
@@ -712,8 +762,8 @@ load_kernel:
 
 ; ============================================================================
 ; LOAD_APPS - open \EFI\BOOT\APPS.BIN, read into RAM at APPS_DEST.
-; Writes blob base + size into VBE_INFO+0x20/+0x28 for the kernel to pick up.
-; Non-fatal on failure: VBE_INFO+0x20 stays 0 (kernel treats blob as empty).
+; Writes blob base + size into boot info for the kernel to pick up.
+; Non-fatal on failure: app blob boot-info fields stay 0.
 ; ============================================================================
 load_apps:
     push rbx
@@ -723,8 +773,8 @@ load_apps:
     ; [rsp + 40]     local: read_size (in/out)
 
     ; Write safe defaults in case anything fails.
-    mov qword [abs VBE_INFO + 0x20], 0
-    mov qword [abs VBE_INFO + 0x28], 0
+    mov qword [abs VBE_INFO + VBE_APPS_BASE_OFF], 0
+    mov qword [abs VBE_INFO + VBE_APPS_SIZE_OFF], 0
     mov qword [v_apps_size], 0
 
     ; Reopen root volume (original root file was closed by load_kernel).
@@ -750,21 +800,23 @@ load_apps:
     test rax, rax
     jnz .fail
 
-    ; Claim APPS_DEST so firmware doesn't reuse it, then read file in.
-    mov qword [v_tmp_addr], APPS_DEST
+    ; Allocate APPS.BIN storage from firmware, then read file in.
+    mov qword [v_tmp_addr], 0
     mov rcx, [v_bs]
     mov rax, [rcx + BS_ALLOCPG]
-    mov ecx, 2                      ; AllocateAddress
+    mov ecx, 0                      ; AllocateAnyPages
     mov edx, 2                      ; EfiLoaderData
     mov r8, APPS_MAX_SZ / 0x1000
     lea r9, [v_tmp_addr]
     call rax
+    test rax, rax
+    jnz .close_and_fail
 
     mov qword [rsp+40], APPS_MAX_SZ
     mov rbx, [v_file]
     mov rcx, rbx
     lea rdx, [rsp+40]
-    mov r8, APPS_DEST
+    mov r8, [v_tmp_addr]
     mov rax, [rbx + FP_READ]
     call rax
     test rax, rax
@@ -774,8 +826,9 @@ load_apps:
     test rax, rax
     jz .close_and_fail
     mov [v_apps_size], rax
-    mov qword [abs VBE_INFO + 0x20], APPS_DEST
-    mov [abs VBE_INFO + 0x28], rax
+    mov rdx, [v_tmp_addr]
+    mov [abs VBE_INFO + VBE_APPS_BASE_OFF], rdx
+    mov [abs VBE_INFO + VBE_APPS_SIZE_OFF], rax
 
     mov rbx, [v_file]
     mov rcx, rbx
@@ -807,11 +860,6 @@ setup_paging:
     %define UEFI_PAGE_WRITABLE     0x02
     %define UEFI_PAGE_USER         0x04
     %define UEFI_PAGE_LARGE        0x80
-    %define UEFI_APP_DATA_ADDR     0x1000000
-    %define UEFI_APP_SLOT_SIZE     0x100000
-    %define UEFI_MAX_WINDOWS       8
-    %define UEFI_APP_PDE0          (UEFI_APP_DATA_ADDR / 0x200000)
-    %define UEFI_APP_PDE_COUNT     ((UEFI_MAX_WINDOWS * UEFI_APP_SLOT_SIZE + 0x1FFFFF) / 0x200000)
     ; W^X: kernel text lives in [KTEXT_START, KTEXT_END). All other pages NX.
     %define UEFI_KTEXT_START_PAGE  0x100     ; PTE index of 0x100000
     %define UEFI_KTEXT_END_PAGE    0x120     ; PTE index of 0x120000 (128KB)
@@ -889,12 +937,17 @@ setup_paging:
     mov rax, 0x200000
     or  rax, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_LARGE
     mov ebx, 1
+    mov r14, [abs VBE_INFO + VBE_APP_ARENA_BASE_OFF]
+    shr r14, 21
+    mov r15, [abs VBE_INFO + VBE_APP_ARENA_SIZE_OFF]
+    add r15, 0x1FFFFF
+    shr r15, 21
+    add r15, r14
 .loop_pd0:
     mov rdx, rax
-    cmp ebx, UEFI_APP_PDE0
+    cmp rbx, r14
     jb .pd0_nx
-    mov r13d, UEFI_APP_PDE0 + UEFI_APP_PDE_COUNT
-    cmp ebx, r13d
+    cmp rbx, r15
     jae .pd0_nx
     ; App arena: 2MB large page, USER accessible, executable (no NX).
     or  rdx, UEFI_PAGE_USER | UEFI_PAGE_LARGE
@@ -963,11 +1016,11 @@ locate_spp:
     xor edx, edx
     call rax
 
-    mov qword [abs VBE_INFO + 0x18], r12
+    mov qword [abs VBE_INFO + VBE_SPP_OFF], r12
     jmp .done
 
 .no_spp:
-    mov qword [abs VBE_INFO + 0x18], 0
+    mov qword [abs VBE_INFO + VBE_SPP_OFF], 0
 
 .done:
     add rsp, 40

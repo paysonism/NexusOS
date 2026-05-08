@@ -19,6 +19,8 @@
 %macro global 1-*
 %endmacro
 
+%include "build/sig_hashes.inc"
+
 ; --- Core Kernel Entry Point (MUST BE FIRST) ---
 section .text
 %include "src/kernel/core/entry.asm"
@@ -28,6 +30,10 @@ section .text
 %include "src/kernel/core/idt.asm"
 section .text
 %include "src/kernel/core/isr.asm"
+%ifdef ENABLE_TRACE
+section .text
+%include "src/kernel/core/trace.asm"
+%endif
 section .text
 %include "src/kernel/core/memory.asm"
 section .text
@@ -116,6 +122,11 @@ section .text
 %include "src/kernel/lib/string.asm"
 %include "src/kernel/lib/font.asm"
 %include "src/kernel/lib/math.asm"
+
+; --- Generated Signature Registry ---
+%ifdef ENABLE_SIG_SECTION
+%include "build/sig_registry.inc"
+%endif
 
 ; --- Helper Wrappers ---
 fn_memcpy_wrapper:

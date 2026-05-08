@@ -10,7 +10,11 @@ main exported usermode-facing entrypoints.
 - `src/kernel/proc/usermode.asm`
   Ring-3 trampoline, slot/runtime handling, and callback return path.
 - `src/kernel/proc/syscall.asm`
-  Syscall dispatch and validation.
+  Syscall entry, stack switch, dispatch, and return.
+- `src/kernel/proc/syscall_validation.inc`
+  User range, callback target, and directory-entry handle validation helpers.
+- `src/include/l3_runtime.inc`
+  Shared L3 runtime-frame offsets used by syscall and callback code.
 - `src/kernel/proc/process.asm`
   Process records and scheduler-facing state.
 
@@ -21,6 +25,10 @@ main exported usermode-facing entrypoints.
   `app_blob_start` / `app_blob_end`.
 - `src/user/apps/*.inc`
   Split built-in app source.
+- `src/user/nexushl/apps/*.nxh`
+  NexusHL SDK app sources. `build_nxh.ps1` compiles these to `build/nxh/*.asm`
+  and emits `build/nxh/generated_apps.inc`, which `src/user/apps.asm` includes
+  inside the app blob.
 - `src/user/lib/nexus_app.inc`
   Stable syscall wrapper include.
 - `src/user/lib/nexus_window.inc`
@@ -31,6 +39,8 @@ main exported usermode-facing entrypoints.
 Each active user callback runs inside a per-slot arena:
 
 - `APP_DATA_ADDR + slot * APP_SLOT_SIZE`
+
+The automated serial gate for this path is `test_l3_app_markers.ps1`.
 
 That slot holds:
 
@@ -209,16 +219,15 @@ Shared built-in user helpers and test callbacks:
 `app_terminal_blob_end`
 - End of the terminal blob.
 
-### `src/user/apps/notepad.inc`
+### `src/user/nexushl/apps/notepad.nxh`
 
-`app_notepad_draw`
-- Notepad draw callback.
+Compiled active Notepad callbacks:
 
-`app_notepad_click`
-- Notepad click callback.
+- `app_hl_notepad_draw`
+- `app_hl_notepad_click`
+- `app_hl_notepad_key`
 
-`app_notepad_key`
-- Notepad key callback.
+These are installed by `src/user/apps/launch.inc`.
 
 ### `src/user/apps/settings.inc`
 
@@ -259,6 +268,15 @@ Shared built-in user helpers and test callbacks:
 Owns:
 - syscall wrapper includes
 - callback ABI notes
+- filesystem helper include wiring
+
+### `src/user/lib/nexus_fs.inc`
+
+Owns:
+- FAT16 entry offset constants for user apps
+- `NFS_NAME83` / `nfs_name83`, the documented app-side helper for converting
+  UI filenames into the 11-byte FAT 8.3 names used by `SYS_FS_WRITE`,
+  `SYS_FS_RENAME`, and `SYS_FS_MKDIR`
 
 ### `src/user/lib/nexus_window.inc`
 
