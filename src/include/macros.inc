@@ -5,6 +5,16 @@
 %ifndef MACROS_INC
 %define MACROS_INC
 
+%include "trace.inc"
+
+; tools/build_sig_registry.py emits build/sig_hashes.inc before the kernel
+; assembles; it provides `%define <name>__hash` lines so FN_BEGIN stamps the
+; real FNV-1a fn_id into the .signature section instead of `dq 0`.
+%include "sig_hashes.inc"
+
+; Optional trace instrumentation is enabled by passing -dENABLE_TRACE to NASM.
+; It mirrors ENABLE_DEBUG_SERIAL: release builds pay no macro/runtime cost.
+
 ; Output character to COM1 for debugging
 %macro SER 1
 %ifdef ENABLE_DEBUG_SERIAL
@@ -91,27 +101,27 @@ ALL_RAX equ 112
 
 ; ISR stub that pushes a dummy error code (for exceptions without one)
 %macro ISR_NOERRCODE 1
-global isr_%1
-isr_%1:
+FN_BEGIN isr_%1, 0, 0, FN_RET_VOID
     push qword 0           ; Dummy error code
     push qword %1          ; Interrupt number
+    FN_END isr_%1
     jmp isr_common_stub
 %endmacro
 
 ; ISR stub for exceptions that push their own error code
 %macro ISR_ERRCODE 1
-global isr_%1
-isr_%1:
+FN_BEGIN isr_%1, 0, 0, FN_RET_VOID
     push qword %1          ; Interrupt number (error code already on stack)
+    FN_END isr_%1
     jmp isr_common_stub
 %endmacro
 
 ; IRQ stub macro
 %macro IRQ_STUB 2
-global irq_%1
-irq_%1:
+FN_BEGIN irq_%1, 0, 0, FN_RET_VOID
     push qword 0           ; Dummy error code
     push qword %2          ; Interrupt vector number
+    FN_END irq_%1
     jmp irq_common_stub
 %endmacro
 

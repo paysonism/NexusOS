@@ -1,7 +1,7 @@
 # NexusHL — Safe Higher-Level Assembly Language
 
-NexusHL (`.nxh`) is a tiny compiled language that targets the existing NexusOS
-ring-3 app ABI. It exists so large multi-layer apps can be written, read, and
+NexusHL (`.nxh`) is the supported SDK path for NexusOS ring-3 apps. It targets
+the existing callback/syscall ABI so larger apps can be written, read, and
 refactored without hand-tracking registers, while every emitted instruction
 stays inside the syscall boundary documented in `docs/syscalls.md`.
 
@@ -12,8 +12,8 @@ running kernel.
 
 ## Quick start
 
-```
-powershell -NoProfile -File build_nxh.ps1     # compile + nasm-verify all .nxh apps
+```powershell
+powershell -NoProfile -File build_nxh.ps1     # compile apps and generate SDK include/manifest
 powershell -NoProfile -File run_uefi.ps1      # boot VM
 python src/user/nexushl/compiler/nxhdbg.py    # tail serial, highlights [nxhl] lines
 ```
@@ -27,11 +27,14 @@ src/user/nexushl/
     nxhdbg.py        # serial debugger, TCP 127.0.0.1:5555
   lib/
     core.nxh         # syscall numbers, window offsets, colors, keys
+    gui.nxh          # immediate-mode GUI helpers and shared widget metrics
   apps/
     hello.nxh        # smoke app, emits [nxhl] markers on every callback
+    notepad.nxh      # shipped Notepad implementation
 build/nxh/
   <name>.asm         # generated NASM (do not edit)
-  <name>.bin         # nasm-verified object (proof of syntactic validity)
+  generated_apps.inc # generated include consumed by src/user/apps.asm
+  manifest.json      # generated SDK metadata for compiled apps/callback names
 ```
 
 ## Language reference
@@ -128,17 +131,29 @@ hit that limit.
 
 ## Integration with `apps.asm`
 
-HL apps are **not** auto-linked. To ship a HL-authored app alongside the
-kernel today:
+`build_nxh.ps1` is the SDK integration point. It compiles every app under
+`src/user/nexushl/apps`, then writes `build/nxh/generated_apps.inc` and
+`build/nxh/manifest.json`.
 
-1. Compile it: `build_nxh.ps1` produces `build/nxh/<name>.asm`.
-2. Copy or `%include` it from a new `src/user/apps/<name>_hl.inc`.
-3. Register its `<prefix>_draw` / `<prefix>_click` / `<prefix>_key` labels
-   in `src/user/apps/state.inc` next to the existing app entries.
-4. Rebuild the kernel.
+`src/user/apps.asm` includes the generated include inside the user app blob.
+Launch code should install the generated callback labels:
 
-Old `.asm`/`.inc` apps keep working unchanged — nothing in `src/user/apps/`
-or `src/kernel/` is touched by the HL build.
+```asm
+mov r9, app_hl_notepad_draw
+mov r10, app_hl_notepad_click
+mov r11, app_hl_notepad_key
+```
+
+The current shipped Notepad is generated from
+`src/user/nexushl/apps/notepad.nxh`. The old hand-written Notepad include is
+kept only as historical/reference source and is guarded from re-entering the
+active app blob by `test_source_guards.ps1`.
+
+## GUI Library
+
+Use `src/user/nexushl/lib/gui.nxh` for app UI. It provides the shared
+immediate-mode drawing layer for menus, dropdowns, inputs, and blinking carets.
+The full contract is documented in `docs/nexushl-gui.md`.
 
 ## Roadmap (post file-explorer port)
 

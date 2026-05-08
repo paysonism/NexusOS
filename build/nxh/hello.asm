@@ -1,9 +1,7 @@
 ; NexusHL generated — do not edit by hand
 ; app="HelloHL" stack=4096
-bits 64
-section .text
-global app_hl_hello_hello_draw
-app_hl_hello_hello_draw:
+FN_BEGIN app_hl_hello_hello_draw, 1, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -33,13 +31,16 @@ app_hl_hello_hello_draw:
     mov rax, 3
     syscall
 .fn_end_0_app_hl_hello_hello_draw:
+    FN_END app_hl_hello_hello_draw
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_hello_hello_click
-app_hl_hello_hello_click:
+FN_BEGIN app_hl_hello_hello_click, 3, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, x, FN_KIND_SCALAR
+FN_ARG 2, y, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -54,13 +55,15 @@ app_hl_hello_hello_click:
     mov rax, 0
     syscall
 .fn_end_0_app_hl_hello_hello_click:
+    FN_END app_hl_hello_hello_click
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_hello_hello_key
-app_hl_hello_hello_key:
+FN_BEGIN app_hl_hello_hello_key, 2, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, k, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -87,13 +90,13 @@ app_hl_hello_hello_key:
 .else1:
 .endif2:
 .fn_end_0_app_hl_hello_hello_key:
+    FN_END app_hl_hello_hello_key
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_hello_hello_boot
-app_hl_hello_hello_boot:
+FN_BEGIN app_hl_hello_hello_boot, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -105,12 +108,12 @@ app_hl_hello_hello_boot:
     mov rax, 0
     syscall
 .fn_end_2_app_hl_hello_hello_boot:
+    FN_END app_hl_hello_hello_boot
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-section .rodata
 app_hl_hello_s_boot: db "[nxhl] hello boot", 0
 app_hl_hello_s_draw: db "[nxhl] hello draw", 0
 app_hl_hello_s_click: db "[nxhl] hello click", 0

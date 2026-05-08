@@ -10,9 +10,9 @@ section .data
 lapic_base dq 0xFEE00000
 
 section .text
-global apic_init
-global apic_eoi
-global smp_ap_startup
+; auto-wrapped (FN_BEGIN emits global): global apic_init
+; auto-wrapped (FN_BEGIN emits global): global apic_eoi
+; auto-wrapped (FN_BEGIN emits global): global smp_ap_startup
 global smp_started_cores
 global smp_alive_cores
 global smp_parked_cores
@@ -22,7 +22,7 @@ extern madt_enabled_cpu_count
 extern madt_lapic_ids
 
 ; --- Initialize Local APIC ---
-apic_init:
+FN_BEGIN apic_init, 0, 0, FN_RET_SCALAR
     ; Read APIC base from MSR 0x1B
     mov ecx, 0x1B
     rdmsr                   ; EAX = low 32 bits of APIC_BASE
@@ -49,8 +49,12 @@ apic_init:
     bts eax, 11
     wrmsr
 
-    ; Map the APIC base (mask out lower 12 bits)
-    and eax, 0xFFFFF000
+    ; Map the APIC base (combine EDX:EAX, mask out lower 12 bits).
+    ; APIC_BASE MSR is 64-bit; on systems with APIC base above 4 GB the high
+    ; bits live in EDX. Without combining, lapic_base would be wrong.
+    shl rdx, 32
+    or rax, rdx
+    and rax, ~0xFFF
     mov [lapic_base], rax
 
     ; Spurious Interrupt Vector Register (SIVR)
@@ -66,14 +70,14 @@ apic_init:
     ret
 
 ; --- Send End of Interrupt (EOI) ---
-apic_eoi:
+FN_BEGIN apic_eoi, 0, 0, FN_RET_SCALAR
     mov rdi, [lapic_base]
     mov dword [rdi + 0x0B0], 0
     ret
 
 %ifdef NEXUS_CACHE32_MAX
 %ifdef NEXUS_CACHE32_AP_STARTUP
-smp_ap_startup:
+FN_BEGIN smp_ap_startup, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rsi
@@ -120,16 +124,16 @@ smp_init_states:
     mov rcx, SMP_MAX_CORES * SMP_CORE_STATE_SIZE / 8
     xor rax, rax
     rep stosq
-    mov dword [smp_core_states + 0], 3
-    mov dword [smp_core_states + 4], 0
-    mov rax, [lapic_base]
+    mov dword [abs smp_core_states], 3
+    mov dword [abs smp_core_states + 4], 0
+    mov rax, [abs lapic_base]
     mov eax, [rax + 0x20]
     shr eax, 24
-    mov [smp_core_states + 8], eax
-    mov qword [smp_core_states + 16], 1
-    mov dword [smp_started_cores], 1
-    mov dword [smp_alive_cores], 1
-    mov dword [smp_parked_cores], 1
+    mov [abs smp_core_states + 8], eax
+    mov qword [abs smp_core_states + 16], 1
+    mov dword [abs smp_started_cores], 1
+    mov dword [abs smp_alive_cores], 1
+    mov dword [abs smp_parked_cores], 1
     ret
 
 smp_copy_trampoline:
@@ -161,10 +165,10 @@ smp_start_one:
     inc edx
     imul edx, SMP_CORE_STACK_SIZE
     add rax, rdx
-    mov [qword SMP_TRAMPOLINE_ADDR + ap_boot_stack_ptr - ap_tramp_start], rax
-    mov [qword SMP_TRAMPOLINE_ADDR + ap_boot_state_ptr - ap_tramp_start], rbx
+    mov [abs SMP_TRAMPOLINE_ADDR + ap_boot_stack_ptr - ap_tramp_start], rax
+    mov [abs SMP_TRAMPOLINE_ADDR + ap_boot_state_ptr - ap_tramp_start], rbx
     wbinvd
-    mov rdi, [lapic_base]
+    mov rdi, [abs lapic_base]
     mov eax, [rbx + 8]
     shl eax, 24
     mov [rdi + 0x310], eax
@@ -254,8 +258,8 @@ ap_lm64:
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov rsp, [qword SMP_TRAMPOLINE_ADDR + ap_boot_stack_ptr - ap_tramp_start]
-    mov rdi, [qword SMP_TRAMPOLINE_ADDR + ap_boot_state_ptr - ap_tramp_start]
+    mov rsp, [abs SMP_TRAMPOLINE_ADDR + ap_boot_stack_ptr - ap_tramp_start]
+    mov rdi, [abs SMP_TRAMPOLINE_ADDR + ap_boot_state_ptr - ap_tramp_start]
     inc qword [rdi + 16]
     mov rax, smp_ap_started_count
     lock inc dword [rax]

@@ -6,6 +6,8 @@ bits 64
 
 %include "constants.inc"
 %include "macros.inc"
+%include "l3_runtime.inc"
+%include "trace.inc"
 
 ; MSR Addresses for Syscall
 IA32_EFER           equ 0xC0000080
@@ -13,19 +15,10 @@ IA32_STAR           equ 0xC0000081
 IA32_LSTAR          equ 0xC0000082
 IA32_FMASK          equ 0xC0000084
 
-L3_RT_KERNEL_RFLAGS equ 40
-L3_RT_USER_RSP      equ 48
-L3_RT_USER_RIP      equ 56
-L3_RT_USER_RFLAGS   equ 64
-L3_RT_SYSCALL_NUM   equ 80
-L3_RT_USER_RDX      equ 88
-L3_RT_USER_R8       equ 96
-L3_RT_USER_R9       equ 104
-L3_RT_USER_R10      equ 112
-L3_RT_SIZE          equ 120
 WIN_OFF_FLAGS       equ 40
 WIN_OFF_KEYFN       equ 120
 WIN_OFF_CLICKFN     equ 128
+WIN_OFF_APPDATA     equ 136
 DIR_ENTRY_SIZE      equ 32
 %ifdef NEXUS_CACHE32_MAX
 FAT16_ROOT_CACHE    equ 0x1A11000
@@ -36,6 +29,13 @@ FAT16_ROOT_CACHE_SZ equ 16384
 L3_DIR_ENTRY_CACHE_OFF equ 0xFA000
 L3_DIR_ENTRY_CACHE_SZ  equ FAT16_ROOT_CACHE_SZ
 SYSCALL_MAX_STR_LEN equ 256
+APP_MIN_ID          equ 2
+APP_MAX_ID          equ 8
+APP_OPEN_CMD_MAX    equ 256
+SYSCALL_ENTRY_SIZE  equ 16
+SYSCALL_HANDLER_OFF equ 0
+SYSCALL_ARGC_OFF    equ 8
+SYSCALL_KIND_OFF    equ 9
 
 
 ; Variables moved to the end of file to avoid segment clobbering in monolithic build.
@@ -47,21 +47,30 @@ extern fat16_change_dir
 extern fat16_read_file
 extern fat16_format_name
 extern fat16_write_file
+extern fat16_delete_entry
+extern fat16_rename_entry
+extern fat16_mkdir
 extern fat16_sync_root
 extern wm_create_window_ex
 extern wm_close_window
 extern app_launch
+extern kernel_open_file_in_notepad
+extern kernel_open_app_command
 extern display_set_mode
 extern cursor_init
 extern render_rect
 extern render_text
-extern l3_current_slot
+extern scr_width
+extern scr_height
 extern l3_runtime
 extern l3_syscall_stacks
 extern call_app_l3_return
 extern ser_print_hex64
 extern app_blob_base_v
 extern app_blob_end_v
+extern l3_app_arena_base_v
+extern l3_app_arena_size_v
+extern trace_syscall
 
 L3_RT_ENTRY          equ 0
 L3_RT_ARG0           equ 8
@@ -71,8 +80,7 @@ L3_RT_KERNEL_RSP     equ 32
 
 section .text
 
-global syscall_init
-syscall_init:
+FN_BEGIN syscall_init, 0, 0, FN_RET_VOID
     push rax
     push rcx
     push rdx
@@ -103,186 +111,57 @@ syscall_init:
     wrmsr
 
     mov ecx, IA32_FMASK
-    mov eax, 0x00000700
+    mov eax, 0x00057700
     xor edx, edx
     wrmsr
 
     pop rdx
     pop rcx
     pop rax
+    FN_END syscall_init
     ret
 
-global syscall_entry
-sc_get_slot_bounds:
-    mov eax, [rel l3_current_slot]
-    cmp eax, MAX_WINDOWS
-    jb .slot_ok
-    xor eax, eax
-.slot_ok:
-    imul rax, APP_SLOT_SIZE
-    lea r8, [rax + APP_DATA_ADDR]
-    lea r9, [r8 + APP_SLOT_SIZE]
-    ret
+; auto-wrapped (FN_BEGIN emits global): global syscall_entry
+%include "src/kernel/proc/syscall_validation.inc"
 
-; RDI=ptr, RSI=len, R8=start, R9=end -> EAX=1 if fully inside [start,end)
-sc_range_in_bounds:
-    mov rax, rdi
-    cmp rax, r8
-    jb .range_fail
-    mov rdx, rdi
-    add rdx, rsi
-    jc .range_fail
-    cmp rdx, r9
-    ja .range_fail
-    mov eax, 1
-    ret
-.range_fail:
-    xor eax, eax
-    ret
-
-; RDI=ptr, RSI=len -> EAX=1 if range is inside the current app slot or the
-; built-in user blob.
-sc_validate_user_range:
-    push rdi
-    push rsi
-    push r8
-    push r9
-    push r11
-    call sc_get_slot_bounds
-    call sc_range_in_bounds
-    mov r11d, eax
-    test r11d, r11d
-    jnz .uvr_done
-    mov r8, [rel app_blob_base_v]
-    mov r9, [rel app_blob_end_v]
-    call sc_range_in_bounds
-    mov r11d, eax
-.uvr_done:
-    mov eax, r11d
-    pop r11
-    pop r9
-    pop r8
-    pop rsi
-    pop rdi
-    ret
-
-; RDI=ptr, RSI=len -> EAX=1 if the range is inside user-owned memory.
-sc_validate_user_io_range:
-    call sc_validate_user_range
-    ret
-
-; RDI=ptr, RSI=max_len -> EAX=1 if a NUL-terminated string lives entirely in
-; the current app slot or the built-in user blob.
-sc_validate_user_cstring:
-    push rdi
-    push rsi
-    push rcx
-    push r11
-    xor r11d, r11d
-    xor rcx, rcx
-.uvc_loop:
-    cmp rcx, rsi
-    jae .uvc_done
-    lea rdi, [rdi + rcx]
-    mov rsi, 1
-    call sc_validate_user_range
-    test eax, eax
-    jz .uvc_done
-    cmp byte [rdi], 0
-    je .uvc_match
-    mov rdi, [rsp + 24]
-    inc rcx
-    jmp .uvc_loop
-.uvc_match:
-    mov r11d, 1
-.uvc_done:
-    mov eax, r11d
-    pop r11
-    pop rcx
-    pop rsi
-    pop rdi
-    ret
-
-; RDI=opaque FAT16 entry handle -> EAX=1 if it points at an aligned entry in
-; the current root/subdirectory cache.
-sc_validate_dir_entry_handle:
-    mov rax, rdi
-    sub rax, FAT16_ROOT_CACHE
-    jnc .vdeh_check_kernel
-    mov rax, rdi
-    sub rax, APP_DATA_ADDR
-    jc .vdeh_fail
-    cmp rax, MAX_WINDOWS * APP_SLOT_SIZE
-    jae .vdeh_fail
-    mov edx, eax
-    and edx, APP_SLOT_SIZE - 1
-    sub edx, L3_DIR_ENTRY_CACHE_OFF
-    jc .vdeh_fail
-    cmp edx, L3_DIR_ENTRY_CACHE_SZ - DIR_ENTRY_SIZE
-    ja .vdeh_fail
-    test edx, DIR_ENTRY_SIZE - 1
-    jnz .vdeh_fail
-    mov eax, 1
-    ret
-.vdeh_check_kernel:
-    cmp rax, FAT16_ROOT_CACHE_SZ - DIR_ENTRY_SIZE
-    ja .vdeh_fail
-    test eax, DIR_ENTRY_SIZE - 1
-    jnz .vdeh_fail
-    mov eax, 1
-    ret
-.vdeh_fail:
-    xor eax, eax
-    ret
-
-; RDI=callback target -> EAX=1 if null or inside user-owned code/data.
-sc_validate_callback_target:
-    test rdi, rdi
-    jz .vct_ok
-    mov rsi, 1
-    call sc_validate_user_range
-    ret
-.vct_ok:
-    mov eax, 1
-    ret
-
-syscall_entry:
+FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     ; Save critical SYSCALL state into the active slot runtime before any
-    ; helper calls. Using shared globals here lets one ring-3 callback
-    ; corrupt another callback's return path.
-    mov [rel l3_tmp_user_rsp], rsp
+    ; helper calls.
     push rbx
     push rdx
-    mov rdx, [rel l3_tmp_user_rsp]
-    sub rdx, APP_DATA_ADDR
+    push r10
+    mov rdx, rcx
+    sub rdx, [rel l3_app_arena_base_v]
     jc .slot_from_global
-    cmp rdx, MAX_WINDOWS * APP_SLOT_SIZE
+    cmp rdx, [rel l3_app_arena_size_v]
     jae .slot_from_global
     shr rdx, 20
     mov ebx, edx
     jmp .slot_ok_entry
 .slot_from_global:
-    mov ebx, [rel l3_current_slot]
-    cmp ebx, MAX_WINDOWS
-    jb .slot_ok_entry
     xor ebx, ebx
+    jmp .slot_ok_entry
 .slot_ok_entry:
-    mov [rel l3_current_slot], ebx
+    mov r10d, ebx
     imul rbx, L3_RT_SIZE
     lea rdx, [rel l3_runtime]
     add rbx, rdx
+    mov [rbx + L3_RT_SLOT], r10d
     mov [rbx + L3_RT_USER_RIP], rcx
     mov [rbx + L3_RT_USER_RFLAGS], r11
-    mov rdx, [rel l3_tmp_user_rsp]
+    mov rdx, rsp
+    add rdx, 24
     mov [rbx + L3_RT_USER_RSP], rdx
     mov [rbx + L3_RT_SYSCALL_NUM], rax
     mov [rbx + L3_RT_ARG0], rdi
     mov [rbx + L3_RT_ARG1], rsi
-    mov rdx, [rsp]
+    mov rdx, [rsp + 8]
     mov [rbx + L3_RT_USER_RDX], rdx
     mov [rbx + L3_RT_USER_R8], r8
     mov [rbx + L3_RT_USER_R9], r9
-    mov [rbx + L3_RT_USER_R10], r10
+    mov rdx, [rsp]
+    mov [rbx + L3_RT_USER_R10], rdx
+    pop r10
     pop rdx
     pop rbx
     mov ax, GDT64_DATA_SEG
@@ -293,12 +172,17 @@ syscall_entry:
 
     ; Switch to syscall stack without calling out while we're still on the
     ; user stack. A normal CALL would push a return address to user memory.
-    mov eax, [rel l3_current_slot]
-    cmp eax, MAX_WINDOWS
-    jb .slot_ok_stack
+    mov rax, rcx
+    sub rax, [rel l3_app_arena_base_v]
+    jc .slot_zero_stack
+    cmp rax, [rel l3_app_arena_size_v]
+    jae .slot_zero_stack
+    shr rax, 20
+    jmp .slot_ok_stack
+.slot_zero_stack:
     xor eax, eax
-    mov [rel l3_current_slot], eax
 .slot_ok_stack:
+    mov r8d, eax
     imul rax, L3_SYSCALL_STACK_SIZE
     lea rdx, [rel l3_syscall_stacks]
     add rax, rdx
@@ -306,15 +190,11 @@ syscall_entry:
     and rax, -16
     
     mov rsp, rax             ; Now on Kernel Syscall Stack
+    push r8                  ; Slot for validation and return.
     
     ; Push usermode context manually so PUSH_ALL has it
     push rbx
-    mov ebx, [rel l3_current_slot]
-    cmp ebx, MAX_WINDOWS
-    jb .slot_ok_reload
-    xor ebx, ebx
-    mov [rel l3_current_slot], ebx
-.slot_ok_reload:
+    mov ebx, [rsp + 8]
     imul rbx, L3_RT_SIZE
     lea rdx, [rel l3_runtime]
     add rbx, rdx
@@ -328,11 +208,31 @@ syscall_entry:
     mov r9,  [rbx + L3_RT_USER_R9]
     mov r10, [rbx + L3_RT_USER_R10]
     pop rbx
+    mov r15d, [rsp]
     
     cld
     PUSH_ALL
 
+%ifdef ENABLE_TRACE
+    mov rdi, [rsp + ALL_RAX]
+    mov esi, r15d
+    mov rdx, [rsp + ALL_RDI]
+    mov ecx, TRACE_FLAG_SYSCALL_ENTER
+    call trace_syscall
+    mov rdi, [rsp + ALL_RDI]
+    mov rsi, [rsp + ALL_RSI]
+%endif
+
     inc qword [syscall_count]
+    push rax
+    SER 's'
+    mov rdi, rax
+    and edi, 0x3F
+    add edi, '0'
+    mov dx, 0x3F8
+    mov ax, di
+    out dx, al
+    pop rax
     cmp qword [syscall_count], 8
     ja .dispatch
     push rax
@@ -351,42 +251,36 @@ syscall_entry:
     pop rax
 
 .dispatch:
-    cmp rax, 0
-    je .sc_print
-    cmp rax, 1
-    je .sc_exit
-    cmp rax, 2
-    je .sc_gui_rect
-    cmp rax, 3
-    je .sc_gui_text
-    cmp rax, 4
-    je .sc_fs_count
-    cmp rax, 5
-    je .sc_fs_entry
-    cmp rax, 6
-    je .sc_fs_chdir
-    cmp rax, 7
-    je .sc_wm_create
-    cmp rax, 8
-    je .sc_fs_read
-    cmp rax, 9
-    je .sc_wm_handlers
-    cmp rax, 10
-    je .sc_app_done
-    cmp rax, 11
-    je .sc_fs_format_name
-    cmp rax, 12
-    je .sc_app_launch
-    cmp rax, 13
-    je .sc_fs_write
-    cmp rax, 14
-    je .sc_fs_sync_root
-    cmp rax, 15
-    je .sc_wm_close
-    cmp rax, 16
-    je .sc_display_set_mode
-    cmp rax, 17
-    je .sc_cursor_init
+    cmp rax, syscall_table_count
+    jae .sc_invalid
+    mov rbx, rax
+    shl rbx, 4
+    lea r12, [rel syscall_table]
+    add r12, rbx
+    call sc_validate_from_table
+    test eax, eax
+    jz .sc_validate_reject
+    mov rdi, [rsp + ALL_RDI]
+    mov rsi, [rsp + ALL_RSI]
+    mov rdx, [rsp + ALL_RDX]
+    mov r10, [rsp + ALL_R10]
+    mov r8,  [rsp + ALL_R8]
+    mov r9,  [rsp + ALL_R9]
+    jmp qword [r12 + SYSCALL_HANDLER_OFF]
+
+.sc_validate_reject:
+%ifdef ENABLE_TRACE
+    mov rdi, [rsp + ALL_RAX]
+    mov esi, r15d
+    mov rdx, [rsp + ALL_RDI]
+    mov ecx, TRACE_FLAG_VALIDATE_FAIL
+    call trace_syscall
+%endif
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_invalid:
+    mov qword [rsp + ALL_RAX], -1
     jmp .done
 
 .sc_print:
@@ -401,6 +295,13 @@ syscall_entry:
     mov [rsp + ALL_RAX], rax
     jmp .done
 .sc_print_reject:
+%ifdef ENABLE_TRACE
+    mov rdi, [rsp + ALL_RAX]
+    mov esi, r15d
+    mov rdx, [rsp + ALL_RDI]
+    mov ecx, TRACE_FLAG_VALIDATE_FAIL
+    call trace_syscall
+%endif
     mov qword [rsp + ALL_RAX], -1
     jmp .done
 %else
@@ -414,13 +315,41 @@ syscall_entry:
     jmp .done
 
 .sc_gui_rect:
+    ; rdi=x, rsi=y, rdx=w, r10=h, r8=color.  User syscalls must not feed
+    ; negative or high-half values into the renderer's clipping arithmetic.
+    mov rax, rdi
+    or  rax, rsi
+    or  rax, rdx
+    or  rax, r10
+    shr rax, 32
+    jnz .sc_gui_rect_reject
+    cmp edi, [scr_width]
+    ja .sc_gui_rect_reject
+    cmp esi, [scr_height]
+    ja .sc_gui_rect_reject
+    cmp edx, [scr_width]
+    ja .sc_gui_rect_reject
+    cmp r10d, [scr_height]
+    ja .sc_gui_rect_reject
     mov rcx, r10
     call render_rect
     xor eax, eax
     mov [rsp + ALL_RAX], rax
     jmp .done
+.sc_gui_rect_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
 
 .sc_gui_text:
+    ; rdi=x, rsi=y, rdx=cstring, r10=color
+    mov rax, rdi
+    or  rax, rsi
+    shr rax, 32
+    jnz .sc_gui_text_reject
+    cmp edi, [scr_width]
+    ja .sc_gui_text_reject
+    cmp esi, [scr_height]
+    ja .sc_gui_text_reject
     mov rdi, rdx
     mov rsi, SYSCALL_MAX_STR_LEN
     call sc_validate_user_cstring
@@ -445,6 +374,9 @@ syscall_entry:
     jmp .done
 
 .sc_fs_entry:
+    xor eax, eax
+    cmp rdi, L3_DIR_ENTRY_CACHE_SZ / DIR_ENTRY_SIZE
+    jae .sc_fs_entry_done
     push rdi
     call fat16_get_entry
     pop rdi
@@ -453,9 +385,10 @@ syscall_entry:
     push rdi
     push rsi
     push rcx
-    mov esi, [rel l3_current_slot]
+    mov esi, r15d
     imul rsi, APP_SLOT_SIZE
-    add rsi, APP_DATA_ADDR + L3_DIR_ENTRY_CACHE_OFF
+    add rsi, [rel l3_app_arena_base_v]
+    add rsi, L3_DIR_ENTRY_CACHE_OFF
     shl rdi, 5
     add rsi, rdi
     mov rdi, rsi
@@ -474,8 +407,21 @@ syscall_entry:
 
 .sc_fs_chdir:
     mov rax, rdi
+    shr rax, 16
+    jnz .sc_fs_chdir_reject
+    test edi, edi
+    jz .sc_fs_chdir_call
+    cmp edi, 2
+    jb .sc_fs_chdir_reject
+    cmp edi, 0xFFF8
+    jae .sc_fs_chdir_reject
+.sc_fs_chdir_call:
+    mov eax, edi
     call fat16_change_dir
     mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_fs_chdir_reject:
+    mov qword [rsp + ALL_RAX], -1
     jmp .done
 
 .sc_wm_create:
@@ -488,6 +434,28 @@ syscall_entry:
     call sc_validate_callback_target
     test eax, eax
     jz .sc_wm_create_reject
+    mov rax, [rsp + ALL_RDI]
+    or  rax, [rsp + ALL_RSI]
+    or  rax, [rsp + ALL_RDX]
+    or  rax, [rsp + ALL_R10]
+    shr rax, 32
+    jnz .sc_wm_create_reject
+    mov eax, [rsp + ALL_RDX]
+    cmp eax, MIN_WINDOW_W
+    jb .sc_wm_create_reject
+    mov eax, [rsp + ALL_R10]
+    cmp eax, MIN_WINDOW_H
+    jb .sc_wm_create_reject
+    mov eax, [rsp + ALL_RDI]
+    add eax, [rsp + ALL_RDX]
+    jc .sc_wm_create_reject
+    cmp eax, SCREEN_WIDTH
+    ja .sc_wm_create_reject
+    mov eax, [rsp + ALL_RSI]
+    add eax, [rsp + ALL_R10]
+    jc .sc_wm_create_reject
+    cmp eax, SCREEN_HEIGHT
+    ja .sc_wm_create_reject
     mov rdi, [rsp + ALL_RDI]
     mov rsi, [rsp + ALL_RSI]
     mov rdx, [rsp + ALL_RDX]
@@ -590,8 +558,24 @@ syscall_entry:
     jmp .done
 
 .sc_app_launch:
+    mov rax, rdi
+    shr rax, 32
+    jnz .sc_app_launch_reject
+    cmp edi, APP_MIN_ID
+    jb .sc_app_launch_reject
+    cmp edi, APP_MAX_ID
+    ja .sc_app_launch_reject
+    mov edi, edi
+    xor esi, esi
+    xor edx, edx
+    xor r8d, r8d
+    xor r9d, r9d
+    xor r10d, r10d
     call app_launch
     mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_app_launch_reject:
+    mov qword [rsp + ALL_RAX], -1
     jmp .done
 
 .sc_fs_write:
@@ -619,39 +603,190 @@ syscall_entry:
     jmp .done
 
 .sc_fs_sync_root:
+    test r15d, r15d
+    jnz .sc_fs_sync_root_reject
     call fat16_sync_root
     xor eax, eax
     mov [rsp + ALL_RAX], rax
     jmp .done
+.sc_fs_sync_root_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
 
 .sc_wm_close:
+    cmp rdi, MAX_WINDOWS
+    jae .sc_wm_close_reject
+    cmp edi, r15d
+    jne .sc_wm_close_reject
+    mov rax, rdi
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    test qword [rax + WIN_OFF_FLAGS], WF_ACTIVE
+    jz .sc_wm_close_reject
+    mov rdx, r15
+    imul rdx, APP_SLOT_SIZE
+    add rdx, [rel l3_app_arena_base_v]
+    cmp [rax + WIN_OFF_APPDATA], rdx
+    jne .sc_wm_close_reject
     call wm_close_window
     xor eax, eax
     mov [rsp + ALL_RAX], rax
     jmp .done
+.sc_wm_close_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
 
 .sc_display_set_mode:
+    test r15d, r15d
+    jnz .sc_display_set_mode_reject
+    ; rdi=width, rsi=height, rdx=bpp. Keep ring-3 geometry inside the
+    ; fixed boot back-buffer before the display driver touches global state.
+    mov rax, rdi
+    or  rax, rsi
+    or  rax, rdx
+    shr rax, 32
+    jnz .sc_display_set_mode_reject
+    test edi, edi
+    jz .sc_display_set_mode_reject
+    test esi, esi
+    jz .sc_display_set_mode_reject
+    cmp edx, 32
+    jne .sc_display_set_mode_reject
+    mov eax, edi
+    mul esi
+    jo .sc_display_set_mode_reject
+    cmp eax, BOOT_BACK_BUFFER_SIZE / 4
+    ja .sc_display_set_mode_reject
+    mov edx, 32
     call display_set_mode
     mov [rsp + ALL_RAX], rax
     jmp .done
+.sc_display_set_mode_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
 
 .sc_cursor_init:
+    test r15d, r15d
+    jnz .sc_cursor_init_reject
     call cursor_init
     xor eax, eax
     mov [rsp + ALL_RAX], rax
     jmp .done
+.sc_cursor_init_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_ticks:
+    mov rax, [tick_count]
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_fs_delete:
+    call sc_validate_dir_entry_handle
+    test eax, eax
+    jz .sc_fs_delete_reject
+    mov rdi, [rsp + ALL_RDI]
+    call sc_dir_entry_handle_to_kernel
+    call fat16_delete_entry
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_fs_delete_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_fs_rename:
+    push rdi
+    call sc_validate_dir_entry_handle
+    pop rdi
+    test eax, eax
+    jz .sc_fs_rename_reject
+    push rdi
+    mov rdi, rsi
+    mov rsi, 11
+    call sc_validate_user_range
+    pop rdi
+    test eax, eax
+    jz .sc_fs_rename_reject
+    mov rdi, [rsp + ALL_RDI]
+    call sc_dir_entry_handle_to_kernel
+    mov rsi, [rsp + ALL_RSI]
+    call fat16_rename_entry
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_fs_rename_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_fs_mkdir:
+    mov rsi, 11
+    call sc_validate_user_range
+    test eax, eax
+    jz .sc_fs_mkdir_reject
+    mov rdi, [rsp + ALL_RDI]
+    call fat16_mkdir
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_fs_mkdir_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_open_file_np:
+    call sc_validate_dir_entry_handle
+    test eax, eax
+    jz .sc_open_file_np_reject
+    mov rdi, [rsp + ALL_RDI]
+    call kernel_open_file_in_notepad
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_open_file_np_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_app_open:
+    mov rsi, APP_OPEN_CMD_MAX
+    call sc_validate_user_cstring
+    test eax, eax
+    jz .sc_app_open_reject
+    mov rdi, [rsp + ALL_RDI]
+    call kernel_open_app_command
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_app_open_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
 
 .sc_app_done:
+%ifdef ENABLE_TRACE
+    mov rdi, [rsp + ALL_RAX]
+    mov esi, r15d
+    xor edx, edx
+    mov ecx, TRACE_FLAG_SYSCALL_EXIT
+    call trace_syscall
+%endif
     POP_ALL
     jmp call_app_l3_return
 
 .done:
+%ifdef ENABLE_TRACE
+    mov eax, r15d
+    cmp eax, MAX_WINDOWS
+    jb .trace_slot_ok_done
+    xor eax, eax
+.trace_slot_ok_done:
+    imul rax, L3_RT_SIZE
+    lea rdi, [rel l3_runtime]
+    add rdi, rax
+    mov rdi, [rdi + L3_RT_SYSCALL_NUM]
+    mov esi, r15d
+    mov rdx, [rsp + ALL_RAX]
+    mov ecx, TRACE_FLAG_SYSCALL_EXIT
+    call trace_syscall
+%endif
     POP_ALL
-    mov edx, [rel l3_current_slot]
+    mov edx, [rsp]
     cmp edx, MAX_WINDOWS
     jb .slot_ok_return
     xor edx, edx
-    mov [rel l3_current_slot], edx
 .slot_ok_return:
     imul rdx, L3_RT_SIZE
     lea rcx, [rel l3_runtime]
@@ -662,8 +797,164 @@ syscall_entry:
     ; Encode SYSRETQ directly to avoid NASM's spurious label-orphan warning.
     db 0x48, 0x0F, 0x07
 
-global test_syscall_proc
-test_syscall_proc:
+; R12=syscall table entry, PUSH_ALL frame on RSP. EAX=1 ok, 0 reject.
+sc_validate_from_table:
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    movzx ecx, byte [r12 + SYSCALL_ARGC_OFF]
+    mov ebx, [r12 + SYSCALL_KIND_OFF]
+    xor r8d, r8d
+.validate_loop:
+    cmp r8d, ecx
+    jae .validate_ok
+    mov edx, ebx
+    and edx, 3
+    cmp edx, FN_KIND_SCALAR
+    je .next_arg
+    cmp edx, FN_KIND_PTR
+    je .check_ptr
+    cmp edx, FN_KIND_CSTRING
+    je .check_cstring
+    cmp edx, FN_KIND_HANDLE
+    je .check_handle
+    jmp .validate_fail
+.check_ptr:
+    call sc_load_arg_for_validation
+    mov rsi, 1
+    call sc_validate_user_range
+    test eax, eax
+    jz .validate_fail
+    jmp .next_arg
+.check_cstring:
+    call sc_load_arg_for_validation
+    mov rsi, SYSCALL_MAX_STR_LEN
+    call sc_validate_user_cstring
+    test eax, eax
+    jz .validate_fail
+    jmp .next_arg
+.check_handle:
+    call sc_load_arg_for_validation
+    call sc_validate_dir_entry_handle
+    test eax, eax
+    jz .validate_fail
+.next_arg:
+    shr ebx, 2
+    inc r8d
+    jmp .validate_loop
+.validate_ok:
+    mov eax, 1
+    jmp .validate_done
+.validate_fail:
+    xor eax, eax
+.validate_done:
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
+
+; R8D=arg index, returns selected argument in RDI.
+SC_VALIDATE_FRAME_OFF equ 64
+sc_load_arg_for_validation:
+    cmp r8d, 0
+    je .arg0
+    cmp r8d, 1
+    je .arg1
+    cmp r8d, 2
+    je .arg2
+    cmp r8d, 3
+    je .arg3
+    cmp r8d, 4
+    je .arg4
+    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_R9]
+    ret
+
+.arg0:
+    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_RDI]
+    ret
+.arg1:
+    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_RSI]
+    ret
+.arg2:
+    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_RDX]
+    ret
+.arg3:
+    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_R10]
+    ret
+.arg4:
+    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_R8]
+    ret
+
+; RDI=validated FAT16 handle. Returns the matching kernel current-directory
+; cache pointer in RDI, so mutating operations update the real cache rather
+; than the per-slot opaque copy returned to ring 3 by SYS_FS_ENTRY.
+sc_dir_entry_handle_to_kernel:
+    mov rax, rdi
+    sub rax, FAT16_ROOT_CACHE
+    jc .deht_from_slot
+    cmp rax, FAT16_ROOT_CACHE_SZ - DIR_ENTRY_SIZE
+    ja .deht_from_slot
+    ret
+.deht_from_slot:
+    mov rax, rdi
+    sub rax, [rel l3_app_arena_base_v]
+    mov edx, eax
+    and edx, APP_SLOT_SIZE - 1
+    sub edx, L3_DIR_ENTRY_CACHE_OFF
+    lea rdi, [FAT16_ROOT_CACHE + rdx]
+    ret
+
+%define SC_KIND1(a) (a)
+%define SC_KIND2(a,b) ((a) | ((b) << 2))
+%define SC_KIND3(a,b,c) ((a) | ((b) << 2) | ((c) << 4))
+%define SC_KIND4(a,b,c,d) ((a) | ((b) << 2) | ((c) << 4) | ((d) << 6))
+%define SC_KIND5(a,b,c,d,e) ((a) | ((b) << 2) | ((c) << 4) | ((d) << 6) | ((e) << 8))
+%define SC_KIND6(a,b,c,d,e,f) ((a) | ((b) << 2) | ((c) << 4) | ((d) << 6) | ((e) << 8) | ((f) << 10))
+
+%macro SYSCALL_ENTRY 3
+    dq %1
+    db %2
+    dd %3
+    db 0, 0, 0
+%endmacro
+
+section .text
+align 8
+syscall_table:
+    SYSCALL_ENTRY syscall_entry.sc_print,            1, SC_KIND1(FN_KIND_CSTRING)
+    SYSCALL_ENTRY syscall_entry.sc_exit,             0, 0
+    SYSCALL_ENTRY syscall_entry.sc_gui_rect,         5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_gui_text,         4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_CSTRING, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_fs_count,         0, 0
+    SYSCALL_ENTRY syscall_entry.sc_fs_entry,         1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_fs_chdir,         1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_wm_create,        6, SC_KIND6(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_CSTRING, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_fs_read,          3, SC_KIND3(FN_KIND_HANDLE, FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_wm_handlers,      3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_app_done,         0, 0
+    SYSCALL_ENTRY syscall_entry.sc_fs_format_name,   2, SC_KIND2(FN_KIND_HANDLE, FN_KIND_PTR)
+    SYSCALL_ENTRY syscall_entry.sc_app_launch,       1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_fs_write,         3, SC_KIND3(FN_KIND_PTR, FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_fs_sync_root,     0, 0
+    SYSCALL_ENTRY syscall_entry.sc_wm_close,         1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_display_set_mode, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_cursor_init,      0, 0
+    SYSCALL_ENTRY syscall_entry.sc_ticks,            0, 0
+    SYSCALL_ENTRY syscall_entry.sc_fs_delete,        1, SC_KIND1(FN_KIND_HANDLE)
+    SYSCALL_ENTRY syscall_entry.sc_fs_rename,        2, SC_KIND2(FN_KIND_HANDLE, FN_KIND_PTR)
+    SYSCALL_ENTRY syscall_entry.sc_fs_mkdir,         1, SC_KIND1(FN_KIND_PTR)
+    SYSCALL_ENTRY syscall_entry.sc_open_file_np,     1, SC_KIND1(FN_KIND_HANDLE)
+    SYSCALL_ENTRY syscall_entry.sc_app_open,         1, SC_KIND1(FN_KIND_CSTRING)
+syscall_table_end:
+syscall_table_count equ (syscall_table_end - syscall_table) / SYSCALL_ENTRY_SIZE
+
+FN_BEGIN test_syscall_proc, 0, 0, FN_RET_VOID
 .loop:
     hlt
     jmp .loop

@@ -19,22 +19,24 @@ global ioapic_set_irq
 ; --- Initialize I/O APIC ---
 ioapic_init:
     ; Base address is obtained from MADT, but we configure essential routes now
+    push rbx
     push rdi
     push rsi
     push rdx
     push rcx
-    
+
     ; 1. Route all first 16 GSIs (ISA range) to standard vectors (32-47)
     ; This covers PIT on GSI 0 or 2, Keyboard on GSI 1, Mouse on GSI 12, etc.
-    mov r8, 0
+    ; rbx is callee-saved (preserved across ioapic_set_irq's internal r8 clobber).
+    xor ebx, ebx
 .loop_gsis:
-    mov rdi, r8             ; GSI
-    lea rsi, [r8 + 32]      ; Vector (32, 33, ...)
+    mov rdi, rbx            ; GSI
+    lea rsi, [rbx + 32]     ; Vector (32, 33, ...)
     mov rdx, 0              ; Destination: CPU 0
     mov rcx, 0              ; Flags: Edge, High, Physical
     call ioapic_set_irq
-    inc r8
-    cmp r8, 16
+    inc rbx
+    cmp rbx, 16
     jl .loop_gsis
 
     ; 2. Route PS/2 Mouse specifically to Vector 44 (GSI 12) - redundancy
@@ -55,6 +57,7 @@ ioapic_init:
     pop rdx
     pop rsi
     pop rdi
+    pop rbx
     ret
 
 ; --- ioapic_read ---

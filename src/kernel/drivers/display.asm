@@ -14,20 +14,21 @@ extern start_tick
 section .text
 
 ; --- Initialize display driver ---
-; Reads VBE info from 0x9000 (set by stage2)
-global display_init
-display_init:
+; Reads loader-provided framebuffer info.
+; auto-wrapped (FN_BEGIN emits global): global display_init
+FN_BEGIN display_init, 0, 0, FN_RET_SCALAR
     ; Read framebuffer address (full 64-bit for UEFI compatibility)
-    mov rax, [abs 0x9000]
+    mov rax, [abs VBE_INFO_ADDR + VBE_FB_ADDR_OFF]
     mov [fb_addr], rax
 
     ; Read dimensions
-    mov eax, [abs 0x9008]
+    mov eax, [abs VBE_INFO_ADDR + VBE_WIDTH_OFF]
     mov [scr_width], eax
-    mov eax, [abs 0x900C]
+    mov eax, [abs VBE_INFO_ADDR + VBE_HEIGHT_OFF]
     mov [scr_height], eax
-    mov eax, [abs 0x9010]
+    mov eax, [abs VBE_INFO_ADDR + VBE_PITCH_OFF]
     mov [scr_pitch], eax
+    mov [scr_pitch_q], rax
 
     ; SAFETY: Check for zero dimensions/pitch (loader failure)
     cmp dword [scr_width], 0
@@ -44,10 +45,16 @@ display_init:
     mov eax, [scr_width]
     shl eax, 2
     mov [scr_pitch], eax
+    mov [scr_pitch_q], rax
 
 .init_ok:
     ; Set back buffer address
-    mov qword [bb_addr], BACK_BUFFER_ADDR
+    mov rax, [abs VBE_INFO_ADDR + VBE_BACKBUF_OFF]
+    test rax, rax
+    jnz .have_backbuf
+    mov rax, BACK_BUFFER_ADDR
+.have_backbuf:
+    mov [bb_addr], rax
 
     ; Clear back buffer
     xor edi, edi             ; Black (color arg in edi)
@@ -57,8 +64,8 @@ display_init:
 
 ; --- Set pixel ---
 ; EDI = x, ESI = y, EDX = color (0x00RRGGBB)
-global pixel_set
-pixel_set:
+; auto-wrapped (FN_BEGIN emits global): global pixel_set
+FN_BEGIN pixel_set, 0, 0, FN_RET_SCALAR
     push rax
     push rbx
     ; Bounds check
@@ -72,9 +79,10 @@ pixel_set:
     jge .done
 
     ; Calculate offset: y * pitch + x * 4
-    mov eax, esi
-    imul eax, [scr_pitch]
-    lea eax, [eax + edi * 4]
+    movsxd rax, esi
+    imul rax, [scr_pitch_q]
+    movsxd rbx, edi
+    lea rax, [rax + rbx * 4]
     mov rbx, [bb_addr]
     mov [rbx + rax], edx
 
@@ -85,8 +93,8 @@ pixel_set:
 
 ; --- Fill rectangle (SSE2 optimized) ---
 ; EDI = x, ESI = y, EDX = w, ECX = h, R8D = color
-global fill_rect
-fill_rect:
+; auto-wrapped (FN_BEGIN emits global): global fill_rect
+FN_BEGIN fill_rect, 0, 0, FN_RET_SCALAR
     push rax
     push rbx
     push rcx
@@ -99,48 +107,61 @@ fill_rect:
     push r12
     push r13
 
-    ; Clip to screen bounds
-    mov r9d, edi             ; x
-    mov r10d, esi            ; y
-    mov r11d, edx            ; w
-    mov r12d, ecx            ; h
+    ; Clip to screen bounds.  Keep all geometry and address math in 64-bit
+    ; registers so hostile 32-bit inputs cannot wrap back into kernel memory.
+    movsxd r9, edi           ; x
+    movsxd r10, esi          ; y
+    movsxd r11, edx          ; w
+    movsxd r12, ecx          ; h
     mov r13d, r8d            ; color
 
     ; Clip left
-    cmp r9d, 0
+    cmp r9, 0
     jge .clip_right
-    add r11d, r9d            ; Reduce width
+    add r11, r9              ; Reduce width
     xor r9d, r9d             ; x = 0
 .clip_right:
-    mov eax, r9d
-    add eax, r11d
-    cmp eax, [scr_width]
-    jle .clip_top
-    mov r11d, [scr_width]
-    sub r11d, r9d
+    cmp r11, 0
+    jle .rect_done
+    mov eax, [scr_width]
+    cmp r9, rax
+    jae .rect_done
+    mov rbx, rax
+    mov rax, r9
+    add rax, r11
+    cmp rax, rbx
+    jbe .clip_top
+    mov r11, rbx
+    sub r11, r9
 .clip_top:
-    cmp r10d, 0
+    cmp r10, 0
     jge .clip_bottom
-    add r12d, r10d
+    add r12, r10
     xor r10d, r10d
 .clip_bottom:
-    mov eax, r10d
-    add eax, r12d
-    cmp eax, [scr_height]
-    jle .clip_done
-    mov r12d, [scr_height]
-    sub r12d, r10d
+    cmp r12, 0
+    jle .rect_done
+    mov eax, [scr_height]
+    cmp r10, rax
+    jae .rect_done
+    mov rbx, rax
+    mov rax, r10
+    add rax, r12
+    cmp rax, rbx
+    jbe .clip_done
+    mov r12, rbx
+    sub r12, r10
 .clip_done:
     ; Validate dimensions
-    cmp r11d, 0
+    cmp r11, 0
     jle .rect_done
-    cmp r12d, 0
+    cmp r12, 0
     jle .rect_done
 
     ; Calculate starting offset
-    mov eax, r10d
-    imul eax, [scr_pitch]
-    lea eax, [eax + r9d * 4]
+    mov rax, r10
+    imul rax, [scr_pitch_q]
+    lea rax, [rax + r9 * 4]
     mov rbx, [bb_addr]
     add rbx, rax
 
@@ -148,11 +169,11 @@ fill_rect:
     movd xmm0, r13d
     pshufd xmm0, xmm0, 0    ; xmm0 = [color, color, color, color]
 
-    movsxd rsi, dword [scr_pitch]
+    mov rsi, [scr_pitch_q]
 
     ; Simple robust fill using rep stosd
     mov rdi, rbx             ; RDI = starting address in back buffer
-    mov ecx, r11d            ; ECX = width in pixels
+    mov rcx, r11             ; RCX = width in pixels
 .row_loop:
     push rdi
     push rcx
@@ -162,7 +183,7 @@ fill_rect:
     pop rdi
 
     add rdi, rsi             ; Next row (add pitch)
-    dec r12d
+    dec r12
     jnz .row_loop
 
 .rect_done:
@@ -181,8 +202,8 @@ fill_rect:
 
 ; --- Draw single character (optimized fast path) ---
 ; EDI = x, ESI = y, DL = character, ECX = fg_color, R8D = bg_color
-global draw_char
-draw_char:
+; auto-wrapped (FN_BEGIN emits global): global draw_char
+FN_BEGIN draw_char, 0, 0, FN_RET_SCALAR
     push rax
     push rbx
     push r9
@@ -242,13 +263,13 @@ draw_char:
 
     ; === FAST PATH: No clipping needed ===
     ; Pre-calculate row start in back buffer
-    mov eax, r11d
-    imul eax, [scr_pitch]
-    lea eax, [eax + r10d * 4]
+    movsxd rax, r11d
+    imul rax, [scr_pitch_q]
+    lea rax, [rax + r10 * 4]
     mov r14, [bb_addr]
     add r14, rax              ; r14 = pointer to first pixel of char in BB
 
-    movsxd r15, dword [scr_pitch]  ; pitch for row advance
+    mov r15, [scr_pitch_q]     ; pitch for row advance
 
     mov r9d, 16               ; 16 rows
 .fast_row:
@@ -358,9 +379,10 @@ draw_char:
 
     ; Calculate row start pointer
     push r9
-    mov r9d, r11d
-    imul r9d, [scr_pitch]
-    lea r9d, [r9d + r10d * 4]
+    movsxd r9, r11d
+    imul r9, [scr_pitch_q]
+    movsxd rax, r10d
+    lea r9, [r9 + rax * 4]
     mov rdi, [bb_addr]
     add rdi, r9
     pop r9
@@ -415,8 +437,8 @@ draw_char:
 
 ; --- Draw null-terminated string ---
 ; EDI = x, ESI = y, RDX = pointer to string, ECX = fg_color, R8D = bg_color
-global draw_string
-draw_string:
+; auto-wrapped (FN_BEGIN emits global): global draw_string
+FN_BEGIN draw_string, 0, 0, FN_RET_SCALAR
     push rbx
     push r9
     push r10
@@ -465,8 +487,8 @@ draw_string:
 
 ; --- Draw horizontal line ---
 ; EDI = x, ESI = y, EDX = width, ECX = color
-global draw_hline
-draw_hline:
+; auto-wrapped (FN_BEGIN emits global): global draw_hline
+FN_BEGIN draw_hline, 0, 0, FN_RET_SCALAR
     push r8
     mov r8d, ecx             ; color
     mov ecx, 1               ; height = 1
@@ -476,8 +498,8 @@ draw_hline:
 
 ; --- Draw vertical line ---
 ; EDI = x, ESI = y, EDX = height, ECX = color
-global draw_vline
-draw_vline:
+; auto-wrapped (FN_BEGIN emits global): global draw_vline
+FN_BEGIN draw_vline, 0, 0, FN_RET_SCALAR
     push rax
     push rbx
     push r8
@@ -502,8 +524,9 @@ draw_vline:
 
     ; Write pixel
     push rax
-    imul eax, [scr_pitch]
-    lea eax, [eax + edi * 4]
+    imul rax, [scr_pitch_q]
+    movsxd rcx, edi
+    lea rax, [rax + rcx * 4]
     mov rcx, [bb_addr]
     mov [rcx + rax], r8d
     pop rax
@@ -521,8 +544,8 @@ draw_vline:
 
 ; --- Draw rectangle outline ---
 ; EDI = x, ESI = y, EDX = w, ECX = h, R8D = color
-global draw_rect_outline
-draw_rect_outline:
+; auto-wrapped (FN_BEGIN emits global): global draw_rect_outline
+FN_BEGIN draw_rect_outline, 0, 0, FN_RET_SCALAR
     push rdi
     push rsi
     push rdx
@@ -537,30 +560,30 @@ draw_rect_outline:
 
     ; Top line
     mov ecx, r8d
-    mov edx, [rsp + 16]     ; w saved
+    mov edx, [rsp + 8]      ; w
     call draw_hline
 
     ; Bottom line
     mov edi, [rsp + 24]     ; x
-    mov esi, [rsp + 16 + 8] ; y
+    mov esi, [rsp + 16]     ; y
     add esi, [rsp]           ; + h - 1
     dec esi
-    mov edx, [rsp + 16]     ; w
+    mov edx, [rsp + 8]      ; w
     mov ecx, r8d
     call draw_hline
 
     ; Left line
     mov edi, [rsp + 24]
-    mov esi, [rsp + 16 + 8]
+    mov esi, [rsp + 16]
     mov edx, [rsp]           ; h
     mov ecx, r8d
     call draw_vline
 
     ; Right line
     mov edi, [rsp + 24]
-    add edi, [rsp + 16]     ; x + w - 1
+    add edi, [rsp + 8]      ; x + w - 1
     dec edi
-    mov esi, [rsp + 16 + 8]
+    mov esi, [rsp + 16]
     mov edx, [rsp]
     mov ecx, r8d
     call draw_vline
@@ -579,8 +602,8 @@ draw_rect_outline:
 ; ============================================================================
 
 ; --- Flip entire back buffer to framebuffer ---
-global display_flip
-display_flip:
+; auto-wrapped (FN_BEGIN emits global): global display_flip
+FN_BEGIN display_flip, 0, 0, FN_RET_SCALAR
     push rax
     push rcx
     push rsi
@@ -645,8 +668,8 @@ display_flip:
 
 ; --- Flip rectangle from back buffer to framebuffer (SSE2 NT) ---
 ; EDI = x, ESI = y, EDX = w, ECX = h
-global display_flip_rect
-display_flip_rect:
+; auto-wrapped (FN_BEGIN emits global): global display_flip_rect
+FN_BEGIN display_flip_rect, 0, 0, FN_RET_SCALAR
     push rax
     push rbx
     push r8
@@ -686,9 +709,10 @@ display_flip_rect:
     jle .fr_done
 
     ; Calculate starting offset
-    mov eax, esi
-    imul eax, [scr_pitch]
-    lea r8d, [eax + edi * 4]
+    movsxd r8, esi
+    imul r8, [scr_pitch_q]
+    movsxd rax, edi
+    lea r8, [r8 + rax * 4]
 
     mov r9, [fb_addr]
     add r9, r8
@@ -769,8 +793,8 @@ display_flip_rect:
 
 ; --- Clear back buffer with color (SSE2 optimized) ---
 ; EDI = color
-global display_clear
-display_clear:
+; auto-wrapped (FN_BEGIN emits global): global display_clear
+FN_BEGIN display_clear, 0, 0, FN_RET_SCALAR
     push rax
     push rcx
     push rdi
@@ -820,13 +844,14 @@ display_clear:
     ret
 
 section .data
-global fb_addr, bb_addr, scr_width, scr_height, scr_pitch
+global fb_addr, bb_addr, scr_width, scr_height, scr_pitch, scr_pitch_q
 
 fb_addr:    dq 0
-bb_addr:    dq BACK_BUFFER_ADDR
+bb_addr:    dq 0
 scr_width:  dd SCREEN_WIDTH
 scr_height: dd SCREEN_HEIGHT
 scr_pitch:  dd SCREEN_PITCH
+scr_pitch_q: dq SCREEN_PITCH
 vsync_enabled: db 0        ; Disabled by default (uses PIT fallback on AMD/UEFI)
 fps_show:      db 1
 last_vsync_tick: dq 0      ; PIT tick count at last vsync
@@ -839,8 +864,8 @@ extern fps_count, last_fps, frame_count, start_tick
 ; Strategy: first try 0x3DA (works on VGA/QEMU), fall back to PIT-tick pacing.
 ; vsync_target_ticks = PIT ticks per frame (100Hz PIT: 180fps -> ~0.55 ticks -> 1 tick min)
 ; We use a hybrid: try 0x3DA with a long timeout; if it times out too fast, use PIT.
-global wait_vsync
-wait_vsync:
+; auto-wrapped (FN_BEGIN emits global): global wait_vsync
+FN_BEGIN wait_vsync, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
@@ -925,11 +950,31 @@ wait_vsync:
 ; --- Set Video Mode (Bochs VBE) ---
 ; EDI = width, ESI = height, EDX = bpp
 ; Returns 0 on success, -1 on failure
-global display_set_mode
-display_set_mode:
+; auto-wrapped (FN_BEGIN emits global): global display_set_mode
+; display_set_mode: source marker for guard checks; FN_BEGIN emits the label.
+FN_BEGIN display_set_mode, 0, 0, FN_RET_SCALAR
     push rbx
-    push rdx
-    push rax
+    push r12
+
+    ; Only 32bpp modes that fit the fixed boot back-buffer are safe here.
+    ; Both kernel callers and SYS_DISPLAY_SET_MODE share this boundary.
+    mov rax, rdi
+    or  rax, rsi
+    or  rax, rdx
+    shr rax, 32
+    jnz .set_fail
+    test edi, edi
+    jz .set_fail
+    test esi, esi
+    jz .set_fail
+    cmp edx, 32
+    jne .set_fail
+    mov r12d, edx
+    mov eax, edi
+    mul esi
+    jo .set_fail
+    cmp eax, BOOT_BACK_BUFFER_SIZE / 4
+    ja .set_fail
 
     ; Wait for VSync before switching mode to ensure clean timing
     call wait_vsync
@@ -971,9 +1016,7 @@ display_set_mode:
     mov ax, 0x03
     out dx, ax
     mov dx, 0x1CF
-    pop rax     ; Restore EDX (BPP) into RAX temporarily
-    push rax    ; Put it back
-    mov rax, [rsp]
+    mov eax, r12d
     out dx, ax
 
     ; Set Virtual Width (Index 6) to match Physical Width
@@ -1013,6 +1056,8 @@ display_set_mode:
     mov [scr_height], esi
     imul edi, 4
     mov [scr_pitch], edi
+    mov eax, edi
+    mov [scr_pitch_q], rax
 
     ; Clear back buffer completely (using new resolution)
     xor edi, edi
@@ -1024,7 +1069,6 @@ display_set_mode:
 .set_fail:
     mov rax, -1
 .set_ret:
-    pop rax
-    pop rdx
+    pop r12
     pop rbx
     ret

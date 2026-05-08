@@ -54,6 +54,7 @@ USAGE_CONFIDENCE    equ 0x47    ; Digitizer Confidence (palm rejection)
 HID_INPUT_CONSTANT  equ (1 << 0)   ; 0=Data, 1=Constant
 HID_INPUT_VARIABLE  equ (1 << 1)   ; 0=Array, 1=Variable
 HID_INPUT_RELATIVE  equ (1 << 2)   ; 0=Absolute, 1=Relative
+HID_MAX_REPORT_BITS equ (MOUSE_BUFFER_SIZE * 8)
 
 ; ============================================================================
 ; hid_parse_report_desc - Parse HID report descriptor
@@ -62,67 +63,8 @@ HID_INPUT_RELATIVE  equ (1 << 2)   ; 0=Absolute, 1=Relative
 ; Output: Populates hid_parsed_* fields
 ;         EAX = 1 if useful fields found, 0 if not
 ; ============================================================================
-global hid_parse_report_desc
-hid_parse_report_desc:
-    push rbx
-    push rcx
-    push rdx
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-
-    ; Clear all parsed fields
-    lea rdi, [hid_parsed_report_id]
-    xor eax, eax
-    mov ecx, (hid_parsed_end - hid_parsed_report_id)
-    rep stosb
-
-    ; Set defaults
-    mov byte [hid_parsed_max_contacts], 1
-    mov dword [hid_parsed_x_logical_max], 4095
-    mov dword [hid_parsed_y_logical_max], 4095
-
-    ; Parser state
-    xor r8d, r8d                ; r8  = current usage page
-    xor r9d, r9d                ; r9  = current usage
-    xor r10d, r10d              ; r10 = logical min
-    xor r11d, r11d              ; r11 = logical max
-    xor r12d, r12d              ; r12 = report size (bits per field)
-    xor r13d, r13d              ; r13 = report count
-    xor r14d, r14d              ; r14 = current bit offset in report
-    mov word [hp_report_id], 0
-    mov byte [hp_in_finger], 0  ; tracking which finger collection
-    mov byte [hp_finger_idx], 0 ; finger slot index (0 or 1)
-    mov byte [hp_found_fields], 0
-
-    ; RSI = start of descriptor, pop RCX to get length
-    pop r14                     ; restore r14 (was pushed)
-    push r14
-    ; Actually we need the original RCX (length). It was pushed.
-    ; Let me restructure - use RBP for end pointer
-    mov rbp, rsi
-    ; ECX was already modified by rep stosb above.
-    ; We need to reload from stack. The original ECX is at [rsp + 48] (6 regs pushed after it)
-    ; Actually let me restructure this properly.
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rdx
-    pop rcx
-    pop rbx
-    ; Start over with cleaner register usage
+; auto-wrapped (FN_BEGIN emits global): global hid_parse_report_desc
+FN_BEGIN hid_parse_report_desc, 0, 0, FN_RET_SCALAR
     jmp hid_parse_report_desc_v2
 
 hid_parse_report_desc_v2:
@@ -203,11 +145,11 @@ hid_parse_report_desc_v2:
     cmp ecx, 2
     je .read_2
     ; bSize=3 means 4 bytes
-    cmp rsi, rbp
-    jge .parse_done
+    ; Guard all rsi+1/rsi+2/rsi+3 reads with a remaining-length check.
+    lea rax, [rsi + 4]
+    cmp rax, rbp
+    ja .parse_done
     movzx ebx, byte [rsi]
-    cmp rsi, rbp
-    jge .parse_done
     movzx eax, byte [rsi + 1]
     shl eax, 8
     or ebx, eax
@@ -221,8 +163,10 @@ hid_parse_report_desc_v2:
     jmp .data_done
 
 .read_2:
-    cmp rsi, rbp
-    jge .parse_done
+    ; Guard rsi+1 reads with a remaining-length check.
+    lea rax, [rsi + 2]
+    cmp rax, rbp
+    ja .parse_done
     movzx ebx, byte [rsi]
     movzx eax, byte [rsi + 1]
     shl eax, 8
@@ -483,7 +427,13 @@ hid_parse_report_desc_v2:
     movzx eax, byte [hp_report_size]
     movzx ecx, byte [hp_report_count]
     imul eax, ecx
-    add [hp_bit_offset], eax
+    jo .parse_fail
+    mov edx, [hp_bit_offset]
+    add edx, eax
+    jc .parse_fail
+    cmp edx, HID_MAX_REPORT_BITS
+    ja .parse_fail
+    mov [hp_bit_offset], edx
 
 .clear_local:
     ; Clear local state (usage) after main items
@@ -492,10 +442,17 @@ hid_parse_report_desc_v2:
 
 .skip_long_item:
     ; Long item: next byte is data size, then 1 byte item tag, then data
-    cmp rsi, rbp
-    jge .parse_done
+    ; Require both size and tag bytes before skipping the payload.
+    lea rax, [rsi + 2]
+    cmp rax, rbp
+    ja .parse_done
     movzx ecx, byte [rsi]      ; data size
     add rsi, 2                  ; skip size + tag bytes
+    mov rax, rsi
+    add rax, rcx
+    jc .parse_done
+    cmp rax, rbp
+    ja .parse_done
     add rsi, rcx                ; skip data
     jmp .parse_loop
 
@@ -503,7 +460,10 @@ hid_parse_report_desc_v2:
     ; Calculate total report size in bytes
     mov eax, [hp_bit_offset]
     add eax, 7
+    jc .parse_fail
     shr eax, 3                  ; round up to bytes
+    cmp eax, MOUSE_BUFFER_SIZE
+    ja .parse_fail
     mov [hid_parsed_report_bytes], al
 
     ; Check if we found enough useful fields
@@ -541,8 +501,8 @@ hid_parse_report_desc_v2:
 ;         R8D = bit size of field (1-32)
 ; Output: EAX = extracted value (zero-extended)
 ; ============================================================================
-global hid_extract_field
-hid_extract_field:
+; auto-wrapped (FN_BEGIN emits global): global hid_extract_field
+FN_BEGIN hid_extract_field, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
@@ -600,11 +560,40 @@ hid_extract_field:
     ret
 
 ; ============================================================================
+; hid_extract_field_checked - Bounds-checked HID report field extraction
+; Input:  RSI = pointer to report data
+;         ECX = report data length in bytes
+;         EDI = bit offset of field
+;         R8D = bit size of field (1-32)
+; Output: CF=0, EAX=value on success; CF=1, EAX=0 if invalid/out of report
+; ============================================================================
+; auto-wrapped (FN_BEGIN emits global): global hid_extract_field_checked
+FN_BEGIN hid_extract_field_checked, 0, 0, FN_RET_SCALAR
+    cmp r8d, 1
+    jb .hef_fail
+    cmp r8d, 32
+    ja .hef_fail
+    mov eax, ecx
+    shl eax, 3
+    mov edx, edi
+    add edx, r8d
+    jc .hef_fail
+    cmp edx, eax
+    ja .hef_fail
+    call hid_extract_field
+    clc
+    ret
+.hef_fail:
+    xor eax, eax
+    stc
+    ret
+
+; ============================================================================
 ; hid_extract_field_signed - Extract a signed field value
 ; Same as hid_extract_field but sign-extends the result
 ; ============================================================================
-global hid_extract_field_signed
-hid_extract_field_signed:
+; auto-wrapped (FN_BEGIN emits global): global hid_extract_field_signed
+FN_BEGIN hid_extract_field_signed, 0, 0, FN_RET_SCALAR
     push rcx
     call hid_extract_field
 
@@ -624,6 +613,29 @@ hid_extract_field_signed:
     pop rcx
     ret
 
+; auto-wrapped (FN_BEGIN emits global): global hid_extract_field_signed_checked
+FN_BEGIN hid_extract_field_signed_checked, 0, 0, FN_RET_SCALAR
+    push rcx
+    call hid_extract_field_checked
+    jc .signed_checked_ret
+
+    ; Sign extend: if bit (size-1) is set, OR with upper bits
+    mov ecx, r8d
+    dec ecx
+    bt eax, ecx
+    jnc .signed_checked_ok
+    inc ecx
+    cmp ecx, 32
+    jge .signed_checked_ok
+    mov edx, 0xFFFFFFFF
+    shl edx, cl
+    or eax, edx
+.signed_checked_ok:
+    clc
+.signed_checked_ret:
+    pop rcx
+    ret
+
 ; ============================================================================
 ; hid_process_touchpad_report - Process a parsed touchpad report
 ; Uses hid_parsed_* layout to extract fields and update mouse state.
@@ -631,8 +643,8 @@ hid_extract_field_signed:
 ;         ECX = report data length
 ; Output: Updates mouse_x, mouse_y, mouse_buttons, mouse_moved, mouse_scroll_y
 ; ============================================================================
-global hid_process_touchpad_report
-hid_process_touchpad_report:
+; auto-wrapped (FN_BEGIN emits global): global hid_process_touchpad_report
+FN_BEGIN hid_process_touchpad_report, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
@@ -644,17 +656,21 @@ hid_process_touchpad_report:
     push r10
     push r11
     push r12
+    push r13
 
     mov rbp, rsi                ; RBP = report data
+    mov r13d, ecx               ; R13D = actual report data length
 
     ; --- Extract contact count ---
     xor r10d, r10d              ; default contact count = 0
     cmp byte [hid_parsed_cc_bit_size], 0
     je .no_contact_count
     mov rsi, rbp
+    mov ecx, r13d
     mov edi, [hid_parsed_cc_bit_offset]
     movzx r8d, byte [hid_parsed_cc_bit_size]
-    call hid_extract_field
+    call hid_extract_field_checked
+    jc .no_xy
     mov r10d, eax               ; R10 = contact count
 .no_contact_count:
 
@@ -662,9 +678,11 @@ hid_process_touchpad_report:
     cmp byte [hid_parsed_conf_bit_size], 0
     je .conf_ok
     mov rsi, rbp
+    mov ecx, r13d
     movzx edi, word [hid_parsed_conf_bit_offset]
     movzx r8d, byte [hid_parsed_conf_bit_size]
-    call hid_extract_field
+    call hid_extract_field_checked
+    jc .no_xy
     test eax, eax
     jz .no_xy                   ; confidence=0 → palm touch, skip entire report
 .conf_ok:
@@ -674,9 +692,11 @@ hid_process_touchpad_report:
     test byte [hp_found_fields], 0x08
     jz .no_tip
     mov rsi, rbp
+    mov ecx, r13d
     movzx edi, word [hid_parsed_tip_bit_offset]
     mov r8d, 1
-    call hid_extract_field
+    call hid_extract_field_checked
+    jc .no_xy
     mov r11d, eax               ; R11 = tip switch
 .no_tip:
 
@@ -685,13 +705,15 @@ hid_process_touchpad_report:
     test byte [hp_found_fields], 0x01
     jz .no_buttons
     mov rsi, rbp
+    mov ecx, r13d
     movzx edi, word [hid_parsed_btn_bit_offset]
     movzx r8d, byte [hid_parsed_btn_count]
     cmp r8d, 3
     jle .btn_size_ok
     mov r8d, 3                  ; cap at 3 buttons
 .btn_size_ok:
-    call hid_extract_field
+    call hid_extract_field_checked
+    jc .no_xy
     mov r12d, eax
 .no_buttons:
 
@@ -704,6 +726,7 @@ hid_process_touchpad_report:
 
     ; --- Extract X ---
     mov rsi, rbp
+    mov ecx, r13d
     movzx edi, word [hid_parsed_x_bit_offset]
     movzx r8d, byte [hid_parsed_x_bit_size]
     test r8d, r8d
@@ -712,29 +735,34 @@ hid_process_touchpad_report:
     cmp byte [hid_parsed_is_absolute], 1
     je .extract_absolute_x
     ; Relative X
-    call hid_extract_field_signed
+    call hid_extract_field_signed_checked
+    jc .no_xy
     mov [hid_rel_x], eax
     jmp .extract_y
 
 .extract_absolute_x:
-    call hid_extract_field
+    call hid_extract_field_checked
+    jc .no_xy
     mov [hid_abs_x], eax
     jmp .extract_y
 
 .extract_y:
     mov rsi, rbp
+    mov ecx, r13d
     movzx edi, word [hid_parsed_y_bit_offset]
     movzx r8d, byte [hid_parsed_y_bit_size]
 
     cmp byte [hid_parsed_is_absolute], 1
     je .extract_absolute_y
     ; Relative Y
-    call hid_extract_field_signed
+    call hid_extract_field_signed_checked
+    jc .no_xy
     mov [hid_rel_y], eax
     jmp .apply_movement
 
 .extract_absolute_y:
-    call hid_extract_field
+    call hid_extract_field_checked
+    jc .no_xy
     mov [hid_abs_y], eax
 
 .apply_movement:
@@ -753,7 +781,10 @@ hid_process_touchpad_report:
     movzx r8d, byte [hid_parsed_y_bit_size]
     test r8d, r8d
     jz .no_second_finger
-    call hid_extract_field
+    mov rsi, rbp
+    mov ecx, r13d
+    call hid_extract_field_checked
+    jc .no_xy
     ; Scale finger1_y to screen space same as finger0
     mov ecx, [hid_parsed_y_logical_max]
     sub ecx, [hid_parsed_y_logical_min]
@@ -781,7 +812,10 @@ hid_process_touchpad_report:
     movzx r8d, byte [hid_parsed_x_bit_size]
     test r8d, r8d
     jz .no_second_finger
-    call hid_extract_field
+    mov rsi, rbp
+    mov ecx, r13d
+    call hid_extract_field_checked
+    jc .no_xy
     ; Scale to screen X
     mov ecx, [hid_parsed_x_logical_max]
     sub ecx, [hid_parsed_x_logical_min]
@@ -896,6 +930,7 @@ hid_process_touchpad_report:
     mov byte [mouse_moved], 1
 
 .no_xy:
+    pop r13
     pop r12
     pop r11
     pop r10
@@ -915,8 +950,8 @@ hid_process_touchpad_report:
 ;         ESI = tip switch (0 or 1)
 ; Called once per touchpad report from hid_process_touchpad_report.
 ; ============================================================================
-global gesture_update
-gesture_update:
+; auto-wrapped (FN_BEGIN emits global): global gesture_update
+FN_BEGIN gesture_update, 0, 0, FN_RET_SCALAR
     push rax
     push rbx
     push rcx

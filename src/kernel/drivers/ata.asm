@@ -6,6 +6,8 @@ bits 64
 
 %include "constants.inc"
 
+extern tick_count
+
 section .text
 
 global ata_read_sectors
@@ -215,29 +217,35 @@ ata_write_sectors:
 
 ; --- Internal helpers ---
 
+; PIT-based deadline waits. CPU-spin loops are unreliable across CPU clocks
+; (too short on fast real HW, too long on slow QEMU). 100 ticks = 1 second.
 ata_wait_ready:
-    ; Wait for BSY to clear, timeout after ~1M iterations
-    push rcx
-    mov ecx, 1000000
+    push rbx
+    mov rbx, [tick_count]
+    add rbx, 100
 .wr_loop:
     mov dx, ATA_STATUS
     in al, dx
     test al, ATA_SR_BSY
     jz .wr_ok
-    dec ecx
-    jnz .wr_loop
-    pop rcx
+    mov rax, [tick_count]
+    cmp rax, rbx
+    jae .wr_timeout
+    pause
+    jmp .wr_loop
+.wr_timeout:
+    pop rbx
     mov eax, -1
     ret
 .wr_ok:
-    pop rcx
+    pop rbx
     xor eax, eax
     ret
 
 ata_wait_drq:
-    ; Wait for DRQ (data request) bit, with timeout
-    push rcx
-    mov ecx, 1000000
+    push rbx
+    mov rbx, [tick_count]
+    add rbx, 100
 .wdrq_loop:
     mov dx, ATA_STATUS
     in al, dx
@@ -245,14 +253,17 @@ ata_wait_drq:
     jnz .wdrq_err
     test al, ATA_SR_DRQ
     jnz .wdrq_ok
-    dec ecx
-    jnz .wdrq_loop
+    mov rax, [tick_count]
+    cmp rax, rbx
+    jae .wdrq_err
+    pause
+    jmp .wdrq_loop
 .wdrq_err:
-    pop rcx
+    pop rbx
     mov eax, -1
     ret
 .wdrq_ok:
-    pop rcx
+    pop rbx
     xor eax, eax
     ret
 

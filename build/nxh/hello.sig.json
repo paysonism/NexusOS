@@ -1,0 +1,63 @@
+[
+  {
+    "name": "app_hl_hello_hello_draw",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_hello_hello_click",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_hello_hello_key",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "k",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_hello_hello_boot",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  }
+]

@@ -257,6 +257,7 @@ class CG:
         s.consts={}
         s.externs=set()
         s.loops=[]  # (brk_lbl, cont_lbl)
+        s.sigs=[]
     def L(s,base="L"):
         s.lbl+=1; return f".{base}{s.lbl}"
     def emit(s,line): s.text.append(line)
@@ -269,8 +270,10 @@ class CG:
         s.rodata.append(f'{lbl}: db "{safe}", 0')
         return lbl
 
-def compile_unit(decls,app_prefix):
+def compile_unit(decls,app_prefix,embed=False):
+    global LAST_SIGS
     cg=CG(app_prefix)
+    cg.embed=embed
     app_meta={"name":app_prefix,"stack":4096}
     # collect top-level
     str_defs={}
@@ -290,6 +293,7 @@ def compile_unit(decls,app_prefix):
     cg.str_defs=str_defs
     # collect local fn names (so calls resolve to prefixed symbols)
     cg.local_fns={d["name"] for d in decls if d["k"]=="fn"}
+    cg.fn_argc={d["name"]:len(d["params"]) for d in decls if d["k"]=="fn"}
     # functions
     for d in decls:
         if d["k"]=="fn":
@@ -298,17 +302,27 @@ def compile_unit(decls,app_prefix):
     out=[]
     out.append(f"; NexusHL generated — do not edit by hand")
     out.append(f'; app="{app_meta["name"]}" stack={app_meta["stack"]}')
-    out.append("bits 64")
+    if not embed:
+        out.append("bits 64")
+        out.append("default rel")
+        out.append('%include "trace.inc"')
     for e in sorted(cg.externs):
         out.append(f"extern {e}")
-    out.append("section .text")
+    if not embed:
+        out.append("section .text")
     out.extend(cg.text)
+    # Strings: emit as inert bytes in current section. In standalone mode put
+    # them in .rodata; in embed mode keep them in .text (safe — no code falls
+    # through into them since every fn ends with `ret`).
     if cg.rodata:
-        out.append("section .rodata")
+        if not embed:
+            out.append("section .rodata")
         out.extend(cg.rodata)
     if cg.data:
-        out.append("section .data")
+        if not embed:
+            out.append("section .data")
         out.extend(cg.data)
+    LAST_SIGS=cg.sigs
     return "\n".join(out)+"\n"
 
 def gen_fn(cg,fn,prefix):
@@ -320,8 +334,17 @@ def gen_fn(cg,fn,prefix):
         if i>=len(CALL_REGS):
             raise SyntaxError(f"fn {fn['name']}: too many params")
         scope[pn]=-8*(i+1)
-    cg.emit(f"global {name}")
-    cg.emit(f"{name}:")
+    kindmask=0
+    cg.sigs.append({
+        "name": name,
+        "argc": len(params),
+        "kindmask": kindmask,
+        "retkind": "FN_RET_SCALAR",
+        "args": [{"index": i, "name": pn, "kind": "FN_KIND_SCALAR"} for i, pn in enumerate(params)],
+    })
+    cg.emit(f"FN_BEGIN {name}, {len(params)}, {kindmask}, FN_RET_SCALAR")
+    for i,pn in enumerate(params):
+        cg.emit(f"FN_ARG {i}, {pn}, FN_KIND_SCALAR")
     # prologue: 512 bytes of locals max (64 i64 slots)
     local_size=512
     cg.emit("    push rbp")
@@ -340,6 +363,7 @@ def gen_fn(cg,fn,prefix):
     for stmt in fn["body"]:
         gen_stmt(st,stmt)
     cg.emit(f"{st.epilogue}:")
+    cg.emit(f"    FN_END {name}")
     cg.emit("    pop r12")
     cg.emit("    pop rbx")
     cg.emit("    mov rsp, rbp")
@@ -510,15 +534,17 @@ def gen_expr(st,e):
                 cg.emit("    xor rax, rax")
             return
         if len(args)>6: raise SyntaxError("call has max 6 args")
+        if name in getattr(cg,"fn_argc",{}) and len(args)!=cg.fn_argc[name]:
+            raise SyntaxError(f"{name} expects {cg.fn_argc[name]} args, got {len(args)}")
         for a in args:
             gen_expr(st,a); cg.emit("    push rax")
         for reg in reversed(CALL_REGS[:len(args)]):
             cg.emit(f"    pop {reg}")
         if name in getattr(cg,"local_fns",set()):
-            cg.emit(f"    call {cg.prefix}_{name}")
+            cg.emit(f"    FN_CALL {cg.prefix}_{name}, {len(args)}")
         else:
             cg.externs.add(name)
-            cg.emit(f"    call {name}")
+            cg.emit(f"    FN_CALL {name}, {len(args)}")
     else:
         raise SyntaxError(f"bad expr {k}")
 
@@ -529,7 +555,7 @@ def resolve_use(name, lib_dir):
         raise FileNotFoundError(f"use {name}: {path} not found")
     return path
 
-def compile_file(path, lib_dir, app_prefix=None):
+def compile_file(path, lib_dir, app_prefix=None, embed=False, return_sigs=False):
     with open(path,"r",encoding="utf-8") as f: src=f.read()
     toks=lex(src,path); decls=parse(toks,path)
     # expand uses: prepend decls from lib files
@@ -556,7 +582,10 @@ def compile_file(path, lib_dir, app_prefix=None):
         if d["k"]!="use":
             expanded.append(d)
     prefix=app_prefix or os.path.splitext(os.path.basename(path))[0]
-    return compile_unit(expanded, "app_hl_"+prefix)
+    asm=compile_unit(expanded, "app_hl_"+prefix, embed=embed)
+    if return_sigs:
+        return asm, LAST_SIGS
+    return asm
 
 def main():
     import argparse
@@ -565,9 +594,22 @@ def main():
     ap.add_argument("-o","--output",required=True)
     ap.add_argument("-L","--lib",default=os.path.join(os.path.dirname(__file__),"..","lib"))
     ap.add_argument("--prefix",default=None)
+    ap.add_argument("--embed",action="store_true",
+                    help="emit for %%include into a larger NASM unit: no bits/default/section/extern directives, strings inline in .text")
+    ap.add_argument("--emit-sigs",action="store_true",
+                    help="write a .sig.json sidecar next to the generated assembly")
     args=ap.parse_args()
-    asm=compile_file(args.input, os.path.abspath(args.lib), args.prefix)
+    if args.emit_sigs:
+        asm,sigs=compile_file(args.input, os.path.abspath(args.lib), args.prefix, embed=args.embed, return_sigs=True)
+    else:
+        asm=compile_file(args.input, os.path.abspath(args.lib), args.prefix, embed=args.embed)
+        sigs=[]
     with open(args.output,"w",encoding="utf-8",newline="\n") as f: f.write(asm)
+    if args.emit_sigs:
+        sig_path=os.path.splitext(args.output)[0]+".sig.json"
+        with open(sig_path,"w",encoding="utf-8",newline="\n") as f:
+            json.dump(sigs,f,indent=2)
+            f.write("\n")
     print(f"[nxhc] {args.input} -> {args.output} ({len(asm)} bytes)")
 
 if __name__=="__main__":

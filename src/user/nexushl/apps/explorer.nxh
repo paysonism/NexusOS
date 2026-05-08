@@ -1,0 +1,314 @@
+# NexusHL File Explorer. Uses the shared GUI library and the public FS syscall
+# surface instead of drawing the file list directly in assembly.
+
+use gui
+
+app "Explorer" { stack = 8192; }
+
+const BORDER_WIDTH    = 2
+const TITLEBAR_HEIGHT = 24
+const FONT_WIDTH      = 8
+const ROW_H           = 18
+const PATH_H          = 22
+const HEADER_H        = 18
+const LIST_Y          = 42
+const STATUS_H        = 18
+const MAX_ROWS        = 20
+const ATTR_DIR        = 0x10
+
+const C_PATH          = 0x00E0E0E0
+const C_HEADER        = 0x00D0D0E0
+const C_STATUS        = 0x00E8E8E8
+const C_TEXT          = 0x00333333
+const C_MUTED         = 0x00666666
+const C_DIR           = 0x00CC8800
+const C_SELECT        = 0x000000A8
+const C_PANEL         = 0x00334455
+const C_PANEL2        = 0x00443355
+const C_OK            = 0x00228B22
+const C_WHITE         = 0x00FFFFFF
+const C_BLACK         = 0x00000000
+const C_BUTTON        = 0x00A0A0A0
+
+const K_ENTER         = 13
+const K_BS            = 8
+const SC_ESC_RAW      = 0x01
+const SC_UP           = 0xC8
+const SC_DOWN         = 0xD0
+const SC_ENTER_RAW    = 0x1C
+const KEY_R           = 114
+const KEY_N           = 110
+
+extern explorer_sel;
+extern exp_rename_active;
+extern exp_rename_cursor;
+extern exp_rename_buf;
+extern exp_newfolder_active;
+extern exp_newfolder_cursor;
+extern exp_newfolder_buf;
+extern exp_newfolder_done_msg;
+extern fat16_name_buf;
+extern fat16_size_buf;
+extern szPathRoot;
+extern szPathSub;
+extern szColName;
+extern szColSize;
+extern szDirLabel;
+extern szStatusReady;
+extern szBackBtn;
+extern szRenameLabel;
+extern szNewFolderLabel;
+extern szNewFolderDone;
+extern app_open_file;
+extern app_format_bytes_size;
+extern filename_to_83;
+extern fat16_format_name;
+
+fn selected_entry() {
+    return syscall(SYS_FS_ENTRY, lw(&explorer_sel));
+}
+
+fn file_count() {
+    return syscall(SYS_FS_COUNT);
+}
+
+fn current_is_root() {
+    let e0 = syscall(SYS_FS_ENTRY, 0);
+    if e0 == 0 { return 1; }
+    if lb(e0) == 46 {
+        if lb(e0 + 1) == 32 { return 0; }
+    }
+    return 1;
+}
+
+fn clamp_selection() {
+    let count = file_count();
+    if count <= 0 {
+        sw(&explorer_sel, 0);
+        return;
+    }
+    let sel = lw(&explorer_sel);
+    if sel < 0 { sw(&explorer_sel, 0); return; }
+    if sel >= count { sw(&explorer_sel, count - 1); }
+}
+
+fn clear_text(buf, cap) {
+    let i = 0;
+    while i < cap {
+        sb(buf + i, 0);
+        i = i + 1;
+    }
+}
+
+fn start_rename() {
+    let ent = selected_entry();
+    if ent == 0 { return; }
+    sb(&exp_rename_active, 1);
+    sw(&exp_rename_cursor, 0);
+    clear_text(&exp_rename_buf, 24);
+    fat16_format_name(&exp_rename_buf, ent);
+    let i = 0;
+    while i < 23 {
+        if lb(&exp_rename_buf + i) == 0 {
+            sw(&exp_rename_cursor, i);
+            return;
+        }
+        i = i + 1;
+    }
+    sw(&exp_rename_cursor, 22);
+}
+
+fn start_new_folder() {
+    sb(&exp_newfolder_active, 1);
+    sw(&exp_newfolder_cursor, 0);
+    clear_text(&exp_newfolder_buf, 24);
+}
+
+fn enter_selected(win) {
+    let ent = selected_entry();
+    if ent == 0 { return; }
+    if (lb(ent + 11) & ATTR_DIR) != 0 {
+        syscall(SYS_FS_CHDIR, lw(ent + 26));
+        sw(&explorer_sel, 0);
+        return;
+    }
+    app_open_file(ent, win);
+}
+
+fn draw_overlay(win, label, buf, cursor, color, xoff) {
+    let x = ui_win_x(win);
+    let y = ui_win_y(win);
+    let w = ui_win_w(win);
+    let h = ui_win_h(win);
+    ui_rect(x + BORDER_WIDTH, y + h - BORDER_WIDTH - 40, w - BORDER_WIDTH * 2, 22, color);
+    ui_text(x + BORDER_WIDTH + 4, y + h - BORDER_WIDTH - 38, label, C_WHITE, color);
+    ui_text(x + BORDER_WIDTH + xoff, y + h - BORDER_WIDTH - 38, buf, C_WHITE, color);
+    ui_caret_blink(win, xoff + cursor * FONT_WIDTH, h - TITLEBAR_HEIGHT - BORDER_WIDTH - 38);
+}
+
+fn draw(win) {
+    let x = ui_win_x(win);
+    let y = ui_win_y(win);
+    let w = ui_win_w(win);
+    let h = ui_win_h(win);
+
+    clamp_selection();
+
+    ui_rect_at(win, 0, 0, w - BORDER_WIDTH * 2, PATH_H, C_PATH);
+    if current_is_root() == 1 {
+        ui_text_at(win, 4, 3, &szPathRoot, C_TEXT, C_PATH);
+    } else {
+        ui_text_at(win, 4, 3, &szPathSub, C_TEXT, C_PATH);
+        ui_rect_at(win, w - 64, 2, 52, 16, C_BUTTON);
+        ui_text_at(win, w - 59, 4, &szBackBtn, C_BLACK, C_BUTTON);
+    }
+
+    ui_rect_at(win, 0, PATH_H, w - BORDER_WIDTH * 2, HEADER_H, C_HEADER);
+    ui_text_at(win, 4, PATH_H + 1, &szColName, C_TEXT, C_HEADER);
+    ui_text_at(win, w - 100, PATH_H + 1, &szColSize, C_TEXT, C_HEADER);
+
+    let count = file_count();
+    let i = 0;
+    while i < count {
+        if i >= MAX_ROWS { i = count; }
+        if i < count {
+            let ent = syscall(SYS_FS_ENTRY, i);
+            if ent != 0 {
+                let row_y = LIST_Y + i * ROW_H;
+                let bg = C_WHITE;
+                let fg = C_TEXT;
+                if i == lw(&explorer_sel) {
+                    bg = C_SELECT;
+                    fg = C_WHITE;
+                    ui_rect_at(win, 0, row_y, w - BORDER_WIDTH * 2, ROW_H, C_SELECT);
+                }
+                fat16_format_name(&fat16_name_buf, ent);
+                if (lb(ent + 11) & ATTR_DIR) != 0 {
+                    fg = C_DIR;
+                    if i == lw(&explorer_sel) { fg = C_WHITE; }
+                    ui_text_at(win, 8, row_y + 1, &fat16_name_buf, fg, bg);
+                    ui_text_at(win, w - 80, row_y + 1, &szDirLabel, C_MUTED, bg);
+                } else {
+                    ui_text_at(win, 8, row_y + 1, &fat16_name_buf, fg, bg);
+                    app_format_bytes_size(lw(ent + 28), &fat16_size_buf);
+                    ui_text_at(win, w - 80, row_y + 1, &fat16_size_buf, C_MUTED, bg);
+                }
+            }
+            i = i + 1;
+        }
+    }
+
+    ui_rect_at(win, 0, h - TITLEBAR_HEIGHT - BORDER_WIDTH - STATUS_H, w - BORDER_WIDTH * 2, STATUS_H, C_STATUS);
+    ui_text_at(win, 4, h - TITLEBAR_HEIGHT - BORDER_WIDTH - STATUS_H + 1, &szStatusReady, C_MUTED, C_STATUS);
+
+    if lb(&exp_rename_active) == 1 {
+        draw_overlay(win, &szRenameLabel, &exp_rename_buf, lw(&exp_rename_cursor), C_PANEL, 64);
+    }
+    if lb(&exp_newfolder_active) == 1 {
+        draw_overlay(win, &szNewFolderLabel, &exp_newfolder_buf, lw(&exp_newfolder_cursor), C_PANEL2, 96);
+    }
+    if lb(&exp_newfolder_done_msg) == 1 {
+        let ox = x + (w - 140) / 2;
+        ui_rect(ox, y + TITLEBAR_HEIGHT + 60, 140, 30, C_OK);
+        ui_text(ox + 15, y + TITLEBAR_HEIGHT + 68, &szNewFolderDone, C_WHITE, C_OK);
+    }
+}
+
+fn click(win, cx, cy) {
+    if lb(&exp_newfolder_done_msg) == 1 {
+        sb(&exp_newfolder_done_msg, 0);
+        return;
+    }
+    if lb(&exp_rename_active) == 1 { sb(&exp_rename_active, 0); return; }
+    if lb(&exp_newfolder_active) == 1 { sb(&exp_newfolder_active, 0); return; }
+
+    let w = ui_win_w(win);
+    if current_is_root() == 0 {
+        if cy < PATH_H {
+            if cx >= w - 64 {
+                syscall(SYS_FS_CHDIR, 0);
+                sw(&explorer_sel, 0);
+                return;
+            }
+        }
+    }
+    if cy < LIST_Y { return; }
+    let idx = (cy - LIST_Y) / ROW_H;
+    if idx >= file_count() { return; }
+    if idx == lw(&explorer_sel) {
+        enter_selected(win);
+        return;
+    }
+    sw(&explorer_sel, idx);
+}
+
+fn edit_key(active, cursor_ptr, buf, k) {
+    let sc = k & 0xFF;
+    let ch = (k >> 8) & 0xFF;
+    if sc == SC_ESC_RAW {
+        sb(active, 0);
+        return 1;
+    }
+    if ch == K_BS {
+        let cur = lw(cursor_ptr);
+        if cur == 0 { return 1; }
+        cur = cur - 1;
+        sb(buf + cur, 0);
+        sw(cursor_ptr, cur);
+        return 1;
+    }
+    if ch < 32 { return 0; }
+    if ch > 126 { return 1; }
+    let cur2 = lw(cursor_ptr);
+    if cur2 >= 22 { return 1; }
+    sb(buf + cur2, ch);
+    sb(buf + cur2 + 1, 0);
+    sw(cursor_ptr, cur2 + 1);
+    return 1;
+}
+
+fn key(win, k) {
+    let sc = k & 0xFF;
+    let ch = (k >> 8) & 0xFF;
+
+    if lb(&exp_rename_active) == 1 {
+        if ch == K_ENTER {
+            let ent = selected_entry();
+            sb(&exp_rename_active, 0);
+            if ent == 0 { return; }
+            filename_to_83(&exp_rename_buf, &fat16_name_buf);
+            syscall(SYS_FS_RENAME, ent, &fat16_name_buf);
+            return;
+        }
+        edit_key(&exp_rename_active, &exp_rename_cursor, &exp_rename_buf, k);
+        return;
+    }
+    if lb(&exp_newfolder_active) == 1 {
+        if ch == K_ENTER {
+            sb(&exp_newfolder_active, 0);
+            if lb(&exp_newfolder_buf) == 0 { return; }
+            filename_to_83(&exp_newfolder_buf, &fat16_name_buf);
+            if syscall(SYS_FS_MKDIR, &fat16_name_buf) != -1 {
+                sb(&exp_newfolder_done_msg, 1);
+            }
+            return;
+        }
+        edit_key(&exp_newfolder_active, &exp_newfolder_cursor, &exp_newfolder_buf, k);
+        return;
+    }
+
+    if sc == SC_UP {
+        let sel = lw(&explorer_sel);
+        if sel > 0 { sw(&explorer_sel, sel - 1); }
+        return;
+    }
+    if sc == SC_DOWN {
+        let sel2 = lw(&explorer_sel) + 1;
+        if sel2 < file_count() { sw(&explorer_sel, sel2); }
+        return;
+    }
+    if sc == SC_ENTER_RAW { enter_selected(win); return; }
+    if ch == K_ENTER { enter_selected(win); return; }
+    if ch == KEY_R { start_rename(); return; }
+    if ch == KEY_N { start_new_folder(); return; }
+}

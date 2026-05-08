@@ -20,6 +20,9 @@ usb_init:
     push rdx
     push rsi
     push rdi
+    push r13               ; r13/r14/r15 are callee-saved per SysV
+    push r14
+    push r15
 
     ; Loop through all PCI buses (0-255)
     xor r15, r15         ; Bus counter
@@ -285,6 +288,9 @@ usb_init:
     cmp r15, 256
     jl .bus_loop
 
+    pop r15
+    pop r14
+    pop r13
     pop rdi
     pop rsi
     pop rdx

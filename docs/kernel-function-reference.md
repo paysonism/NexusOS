@@ -481,6 +481,23 @@ State globals:
 `fat16_write_file`
 - Writes/creates a file from an 8.3 name and source buffer.
 
+`fat16_delete_entry`
+- Deletes a file or empty directory from the current directory cache, frees its
+  FAT chain, and flushes metadata to disk.
+
+`fat16_rename_entry`
+- Renames an entry in the current directory cache after checking for duplicates.
+
+`fat16_mkdir`
+- Creates a real single-cluster FAT16 directory with `.` and `..` entries.
+
+`fat16_flush_current_dir`
+- Flushes the current directory cache, whether it currently represents root or
+  a loaded subdirectory.
+
+`fat16_flush_fats`
+- Flushes the cached FAT table to all configured FAT copies.
+
 `fat16_get_file_size`
 - Reports file size.
 
@@ -494,7 +511,7 @@ State globals:
 - Switches the current directory cache.
 
 `fat16_sync_root`
-- Flushes FAT/root-cache updates to disk.
+- Compatibility wrapper that flushes the current directory cache.
 
 `fat16_debug_dump_root`
 - Debug-dumps root/current directory cache state.

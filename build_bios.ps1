@@ -1,5 +1,6 @@
 param(
     [switch]$Release,
+    [switch]$Trace,
     [ValidateSet('Default', 'Cache32Max')]
     [string]$PerfProfile = 'Default'
 )
@@ -23,6 +24,10 @@ if ($PerfProfile -eq 'Cache32Max') {
     $KernelDefines += '-dNEXUS_CACHE32_MAX'
     $KernelDefines += '-dNEXUS_CACHE32_AP_STARTUP'
 }
+if ($Trace) {
+    $KernelDefines += '-dENABLE_TRACE'
+    $KernelDefines += '-dENABLE_SIG_SECTION'
+}
 
 # Ensure build dir exists
 if (-not (Test-Path $BUILD_DIR)) {
@@ -33,6 +38,15 @@ Write-Host "NexusOS (BIOS) Build System" -ForegroundColor Cyan
 Write-Host "===========================" -ForegroundColor Cyan
 Write-Host ("Mode:   " + ($(if ($Release) { 'release' } else { 'debug' })))
 Write-Host "Perf:   $PerfProfile"
+Write-Host ("Trace:  " + ($(if ($Trace) { 'on' } else { 'off' })))
+
+& powershell -NoProfile -File (Join-Path $PSScriptRoot 'build_nxh.ps1')
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED NexusHL compile' -ForegroundColor Red; exit 1 }
+$CoverageTool = Join-Path $PSScriptRoot 'tools\check_coverage.py'
+if (Test-Path $CoverageTool) {
+    & python $CoverageTool
+    if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED signature coverage' -ForegroundColor Red; exit 1 }
+}
 Write-Host "Source: $SRC_DIR"
 Write-Host "Build:  $BUILD_DIR"
 
@@ -49,7 +63,7 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # 3. Kernel (Monolithic)
 Write-Host "[3/3] Assembling Kernel..." -ForegroundColor Yellow
-& $NASM @KernelDefines -w-pp-macro-redef-multi -f bin -o "$BUILD_DIR\kernel.bin" -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" "$SRC_DIR\kernel\kernel_build.asm"
+& $NASM @KernelDefines -w-pp-macro-redef-multi -f bin -o "$BUILD_DIR\kernel.bin" -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" -I "$BUILD_DIR\" "$SRC_DIR\kernel\kernel_build.asm"
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # 4. Create Disk Image (Concatenate headers + kernel)

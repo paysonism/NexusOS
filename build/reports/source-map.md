@@ -1,0 +1,916 @@
+# Generated Source Map
+
+Generated from `src/kernel/kernel_build.asm` and live source scans.
+
+## Kernel Include Order
+- line 22: `build/sig_hashes.inc`
+- line 26: `src/kernel/core/entry.asm`
+- line 28: `src/kernel/core/main.asm`
+- line 30: `src/kernel/core/idt.asm`
+- line 32: `src/kernel/core/isr.asm`
+- line 35: `src/kernel/core/trace.asm`
+- line 38: `src/kernel/core/memory.asm`
+- line 40: `src/kernel/core/pic.asm`
+- line 42: `src/kernel/core/pit.asm`
+- line 44: `src/kernel/core/tss.asm`
+- line 46: `src/kernel/core/perfdiag.asm`
+- line 48: `src/boot/gdt.asm`
+- line 50: `src/kernel/proc/usermode.asm`
+- line 52: `src/kernel/proc/process.asm`
+- line 54: `src/kernel/proc/syscall.asm`
+- line 58: `src/kernel/arch/rsdp.asm`
+- line 60: `src/kernel/arch/acpi.asm`
+- line 62: `src/kernel/arch/madt.asm`
+- line 64: `src/kernel/arch/aml_parser.asm`
+- line 66: `src/kernel/arch/apic.asm`
+- line 68: `src/kernel/arch/ioapic.asm`
+- line 72: `src/kernel/drivers/acpi_pci.asm`
+- line 74: `src/kernel/drivers/acpi_ec.asm`
+- line 76: `src/kernel/drivers/display.asm`
+- line 78: `src/kernel/drivers/keyboard.asm`
+- line 80: `src/kernel/drivers/mouse.asm`
+- line 82: `src/kernel/drivers/ata.asm`
+- line 84: `src/kernel/drivers/pci.asm`
+- line 86: `src/kernel/drivers/xhci.asm`
+- line 88: `src/kernel/drivers/usb_hid.asm`
+- line 90: `src/kernel/drivers/spi.asm`
+- line 92: `src/kernel/drivers/spi_hid.asm`
+- line 94: `src/kernel/drivers/i2c_hid.asm`
+- line 96: `src/kernel/drivers/hid_parser.asm`
+- line 98: `src/kernel/drivers/battery.asm`
+- line 102: `src/kernel/fs/fat16.asm`
+- line 106: `src/kernel/gui/render.asm`
+- line 108: `src/kernel/gui/window.asm`
+- line 110: `src/kernel/gui/taskbar.asm`
+- line 112: `src/kernel/gui/desktop.asm`
+- line 114: `src/kernel/gui/cursor.asm`
+- line 118: `src/user/apps.asm`
+- line 122: `src/kernel/lib/string.asm`
+- line 123: `src/kernel/lib/font.asm`
+- line 124: `src/kernel/lib/math.asm`
+- line 128: `build/sig_registry.inc`
+
+## Exported Labels
+- `gdt64_init` - `src\boot\gdt.asm:109`
+- `%1` - `src\include\trace.inc:30`
+- `%1` - `src\include\trace.inc:137`
+- `acpi_init` - `src\kernel\arch\acpi.asm:18`
+- `aml_dsdt_base` - `src\kernel\arch\aml_parser.asm:10`
+- `aml_dsdt_end` - `src\kernel\arch\aml_parser.asm:11`
+- `aml_init` - `src\kernel\arch\aml_parser.asm:16`
+- `aml_find_object` - `src\kernel\arch\aml_parser.asm:17`
+- `aml_evaluate` - `src\kernel\arch\aml_parser.asm:18`
+- `smp_started_cores` - `src\kernel\arch\apic.asm:16`
+- `smp_alive_cores` - `src\kernel\arch\apic.asm:17`
+- `smp_parked_cores` - `src\kernel\arch\apic.asm:18`
+- `smp_target_cores` - `src\kernel\arch\apic.asm:19`
+- `smp_core_states` - `src\kernel\arch\apic.asm:20`
+- `ioapic_base` - `src\kernel\arch\ioapic.asm:10`
+- `touchpad_irq` - `src\kernel\arch\ioapic.asm:11`
+- `ioapic_init` - `src\kernel\arch\ioapic.asm:16`
+- `ioapic_set_irq` - `src\kernel\arch\ioapic.asm:17`
+- `madt_init` - `src\kernel\arch\madt.asm:17`
+- `madt_lapic_count` - `src\kernel\arch\madt.asm:18`
+- `madt_enabled_cpu_count` - `src\kernel\arch\madt.asm:19`
+- `madt_lapic_ids` - `src\kernel\arch\madt.asm:20`
+- `rsdp_find` - `src\kernel\arch\rsdp.asm:10`
+- `_start` - `src\kernel\core\entry.asm:12`
+- `idt_init` - `src\kernel\core\idt.asm:55`
+- `gui_initialized` - `src\kernel\core\main.asm:138`
+- `scene_dirty` - `src\kernel\core\main.asm:140`
+- `free_page_count` - `src\kernel\core\memory.asm:233`
+- `perfdiag_init` - `src\kernel\core\perfdiag.asm:19`
+- `perfdiag_print_profile` - `src\kernel\core\perfdiag.asm:20`
+- `perfdiag_print_memory` - `src\kernel\core\perfdiag.asm:21`
+- `perfdiag_print_smp` - `src\kernel\core\perfdiag.asm:22`
+- `perfdiag_benchmark` - `src\kernel\core\perfdiag.asm:23`
+- `pic_init` - `src\kernel\core\pic.asm:15`
+- `pic_eoi_master` - `src\kernel\core\pic.asm:69`
+- `pic_eoi_slave` - `src\kernel\core\pic.asm:76`
+- `pic_mask_irq` - `src\kernel\core\pic.asm:85`
+- `pic_unmask_irq` - `src\kernel\core\pic.asm:109`
+- `pit_init` - `src\kernel\core\pit.asm:8`
+- `pit_handler` - `src\kernel\core\pit.asm:24`
+- `frame_count` - `src\kernel\core\pit.asm:59`
+- `last_fps` - `src\kernel\core\pit.asm:59`
+- `start_tick` - `src\kernel\core\pit.asm:59`
+- `tick_count` - `src\kernel\core\pit.asm:59`
+- `time_hours` - `src\kernel\core\pit.asm:59`
+- `time_minutes` - `src\kernel\core\pit.asm:59`
+- `trace_fn_enter` - `src\kernel\core\trace.asm:26`
+- `trace_fn_exit` - `src\kernel\core\trace.asm:74`
+- `trace_syscall` - `src\kernel\core\trace.asm:125`
+- `trace_emit` - `src\kernel\core\trace.asm:152`
+- `trace_dump_serial` - `src\kernel\core\trace.asm:181`
+- `trace_dump_screen` - `src\kernel\core\trace.asm:243`
+- `trace_set_slot` - `src\kernel\core\trace.asm:260`
+- `trace_seq` - `src\kernel\core\trace.asm:270`
+- `trace_active_slot` - `src\kernel\core\trace.asm:272`
+- `tss64` - `src\kernel\core\tss.asm:9`
+- `tss_init` - `src\kernel\core\tss.asm:32`
+- `acpi_ec_init` - `src\kernel\drivers\acpi_ec.asm:11`
+- `acpi_ec_read` - `src\kernel\drivers\acpi_ec.asm:12`
+- `acpi_ec_write` - `src\kernel\drivers\acpi_ec.asm:13`
+- `mcfg_base` - `src\kernel\drivers\acpi_pci.asm:10`
+- `acpi_pci_init` - `src\kernel\drivers\acpi_pci.asm:14`
+- `ata_read_sectors` - `src\kernel\drivers\ata.asm:13`
+- `ata_write_sectors` - `src\kernel\drivers\ata.asm:14`
+- `ata_drive_select_byte` - `src\kernel\drivers\ata.asm:15`
+- `ata_drive_sel` - `src\kernel\drivers\ata.asm:16`
+- `battery_init` - `src\kernel\drivers\battery.asm:76`
+- `battery_poll` - `src\kernel\drivers\battery.asm:77`
+- `battery_state` - `src\kernel\drivers\battery.asm:356`
+- `battery_percent` - `src\kernel\drivers\battery.asm:357`
+- `bb_addr` - `src\kernel\drivers\display.asm:847`
+- `fb_addr` - `src\kernel\drivers\display.asm:847`
+- `scr_height` - `src\kernel\drivers\display.asm:847`
+- `scr_pitch` - `src\kernel\drivers\display.asm:847`
+- `scr_pitch_q` - `src\kernel\drivers\display.asm:847`
+- `scr_width` - `src\kernel\drivers\display.asm:847`
+- `last_vsync_tick` - `src\kernel\drivers\display.asm:858`
+- `fps_show` - `src\kernel\drivers\display.asm:859`
+- `vsync_enabled` - `src\kernel\drivers\display.asm:859`
+- `hid_parsed_report_id` - `src\kernel\drivers\hid_parser.asm:1182`
+- `hid_parsed_has_report_id` - `src\kernel\drivers\hid_parser.asm:1183`
+- `hid_parsed_is_absolute` - `src\kernel\drivers\hid_parser.asm:1184`
+- `hid_parsed_is_touchpad` - `src\kernel\drivers\hid_parser.asm:1185`
+- `hid_parsed_report_bytes` - `src\kernel\drivers\hid_parser.asm:1186`
+- `hid_parsed_x_bit_offset` - `src\kernel\drivers\hid_parser.asm:1187`
+- `hid_parsed_x_bit_size` - `src\kernel\drivers\hid_parser.asm:1187`
+- `hid_parsed_y_bit_offset` - `src\kernel\drivers\hid_parser.asm:1188`
+- `hid_parsed_y_bit_size` - `src\kernel\drivers\hid_parser.asm:1188`
+- `hid_parsed_x_logical_max` - `src\kernel\drivers\hid_parser.asm:1189`
+- `hid_parsed_x_logical_min` - `src\kernel\drivers\hid_parser.asm:1189`
+- `hid_parsed_y_logical_max` - `src\kernel\drivers\hid_parser.asm:1190`
+- `hid_parsed_y_logical_min` - `src\kernel\drivers\hid_parser.asm:1190`
+- `hid_parsed_btn_bit_offset` - `src\kernel\drivers\hid_parser.asm:1191`
+- `hid_parsed_btn_count` - `src\kernel\drivers\hid_parser.asm:1191`
+- `hid_parsed_tip_bit_offset` - `src\kernel\drivers\hid_parser.asm:1192`
+- `hid_parsed_cid_bit_offset` - `src\kernel\drivers\hid_parser.asm:1193`
+- `hid_parsed_cid_bit_size` - `src\kernel\drivers\hid_parser.asm:1193`
+- `hid_parsed_cc_bit_offset` - `src\kernel\drivers\hid_parser.asm:1194`
+- `hid_parsed_cc_bit_size` - `src\kernel\drivers\hid_parser.asm:1194`
+- `hid_parsed_max_contacts` - `src\kernel\drivers\hid_parser.asm:1195`
+- `hid_parsed_contact_stride` - `src\kernel\drivers\hid_parser.asm:1196`
+- `gesture_tap_click` - `src\kernel\drivers\hid_parser.asm:1228`
+- `mouse_scroll_y` - `src\kernel\drivers\hid_parser.asm:1229`
+- `mouse_pinch_delta` - `src\kernel\drivers\hid_parser.asm:1243`
+- `i2c_hid_init` - `src\kernel\drivers\i2c_hid.asm:92`
+- `i2c_hid_poll` - `src\kernel\drivers\i2c_hid.asm:93`
+- `i2c_hid_debug_dump` - `src\kernel\drivers\i2c_hid.asm:1123`
+- `i2c_hid_active` - `src\kernel\drivers\i2c_hid.asm:1302`
+- `keyboard_init` - `src\kernel\drivers\keyboard.asm:16`
+- `keyboard_handler` - `src\kernel\drivers\keyboard.asm:37`
+- `keyboard_read` - `src\kernel\drivers\keyboard.asm:200`
+- `keyboard_available` - `src\kernel\drivers\keyboard.asm:225`
+- `keyboard_repeat_tick` - `src\kernel\drivers\keyboard.asm:238`
+- `kb_numlock` - `src\kernel\drivers\keyboard.asm:287`
+- `mouse_init` - `src\kernel\drivers\mouse.asm:15`
+- `mouse_wait_input` - `src\kernel\drivers\mouse.asm:355`
+- `mouse_handler` - `src\kernel\drivers\mouse.asm:393`
+- `mouse_read` - `src\kernel\drivers\mouse.asm:590`
+- `mouse_get_pos` - `src\kernel\drivers\mouse.asm:617`
+- `mouse_get_buttons` - `src\kernel\drivers\mouse.asm:624`
+- `mouse_check_moved` - `src\kernel\drivers\mouse.asm:630`
+- `uefi_mouse_poll` - `src\kernel\drivers\mouse.asm:640`
+- `mouse_debug_dump` - `src\kernel\drivers\mouse.asm:736`
+- `mouse_buttons` - `src\kernel\drivers\mouse.asm:931`
+- `mouse_moved` - `src\kernel\drivers\mouse.asm:931`
+- `mouse_x` - `src\kernel\drivers\mouse.asm:931`
+- `mouse_y` - `src\kernel\drivers\mouse.asm:931`
+- `mouse_init_status` - `src\kernel\drivers\mouse.asm:933`
+- `pci_read_conf_dword` - `src\kernel\drivers\pci.asm:26`
+- `pci_write_conf_dword` - `src\kernel\drivers\pci.asm:44`
+- `spi_init` - `src\kernel\drivers\spi.asm:40`
+- `spi_transfer` - `src\kernel\drivers\spi.asm:41`
+- `spi_type` - `src\kernel\drivers\spi.asm:42`
+- `spi_base` - `src\kernel\drivers\spi.asm:315`
+- `spi_type` - `src\kernel\drivers\spi.asm:316`
+- `spi_hid_init` - `src\kernel\drivers\spi_hid.asm:56`
+- `spi_hid_poll` - `src\kernel\drivers\spi_hid.asm:57`
+- `usb_init` - `src\kernel\drivers\usb.asm:14`
+- `usb_mouse_active` - `src\kernel\drivers\usb_hid.asm:1328`
+- `usb_no_xhci` - `src\kernel\drivers\usb_hid.asm:1329`
+- `xhci_init` - `src\kernel\drivers\xhci.asm:20`
+- `xhci_probe` - `src\kernel\drivers\xhci.asm:360`
+- `xhci_submit_cmd` - `src\kernel\drivers\xhci.asm:767`
+- `xhci_poll_event` - `src\kernel\drivers\xhci.asm:923`
+- `xhci_find_port` - `src\kernel\drivers\xhci.asm:998`
+- `xhci_find_port_next` - `src\kernel\drivers\xhci.asm:1222`
+- `xhci_enable_slot` - `src\kernel\drivers\xhci.asm:1329`
+- `xhci_address_device` - `src\kernel\drivers\xhci.asm:1357`
+- `xhci_ring_doorbell` - `src\kernel\drivers\xhci.asm:1524`
+- `xhci_queue_ctrl_trb` - `src\kernel\drivers\xhci.asm:1536`
+- `xhci_queue_int_trb` - `src\kernel\drivers\xhci.asm:1601`
+- `xhci_queue_int_trb2` - `src\kernel\drivers\xhci.asm:1660`
+- `xhci_configure_endpoint` - `src\kernel\drivers\xhci.asm:1711`
+- `xhci_flush_events` - `src\kernel\drivers\xhci.asm:1886`
+- `xhci_active` - `src\kernel\drivers\xhci.asm:1943`
+- `xhci_pci_search_start` - `src\kernel\drivers\xhci.asm:1947`
+- `xhci_pci_this_start` - `src\kernel\drivers\xhci.asm:1949`
+- `xhci_op_base` - `src\kernel\drivers\xhci.asm:1952`
+- `xhci_slot2_mode` - `src\kernel\drivers\xhci.asm:1958`
+- `xhci_max_ports` - `src\kernel\drivers\xhci.asm:1963`
+- `xhci_int_cycle` - `src\kernel\drivers\xhci.asm:1987`
+- `xhci_int_enqueue` - `src\kernel\drivers\xhci.asm:1987`
+- `xhci_port_num` - `src\kernel\drivers\xhci.asm:1992`
+- `xhci_port_speed` - `src\kernel\drivers\xhci.asm:1992`
+- `xhci_slot_id` - `src\kernel\drivers\xhci.asm:1992`
+- `xhci_int_ep_dci` - `src\kernel\drivers\xhci.asm:1998`
+- `xhci_int_cycle2` - `src\kernel\drivers\xhci.asm:2002`
+- `xhci_int_enqueue2` - `src\kernel\drivers\xhci.asm:2002`
+- `xhci_int_ep2_dci` - `src\kernel\drivers\xhci.asm:2002`
+- `xhci_slot2_id` - `src\kernel\drivers\xhci.asm:2002`
+- `xhci_debug_dump` - `src\kernel\drivers\xhci.asm:2011`
+- `fat16_list_dir` - `src\kernel\fs\fat16.asm:12`
+- `cursor_init` - `src\kernel\gui\cursor.asm:14`
+- `cursor_hide` - `src\kernel\gui\cursor.asm:23`
+- `cursor_update` - `src\kernel\gui\cursor.asm:117`
+- `cursor_draw` - `src\kernel\gui\cursor.asm:125`
+- `cursor_mode` - `src\kernel\gui\cursor.asm:439`
+- `desktop_draw_icons` - `src\kernel\gui\desktop.asm:19`
+- `desktop_handle_click` - `src\kernel\gui\desktop.asm:20`
+- `desktop_has_icon` - `src\kernel\gui\desktop.asm:21`
+- `desktop_add_icon` - `src\kernel\gui\desktop.asm:22`
+- `desktop_remove_icon` - `src\kernel\gui\desktop.asm:23`
+- `desktop_icons` - `src\kernel\gui\desktop.asm:24`
+- `render_init` - `src\kernel\gui\render.asm:21`
+- `render_rect` - `src\kernel\gui\render.asm:22`
+- `render_text` - `src\kernel\gui\render.asm:23`
+- `render_line` - `src\kernel\gui\render.asm:24`
+- `render_get_backbuffer` - `src\kernel\gui\render.asm:25`
+- `render_mark_dirty` - `src\kernel\gui\render.asm:26`
+- `render_mark_full` - `src\kernel\gui\render.asm:27`
+- `render_flush` - `src\kernel\gui\render.asm:28`
+- `render_save_backbuffer` - `src\kernel\gui\render.asm:134`
+- `render_restore_backbuffer` - `src\kernel\gui\render.asm:182`
+- `tb_start_menu_open` - `src\kernel\gui\taskbar.asm:66`
+- `tb_get_menu_item_at` - `src\kernel\gui\taskbar.asm:67`
+- `tb_start_menu_open` - `src\kernel\gui\taskbar.asm:906`
+- `sm_submenu_open` - `src\kernel\gui\taskbar.asm:910`
+- `wm_init` - `src\kernel\gui\window.asm:13`
+- `wm_create_window` - `src\kernel\gui\window.asm:14`
+- `wm_create_window_ex` - `src\kernel\gui\window.asm:15`
+- `wm_draw_window` - `src\kernel\gui\window.asm:16`
+- `wm_draw_desktop` - `src\kernel\gui\window.asm:17`
+- `wm_handle_mouse_event` - `src\kernel\gui\window.asm:18`
+- `wm_get_window_at` - `src\kernel\gui\window.asm:19`
+- `wm_close_window` - `src\kernel\gui\window.asm:20`
+- `wm_window_count` - `src\kernel\gui\window.asm:21`
+- `wm_focused_window` - `src\kernel\gui\window.asm:22`
+- `wm_drag_window_id` - `src\kernel\gui\window.asm:23`
+- `wm_draw_drag_outline` - `src\kernel\gui\window.asm:788`
+- `wm_window_count` - `src\kernel\gui\window.asm:962`
+- `wm_focused_window` - `src\kernel\gui\window.asm:963`
+- `wm_drag_preview_x` - `src\kernel\gui\window.asm:970`
+- `wm_drag_preview_y` - `src\kernel\gui\window.asm:971`
+- `wm_drag_preview_w` - `src\kernel\gui\window.asm:972`
+- `wm_drag_preview_h` - `src\kernel\gui\window.asm:973`
+- `font_data` - `src\kernel\lib\font.asm:5`
+- `fn_clamp` - `src\kernel\lib\math.asm:11`
+- `fn_min` - `src\kernel\lib\math.asm:23`
+- `fn_max` - `src\kernel\lib\math.asm:33`
+- `fn_abs` - `src\kernel\lib\math.asm:43`
+- `fn_rect_intersect` - `src\kernel\lib\math.asm:54`
+- `fn_strlen` - `src\kernel\lib\string.asm:11`
+- `fn_strcmp` - `src\kernel\lib\string.asm:29`
+- `fn_strcpy` - `src\kernel\lib\string.asm:56`
+- `fn_memcpy` - `src\kernel\lib\string.asm:74`
+- `fn_memset` - `src\kernel\lib\string.asm:94`
+- `fn_memsetd` - `src\kernel\lib\string.asm:121`
+- `fn_itoa` - `src\kernel\lib\string.asm:137`
+- `fn_itoa_dec2` - `src\kernel\lib\string.asm:206`
+- `uint32_to_str` - `src\kernel\lib\string.asm:227`
+- `current_process_id` - `src\kernel\proc\process.asm:23`
+- `process_find_by_window` - `src\kernel\proc\process.asm:28`
+- `current_process_id` - `src\kernel\proc\process.asm:403`
+- `syscall_count` - `src\kernel\proc\syscall.asm:964`
+- `app_blob_base_v` - `src\kernel\proc\usermode.asm:59`
+- `app_blob_end_v` - `src\kernel\proc\usermode.asm:60`
+- `app_blob_size_v` - `src\kernel\proc\usermode.asm:61`
+- `l3_app_arena_base_v` - `src\kernel\proc\usermode.asm:62`
+- `l3_app_arena_size_v` - `src\kernel\proc\usermode.asm:63`
+- `l3_syscall_stacks` - `src\kernel\proc\usermode.asm:443`
+- `l3_runtime` - `src\kernel\proc\usermode.asm:446`
+- `app_blob_start` - `src\user\apps.asm:28`
+- `app_l3_done_trampoline` - `src\user\apps.asm:34`
+- `app_blob_end` - `src\user\apps.asm:55`
+- `app_show_context_menu` - `src\user\apps\about.inc:101`
+- `app_l3_test_draw` - `src\user\apps\common.inc:166`
+- `app_l3_test_click` - `src\user\apps\common.inc:167`
+- `app_l3_test_key` - `src\user\apps\common.inc:168`
+- `app_terminal_kernel_draw` - `src\user\apps\common.inc:169`
+- `app_terminal_kernel_key` - `src\user\apps\common.inc:170`
+- `app_launch` - `src\user\apps\launch.inc:119`
+- `app_open_file` - `src\user\apps\launch.inc:433`
+- `app_open_file_in_notepad` - `src\user\apps\launch.inc:455`
+- `kernel_open_app_command` - `src\user\apps\launch.inc:484`
+- `kernel_open_file_in_notepad` - `src\user\apps\launch.inc:939`
+- `ctx_menu_visible` - `src\user\apps\shell.inc:145`
+- `app_paint_draw` - `src\user\apps\shell.inc:539`
+- `app_paint_click` - `src\user\apps\shell.inc:540`
+- `app_terminal_blob_start` - `src\user\apps\terminal.inc:1`
+- `app_terminal_blob_end` - `src\user\apps\terminal.inc:2`
+- `exploit_poc_click` - `src\user\poc\exploit_poc_syscall9.asm:21`
+- `hello_draw` - `src\user\templates\hello_callback.asm:5`
+- `hello_click` - `src\user\templates\hello_callback.asm:6`
+- `hello_key` - `src\user\templates\hello_callback.asm:7`
+
+## Fixed Address References
+- `src\boot\boot.asm:10` - `%define TEXT_RAWSIZE  0x10000`
+- `src\boot\boot.asm:12` - `%define TEXT_VSIZE    0x10000`
+- `src\boot\boot.asm:15` - `%define RELOC_VADDR   0x11000`
+- `src\boot\boot.asm:17` - `%define IMAGE_SIZE    0x12000`
+- `src\boot\boot.asm:83` - `dd 0x00004550`
+- `src\boot\boot.asm:92` - `dq 0x100000`
+- `src\boot\boot.asm:97` - `dq 0x100000, 0x100000, 0x100000, 0x100000`
+- `src\boot\boot.asm:106` - `dd 0xE0000060`
+- `src\boot\boot.asm:111` - `dd 0x42000040`
+- `src\boot\boot.asm:162` - `mov ecx, 0x0060E880`
+- `src\boot\boot.asm:163` - `mov r8d, 0x00201008`
+- `src\boot\boot.asm:169` - `mov ecx, 0x004040FF`
+- `src\boot\boot.asm:170` - `mov r8d, 0x00201008`
+- `src\boot\boot.asm:288` - `dd 0x9042a9de`
+- `src\boot\boot.asm:297` - `dd 0x31878c87`
+- `src\boot\boot.asm:303` - `dd 0x8D59D32B`
+- `src\boot\boot.asm:421` - `mov dword [r15], 0x00FFFFFF`
+- `src\boot\boot.asm:427` - `mov dword [r15], 0x00000000`
+- `src\boot\boot.asm:1108` - `; Desktop bg:    0x00553311  (warm dark brown)`
+- `src\boot\boot.asm:1109` - `; Panel/bar:     0x00331A08  (deep brown)`
+- `src\boot\boot.asm:1110` - `; Panel accent:  0x00664422  (medium brown)`
+- `src\boot\boot.asm:1111` - `; Window bg:     0x00201018  (near-black with warm tint)`
+- `src\boot\boot.asm:1112` - `; Window title:  0x00883310  (rich amber)`
+- `src\boot\boot.asm:1113` - `; Highlight:     0x00CC6620  (bright amber)`
+- `src\boot\boot.asm:1114` - `; Text light:    0x00E0D0C0  (warm white)`
+- `src\boot\boot.asm:1115` - `; Text mid:      0x00A09888  (muted)`
+- `src\boot\boot.asm:1122` - `mov r8d, 0x00422210     ; warm dark brown`
+- `src\boot\boot.asm:1130` - `mov r8d, 0x00201008     ; deep dark panel`
+- `src\boot\boot.asm:1138` - `mov r8d, 0x00553318     ; subtle border`
+- `src\boot\boot.asm:1145` - `mov ecx, 0x00E8C878     ; warm gold`
+- `src\boot\boot.asm:1146` - `mov r8d, 0x00201008`
+- `src\boot\boot.asm:1165` - `mov r8d, 0x00180A02     ; very dark shadow`
+- `src\boot\boot.asm:1175` - `mov r8d, 0x00664422     ; border color`
+- `src\boot\boot.asm:1183` - `mov r8d, 0x00241410     ; dark window body`
+- `src\boot\boot.asm:1191` - `mov r8d, 0x00883310     ; rich amber title bar`
+- `src\boot\boot.asm:1199` - `mov r8d, 0x00AA5520     ; brighter amber accent`
+- `src\boot\boot.asm:1210` - `mov r8d, 0x002020CC     ; red (BGRX: low B, low G, high R)`
+- `src\boot\boot.asm:1220` - `mov ecx, 0x00FFFFFF`
+- `src\boot\boot.asm:1221` - `mov r8d, 0x002020CC`
+- `src\boot\boot.asm:1232` - `mov r8d, 0x0020A0CC     ; amber/yellow`
+- `src\boot\boot.asm:1242` - `mov ecx, 0x00201008`
+- `src\boot\boot.asm:1243` - `mov r8d, 0x0020A0CC`
+- `src\boot\boot.asm:1250` - `mov ecx, 0x00FFFFFF`
+- `src\boot\boot.asm:1251` - `mov r8d, 0x00883310`
+- `src\boot\boot.asm:1260` - `mov ecx, 0x0058D8F8     ; bright cyan-gold`
+- `src\boot\boot.asm:1261` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1269` - `mov r8d, 0x00554030`
+- `src\boot\boot.asm:1275` - `mov ecx, 0x00B0A898`
+- `src\boot\boot.asm:1276` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1282` - `mov ecx, 0x00B0A898`
+- `src\boot\boot.asm:1283` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1289` - `mov ecx, 0x00B0A898`
+- `src\boot\boot.asm:1290` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1297` - `mov ecx, 0x0060E880     ; bright green`
+- `src\boot\boot.asm:1298` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1306` - `mov r8d, 0x00405030`
+- `src\boot\boot.asm:1312` - `mov ecx, 0x00B0A898`
+- `src\boot\boot.asm:1313` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1319` - `mov ecx, 0x00B0A898`
+- `src\boot\boot.asm:1320` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1326` - `mov ecx, 0x00B0A898`
+- `src\boot\boot.asm:1327` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1334` - `mov ecx, 0x00FF80FF     ; magenta/pink`
+- `src\boot\boot.asm:1335` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1343` - `mov r8d, 0x00504030`
+- `src\boot\boot.asm:1349` - `mov ecx, 0x00B0A898`
+- `src\boot\boot.asm:1350` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1356` - `mov ecx, 0x0050D0FF     ; orange accent`
+- `src\boot\boot.asm:1357` - `mov r8d, 0x00241410`
+- `src\boot\boot.asm:1367` - `mov r8d, 0x00201008     ; deep dark - matches top panel`
+- `src\boot\boot.asm:1377` - `mov r8d, 0x00553318     ; subtle border (matches top)`
+- `src\boot\boot.asm:1387` - `mov r8d, 0x00663818     ; slightly lighter`
+- `src\boot\boot.asm:1396` - `mov ecx, 0x00E8C878     ; gold like panel title`
+- `src\boot\boot.asm:1397` - `mov r8d, 0x00663818`
+- `src\boot\boot.asm:1407` - `mov r8d, 0x00442818     ; active tab bg`
+- `src\boot\boot.asm:1417` - `mov r8d, 0x00CC8840     ; amber indicator`
+- `src\boot\boot.asm:1426` - `mov ecx, 0x00D0C0B0`
+- `src\boot\boot.asm:1427` - `mov r8d, 0x00442818`
+- `src\boot\boot.asm:1438` - `mov ecx, 0x0060B080     ; green status`
+- `src\boot\boot.asm:1439` - `mov r8d, 0x00201008`
+- `src\boot\boot.asm:1476` - `mov ecx, 0x00E0D0C0       ; warm white`
+- `src\boot\boot.asm:1477` - `mov r8d, 0x00201008        ; match panel bg`
+- `src\boot\gdt.asm:64` - `dq 0x00CFFA000000FFFF   ; Present, DPL=3, Code, 32-bit`
+- `src\boot\paging.asm:4` - `; PML4 at 0x70000, PDPT at 0x71000, PD tables at 0x72000-0x75FFF`
+- `src\boot\paging.asm:15` - `APP_USER_PDE0   equ (APP_DATA_ADDR / 0x200000)`
+- `src\boot\paging.asm:16` - `APP_USER_PDE_COUNT equ ((MAX_WINDOWS * APP_SLOT_SIZE + 0x1FFFFF) / 0x200000)`
+- `src\boot\paging.asm:19` - `; Clear page table area (24KB: 0x70000 - 0x75FFF)`
+- `src\boot\paging.asm:23` - `mov edi, 0x70000`
+- `src\boot\paging.asm:33` - `; PML4[0] -> PDPT at 0x71000`
+- `src\boot\paging.asm:35` - `mov edi, 0x70000`
+- `src\boot\paging.asm:36` - `mov eax, 0x71000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER`
+- `src\boot\paging.asm:39` - `; PDPT[0] -> PD at 0x72000 (covers 0-1GB)`
+- `src\boot\paging.asm:40` - `mov edi, 0x71000`
+- `src\boot\paging.asm:41` - `mov eax, 0x72000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER`
+- `src\boot\paging.asm:44` - `; PDPT[1] -> PD at 0x73000 (covers 1-2GB)`
+- `src\boot\paging.asm:45` - `mov edi, 0x71008`
+- `src\boot\paging.asm:46` - `mov eax, 0x73000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER`
+- `src\boot\paging.asm:49` - `; PDPT[2] -> PD at 0x74000 (covers 2-3GB)`
+- `src\boot\paging.asm:50` - `mov edi, 0x71010`
+- `src\boot\paging.asm:51` - `mov eax, 0x74000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER`
+- `src\boot\paging.asm:54` - `; PDPT[3] -> PD at 0x75000 (covers 3-4GB)`
+- `src\boot\paging.asm:55` - `mov edi, 0x71018`
+- `src\boot\paging.asm:56` - `mov eax, 0x75000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER`
+- `src\boot\paging.asm:63` - `mov edi, 0x72000            ; Start of PD tables`
+- `src\boot\paging.asm:85` - `add eax, 0x200000           ; Next 2MB page physical address`
+- `src\boot\stage2.asm:3` - `; Loaded at 0x7E00 by MBR. Enters long mode and jumps to kernel at 0x100000.`
+- `src\boot\stage2.asm:53` - `; Step 3: Load kernel from disk to 0x100000`
+- `src\boot\stage2.asm:60` - `; Verify kernel loaded: check first 4 bytes at 0x100000`
+- `src\boot\stage2.asm:62` - `mov edi, 0x100000`
+- `src\boot\stage2.asm:109` - `mov eax, 0x70000         ; PML4 physical address`
+- `src\boot\stage2.asm:113` - `mov ecx, 0xC0000080      ; IA32_EFER MSR`
+- `src\boot\stage2.asm:138` - `mov rsp, 0x200000        ; KERNEL_STACK_TOP`
+- `src\boot\stage2.asm:154` - `mov eax, 0x0000FF00      ; GREEN`
+- `src\boot\stage2.asm:168` - `mov eax, [0x100000]`
+- `src\boot\stage2.asm:193` - `; Jump to kernel at 0x100000`
+- `src\boot\stage2.asm:194` - `mov rax, 0x100000`
+- `src\boot\stage2.asm:299` - `mov eax, 0x0000E820`
+- `src\boot\stage2.asm:301` - `mov edx, 0x534D4150      ; 'SMAP' signature`
+- `src\boot\stage2.asm:305` - `cmp eax, 0x534D4150      ; Verify 'SMAP' signature returned`
+- `src\boot\stage2.asm:320` - `; --- Load kernel from disk sectors 64+ to 0x100000 ---`
+- `src\boot\stage2.asm:321` - `; Strategy: Load all sectors to temp buffer at 0x10000-0x2FFFF (128KB below 1MB)`
+- `src\boot\stage2.asm:322` - `; then use Unreal Mode to copy the whole thing to 0x100000 in one go.`
+- `src\boot\stage2.asm:343` - `; Temp buffer: 0x1000:0x0000 = phys 0x10000`
+- `src\boot\stage2.asm:344` - `; Max 256 sectors = 128KB. Buffer extends to 0x30000.`
+- `src\boot\stage2.asm:389` - `; Verify temp buffer has data (check first 4 bytes at 0x1000:0x0000 = phys 0x10000)`
+- `src\boot\stage2.asm:404` - `; Phase 2: Enter Unreal Mode and copy from temp buffer to 0x100000`
+- `src\boot\stage2.asm:407` - `; Copy 256 * 512 = 131072 bytes from 0x10000 to 0x100000`
+- `src\boot\stage2.asm:408` - `mov esi, 0x10000         ; Source (physical)`
+- `src\boot\stage2.asm:409` - `mov edi, 0x100000        ; Destination (physical)`
+- `src\boot\stage2.asm:420` - `mov edi, 0x100000`
+- `src\boot\stage2.asm:515` - `dw 0x0000               ; Offset = 0x10000`
+- `src\boot\stage2.asm:516` - `dw 0x1000               ; Segment = 0x1000 (segment:offset = 0x1000:0x0000 = 0x10000)`
+- `src\boot\uefi_loader.asm:12` - `%define TEXT_RAW     0x10000`
+- `src\boot\uefi_loader.asm:16` - `%define RELOC_VA     0x11000`
+- `src\boot\uefi_loader.asm:18` - `%define IMAGE_SZ     0x12000`
+- `src\boot\uefi_loader.asm:157` - `dd 0x00004550                   ; "PE\0\0"`
+- `src\boot\uefi_loader.asm:183` - `dd 0xE0000060                   ; Code | Execute | Read | Write`
+- `src\boot\uefi_loader.asm:189` - `dd 0x42000040                   ; Initialized data | Discardable | Read`
+- `src\boot\uefi_loader.asm:271` - `mov ecx, 0xC0000080`
+- `src\boot\uefi_loader.asm:278` - `; Clear CR0.WP so we can write UEFI's read-only 0x100000`
+- `src\boot\uefi_loader.asm:344` - `;      RDI = KERN_DEST (0x100000)`
+- `src\boot\uefi_loader.asm:362` - `; Failures are tolerated (firmware may own 0x100000; trampoline handles it).`
+- `src\boot\uefi_loader.asm:383` - `; NOTE: Do NOT claim KERN_DEST (0x100000) here ? UEFI loaded our own`
+- `src\boot\uefi_loader.asm:384` - `; PE image at ImageBase=0x100000.  Claiming it could corrupt memory`
+- `src\boot\uefi_loader.asm:511` - `mov r14d, 0xFFFFFFFF            ; best mode (none)`
+- `src\boot\uefi_loader.asm:512` - `mov r15d, 0x7FFFFFFF            ; best score (lower = closer to 1024x768)`
+- `src\boot\uefi_loader.asm:568` - `cmp r14d, 0xFFFFFFFF`
+- `src\boot\uefi_loader.asm:722` - `mov qword [rsp+64], 0x200000    ; max read size (in/out)`
+- `src\boot\uefi_loader.asm:864` - `%define UEFI_KTEXT_START_PAGE  0x100     ; PTE index of 0x100000`
+- `src\boot\uefi_loader.asm:865` - `%define UEFI_KTEXT_END_PAGE    0x120     ; PTE index of 0x120000 (128KB)`
+- `src\boot\uefi_loader.asm:866` - `%define UEFI_PT0_BASE          0x74000   ; 4KB page table for PD0[0]`
+- `src\boot\uefi_loader.asm:867` - `%define UEFI_APP_PT_BASE       0x75000   ; 4 PTs (0x75000..0x78FFF) for app arena`
+- `src\boot\uefi_loader.asm:878` - `; PML4[0] -> PDPT0 at 0x71000 (covers 0-512 GB).`
+- `src\boot\uefi_loader.asm:880` - `mov qword [abs PT_BASE], 0x71000 | 7`
+- `src\boot\uefi_loader.asm:881` - `; PML4[1] -> PDPT1 at 0x72000 (covers 512-1024 GB), supervisor-only.`
+- `src\boot\uefi_loader.asm:882` - `mov qword [abs PT_BASE + 8], 0x72000 | 3`
+- `src\boot\uefi_loader.asm:884` - `; PDPT0[0] -> PD0 at 0x73000 for the first 1 GB, with User set.`
+- `src\boot\uefi_loader.asm:885` - `mov qword [abs PT_BASE + 0x1000], 0x73000 | 7`
+- `src\boot\uefi_loader.asm:889` - `mov rbx, 0x40000000             ; physical base = 1 GB`
+- `src\boot\uefi_loader.asm:897` - `add rbx, 0x40000000             ; +1 GB`
+- `src\boot\uefi_loader.asm:937` - `mov rax, 0x200000`
+- `src\boot\uefi_loader.asm:943` - `add r15, 0x1FFFFF`
+- `src\boot\uefi_loader.asm:959` - `add rax, 0x200000`
+- `src\boot\uefi_loader.asm:967` - `mov rbx, 0x8000000000           ; physical base = 512 GB`
+- `src\boot\uefi_loader.asm:975` - `add rbx, 0x40000000             ; +1 GB`
+- `src\boot\uefi_loader.asm:1126` - `dq 0x00CFFA000000FFFF`
+- `src\boot\uefi_loader.asm:1158` - `dd 0x9042a9de`
+- `src\boot\uefi_loader.asm:1163` - `dd 0x964e5b22`
+- `src\boot\uefi_loader.asm:1168` - `dd 0x5b1b31a1`
+- `src\boot\uefi_loader.asm:1174` - `dd 0x31878c87`
+- `src\boot\vesa.asm:16` - `mov dword [di], 0x32454256  ; 'VBE2'`
+- `src\include\boot_memory.inc:12` - `PAGE_TABLE_ADDR     equ 0x70000`
+- `src\include\boot_memory.inc:14` - `KERNEL_LOAD_ADDR    equ 0x100000`
+- `src\include\boot_memory.inc:15` - `KERNEL_STACK_TOP    equ 0x200000`
+- `src\include\boot_memory.inc:16` - `IDT_ADDR            equ 0x200000`
+- `src\include\boot_memory.inc:17` - `KERNEL_DATA_ADDR    equ 0x210000`
+- `src\include\boot_memory.inc:18` - `PAGE_BITMAP_ADDR    equ 0x300000`
+- `src\include\boot_memory.inc:19` - `PAGE_BITMAP_SIZE    equ 0x100000`
+- `src\include\boot_memory.inc:20` - `BACK_BUFFER_ADDR    equ 0x400000`
+- `src\include\boot_memory.inc:22` - `BACK_BUFFER_SAVE_ADDR equ 0xA00000`
+- `src\include\boot_memory.inc:23` - `CURSOR_BG_ADDR      equ 0x700000`
+- `src\include\boot_memory.inc:24` - `WINDOW_POOL_ADDR    equ 0x710000`
+- `src\include\boot_memory.inc:25` - `EVENT_BUFFER_ADDR   equ 0x720000`
+- `src\include\boot_memory.inc:26` - `APP_DATA_ADDR       equ 0x1000000`
+- `src\include\boot_memory.inc:27` - `APP_SLOT_SIZE       equ 0x100000`
+- `src\include\boot_memory.inc:28` - `L3_SYSCALL_STACK_ADDR equ 0x1800000`
+- `src\include\boot_memory.inc:29` - `APPS_BLOB_ADDR      equ 0x2000000`
+- `src\include\boot_memory.inc:30` - `APPS_BLOB_MAX_SIZE  equ 0x100000`
+- `src\include\constants.inc:16` - `; If Stack Top is 0x200000, IDT at 0x200000 overlaps stack top!`
+- `src\include\constants.inc:18` - `; If IDT is at 0x200000, it occupies 0x200000 to 0x201000.`
+- `src\include\constants.inc:19` - `; If Stack starts at 0x200000, a push writes to 0x1FFFF8.`
+- `src\include\constants.inc:23` - `CACHE32_RAM_LIMIT   equ 0x2000000    ; 32MB strict profile cap`
+- `src\include\constants.inc:24` - `SYSTEM_RESERVED_END equ 0x1B00000    ; Keep allocator above fixed cold buffers`
+- `src\include\constants.inc:25` - `SMP_CORE_STATE_ADDR equ 0x220000     ; Cacheline-aligned per-core records`
+- `src\include\constants.inc:26` - `SMP_CORE_STACK_BASE equ 0x240000     ; AP stacks grow down from here`
+- `src\include\constants.inc:31` - `SMP_CORE_STATE_ADDR equ 0x220000`
+- `src\include\constants.inc:34` - `SYSTEM_RESERVED_END equ 0xD00000`
+- `src\include\constants.inc:54` - `COLOR_VGA_BLACK     equ 0x00000000   ; #000000`
+- `src\include\constants.inc:55` - `COLOR_VGA_BLUE      equ 0x000000A8   ; #0000A8`
+- `src\include\constants.inc:56` - `COLOR_VGA_LGRAY     equ 0x00A8A8A8   ; #A8A8A8`
+- `src\include\constants.inc:57` - `COLOR_VGA_DGRAY     equ 0x00545454   ; #545454`
+- `src\include\constants.inc:58` - `COLOR_VGA_WHITE     equ 0x00FCFCFC   ; #FCFCFC`
+- `src\include\constants.inc:59` - `COLOR_VGA_TEAL      equ 0x00008080   ; #008080`
+- `src\include\constants.inc:60` - `COLOR_VGA_RED       equ 0x00A80000   ; #A80000`
+- `src\include\constants.inc:61` - `COLOR_VGA_GREEN     equ 0x0000A800   ; #00A800`
+- `src\include\constants.inc:63` - `COLOR_BLACK         equ 0x00000000`
+- `src\include\constants.inc:64` - `COLOR_WHITE         equ 0x00FCFCFC`
+- `src\include\constants.inc:65` - `COLOR_DESKTOP_BG    equ 0x00008080   ; Teal #008080`
+- `src\include\constants.inc:66` - `COLOR_TASKBAR_BG    equ 0x00A8A8A8   ; VGA lightgray #A8A8A8`
+- `src\include\constants.inc:67` - `COLOR_TASKBAR_TOP   equ 0x00FCFCFC   ; Bevel highlight`
+- `src\include\constants.inc:68` - `COLOR_CHROME_FACE   equ 0x00A8A8A8   ; #A8A8A8 3D face`
+- `src\include\constants.inc:69` - `COLOR_SURFACE       equ 0x00C0C0C0   ; #C0C0C0 window surface`
+- `src\include\constants.inc:70` - `COLOR_SUNKEN        equ 0x00FCFCFC   ; #FCFCFC sunken bg`
+- `src\include\constants.inc:71` - `COLOR_BEVEL_LT      equ 0x00FCFCFC   ; top/left highlight #FCFCFC`
+- `src\include\constants.inc:72` - `COLOR_BEVEL_DK      equ 0x00545454   ; bottom/right shadow #545454`
+- `src\include\constants.inc:73` - `COLOR_BEVEL_XDK     equ 0x00000000   ; outer 1px black`
+- `src\include\constants.inc:74` - `COLOR_TITLEBAR      equ 0x000000A8   ; focused titlebar #0000A8`
+- `src\include\constants.inc:75` - `COLOR_TITLEBAR_UNF  equ 0x00545454   ; unfocused #545454`
+- `src\include\constants.inc:76` - `COLOR_WINDOW_BG     equ 0x00C0C0C0   ; #C0C0C0`
+- `src\include\constants.inc:77` - `COLOR_WINDOW_BORDER equ 0x00000000   ; outer border black`
+- `src\include\constants.inc:78` - `COLOR_CLOSE_BTN     equ 0x00A8A8A8   ; face (no red)`
+- `src\include\constants.inc:79` - `COLOR_CLOSE_HOVER   equ 0x00C0C0C0`
+- `src\include\constants.inc:80` - `COLOR_MIN_BTN       equ 0x00A8A8A8   ; face`
+- `src\include\constants.inc:81` - `COLOR_TEXT_WHITE     equ 0x00FCFCFC`
+- `src\include\constants.inc:82` - `COLOR_TEXT_BLACK     equ 0x00000000`
+- `src\include\constants.inc:83` - `COLOR_TEXT_GRAY      equ 0x00545454`
+- `src\include\constants.inc:84` - `COLOR_TEXT_TITLE     equ 0x00FCFCFC   ; title bar text`
+- `src\include\constants.inc:85` - `COLOR_HIGHLIGHT      equ 0x000000A8   ; selection = accent blue`
+- `src\include\constants.inc:86` - `COLOR_CURSOR         equ 0x00FCFCFC`
+- `src\include\constants.inc:87` - `COLOR_START_BTN      equ 0x00A8A8A8   ; face`
+- `src\include\constants.inc:88` - `COLOR_START_HOVER    equ 0x00C0C0C0`
+- `src\include\constants.inc:175` - `XHCI_DCBAA_ADDR     equ 0x1900000    ; Cold DMA region outside GUI LLC arena`
+- `src\include\constants.inc:176` - `XHCI_CMD_RING_ADDR  equ 0x1910000`
+- `src\include\constants.inc:177` - `XHCI_ERST_ADDR      equ 0x1920000`
+- `src\include\constants.inc:178` - `XHCI_EVT_RING_ADDR  equ 0x1930000`
+- `src\include\constants.inc:179` - `XHCI_SCRATCH_ADDR   equ 0x1940000`
+- `src\include\constants.inc:180` - `XHCI_DEV_CTX_ADDR   equ 0x1950000`
+- `src\include\constants.inc:181` - `XHCI_INPUT_CTX_ADDR equ 0x1960000`
+- `src\include\constants.inc:182` - `XHCI_CTRL_RING_ADDR equ 0x1970000`
+- `src\include\constants.inc:183` - `XHCI_INT_RING_ADDR  equ 0x1980000`
+- `src\include\constants.inc:184` - `XHCI_CTRL_BUF_ADDR  equ 0x1990000`
+- `src\include\constants.inc:185` - `XHCI_MOUSE_BUF_ADDR equ 0x19A0000`
+- `src\include\constants.inc:186` - `XHCI_DEV_CTX2_ADDR  equ 0x19B0000`
+- `src\include\constants.inc:187` - `XHCI_INT_RING2_ADDR equ 0x19C0000`
+- `src\include\constants.inc:188` - `XHCI_MOUSE_BUF2_ADDR equ 0x19D0000`
+- `src\include\constants.inc:189` - `XHCI_CTRL_RING2_ADDR equ 0x19E0000`
+- `src\include\constants.inc:190` - `XHCI_MEM_END        equ 0x19F0000`
+- `src\include\constants.inc:192` - `XHCI_DCBAA_ADDR     equ 0x900000     ; Device Context Base Address Array`
+- `src\include\constants.inc:193` - `XHCI_CMD_RING_ADDR  equ 0x910000     ; Command Ring (4096 TRBs)`
+- `src\include\constants.inc:194` - `XHCI_ERST_ADDR      equ 0x920000     ; Event Ring Segment Table`
+- `src\include\constants.inc:195` - `XHCI_EVT_RING_ADDR  equ 0x930000     ; Event Ring (4096 TRBs)`
+- `src\include\constants.inc:196` - `XHCI_SCRATCH_ADDR   equ 0x940000     ; Scratchpad array + buffers`
+- `src\include\constants.inc:197` - `XHCI_DEV_CTX_ADDR   equ 0x950000     ; Output Device Context (slot 1)`
+- `src\include\constants.inc:198` - `XHCI_INPUT_CTX_ADDR equ 0x960000     ; Input Context`
+- `src\include\constants.inc:199` - `XHCI_CTRL_RING_ADDR equ 0x970000     ; Control EP0 Transfer Ring`
+- `src\include\constants.inc:200` - `XHCI_INT_RING_ADDR  equ 0x980000     ; Interrupt IN Transfer Ring`
+- `src\include\constants.inc:201` - `XHCI_CTRL_BUF_ADDR  equ 0x990000     ; Control transfer data buffers`
+- `src\include\constants.inc:202` - `XHCI_MOUSE_BUF_ADDR equ 0x9A0000     ; Mouse interrupt data buffers (slot 1)`
+- `src\include\constants.inc:204` - `XHCI_DEV_CTX2_ADDR  equ 0x9B0000     ; Output Device Context (slot 2)`
+- `src\include\constants.inc:205` - `XHCI_INT_RING2_ADDR equ 0x9C0000     ; Interrupt IN Transfer Ring (slot 2)`
+- `src\include\constants.inc:206` - `XHCI_MOUSE_BUF2_ADDR equ 0x9D0000   ; Mouse interrupt data buffers (slot 2)`
+- `src\include\constants.inc:207` - `XHCI_CTRL_RING2_ADDR equ 0x9E0000   ; Control EP0 Transfer Ring (slot 2)`
+- `src\include\constants.inc:208` - `XHCI_MEM_END        equ 0x9F0000     ; End of XHCI memory region`
+- `src\kernel\arch\apic.asm:10` - `lapic_base dq 0xFEE00000`
+- `src\kernel\arch\apic.asm:175` - `mov dword [rdi + 0x300], 0x00004500`
+- `src\kernel\arch\apic.asm:177` - `mov dword [rdi + 0x300], 0x00008500`
+- `src\kernel\arch\apic.asm:179` - `mov dword [rdi + 0x300], 0x00004608`
+- `src\kernel\arch\apic.asm:181` - `mov dword [rdi + 0x300], 0x00004608`
+- `src\kernel\arch\apic.asm:247` - `mov ecx, 0xC0000080`
+- `src\kernel\arch\apic.asm:252` - `or eax, 0x80000000`
+- `src\kernel\arch\apic.asm:275` - `dq 0x00CF9A000000FFFF`
+- `src\kernel\arch\apic.asm:276` - `dq 0x00CF92000000FFFF`
+- `src\kernel\arch\apic.asm:277` - `dq 0x00AF9A000000FFFF`
+- `src\kernel\arch\ioapic.asm:12` - `ioapic_base dq 0xFEC00000`
+- `src\kernel\arch\rsdp.asm:20` - `mov rsi, 0xE0000`
+- `src\kernel\arch\rsdp.asm:21` - `mov rcx, 0x20000 / 16        ; 8192 paragraphs covers 0xE0000..0xFFFFF inclusive`
+- `src\kernel\core\entry.asm:3` - `; Loaded at 0x100000 by Stage 2`
+- `src\kernel\core\entry.asm:160` - `mov eax, 0x00FFFFFF      ; WHITE`
+- `src\kernel\core\isr.asm:161` - `mov dword [rdi], 0x000000FF`
+- `src\kernel\core\isr.asm:162` - `mov dword [rdi+4], 0x000000FF`
+- `src\kernel\core\isr.asm:163` - `mov dword [rdi+8], 0x000000FF`
+- `src\kernel\core\isr.asm:168` - `mov dword [rdi], 0x0000FFFF`
+- `src\kernel\core\main.asm:171` - `mov r8d, 0x00000000`
+- `src\kernel\core\main.asm:177` - `mov ecx, 0x0000FF00`
+- `src\kernel\core\main.asm:178` - `mov r8d, 0x00000000`
+- `src\kernel\core\main.asm:447` - `or edx, 0x01000000`
+- `src\kernel\core\main.asm:750` - `mov ecx, 0x00FFFFFF`
+- `src\kernel\core\perfdiag.asm:36` - `mov eax, 0x80000000`
+- `src\kernel\core\perfdiag.asm:38` - `cmp eax, 0x80000006`
+- `src\kernel\core\perfdiag.asm:41` - `mov eax, 0x80000005`
+- `src\kernel\core\perfdiag.asm:50` - `mov eax, 0x80000006`
+- `src\kernel\core\tss.asm:14` - `dq 0x200000     ; RSP0 fallback until tss_init installs the dedicated stack.`
+- `src\kernel\drivers\hid_parser.asm:609` - `mov edx, 0xFFFFFFFF`
+- `src\kernel\drivers\hid_parser.asm:630` - `mov edx, 0xFFFFFFFF`
+- `src\kernel\drivers\i2c_hid.asm:80` - `I2C_BASE_0  equ 0xFEDC2000`
+- `src\kernel\drivers\i2c_hid.asm:81` - `I2C_BASE_1  equ 0xFEDC3000`
+- `src\kernel\drivers\i2c_hid.asm:82` - `I2C_BASE_2  equ 0xFEDC5000   ; was 0xFEDC4000 (nonexistent); real HW has 0xFEDC5000`
+- `src\kernel\drivers\i2c_hid.asm:83` - `I2C_BASE_3  equ 0xFEDC6000   ; was 0xFEDC5000; real HW also has 0xFEDC6000`
+- `src\kernel\drivers\i2c_hid.asm:84` - `I2C_BASE_4  equ 0xFEDC0000   ; additional block seen on Strix Point`
+- `src\kernel\drivers\i2c_hid.asm:135` - `; Sanity check: DW_IC_COMP_PARAM_1 must be non-zero and not 0xFFFFFFFF`
+- `src\kernel\drivers\i2c_hid.asm:139` - `cmp eax, 0xFFFFFFFF`
+- `src\kernel\drivers\i2c_hid.asm:182` - `cmp eax, 0xFFFFFFFF`
+- `src\kernel\drivers\i2c_hid.asm:218` - `and eax, 0xFFFFF000`
+- `src\kernel\drivers\i2c_hid.asm:228` - `cmp ecx, 0xFFFFFFFF`
+- `src\kernel\drivers\i2c_hid.asm:1276` - `; Order: higher indices first (I2CD = instance 3 likely at 0xFEDC5000 or 0xFEDC6000)`
+- `src\kernel\drivers\i2c_hid.asm:1278` - `dq I2C_BASE_2               ; 0xFEDC5000 - most likely I2CD on Strix Point`
+- `src\kernel\drivers\i2c_hid.asm:1279` - `dq I2C_BASE_3               ; 0xFEDC6000 - fallback I2CD candidate`
+- `src\kernel\drivers\i2c_hid.asm:1280` - `dq I2C_BASE_1               ; 0xFEDC3000 - I2CB`
+- `src\kernel\drivers\i2c_hid.asm:1281` - `dq I2C_BASE_0               ; 0xFEDC2000 - I2CA`
+- `src\kernel\drivers\i2c_hid.asm:1282` - `dq I2C_BASE_4               ; 0xFEDC0000 - additional FCH block`
+- `src\kernel\drivers\mouse.asm:484` - `or eax, 0xFFFFFF00`
+- `src\kernel\drivers\mouse.asm:504` - `or eax, 0xFFFFFF00`
+- `src\kernel\drivers\mouse.asm:547` - `or eax, 0xFFFFFFF0          ; sign-extend to 32-bit`
+- `src\kernel\drivers\mouse.asm:666` - `; EFI_NOT_READY (0x8000000000000006) means no new data`
+- `src\kernel\drivers\pci.asm:30` - `or eax, 0x80000000       ; Set Enable bit`
+- `src\kernel\drivers\pci.asm:48` - `or eax, 0x80000000`
+- `src\kernel\drivers\spi.asm:4` - `;   - AMD FCH GSPI (fixed MMIO 0xFEC00000)`
+- `src\kernel\drivers\spi.asm:29` - `%define SPI_CTRLR0_8BIT   0x00000007`
+- `src\kernel\drivers\spi.asm:31` - `%define AMD_FCH_GSPI_BASE  0xFEC00000`
+- `src\kernel\drivers\spi.asm:62` - `; NOTE: 0xFEC00000 is also the IOAPIC base in QEMU - must verify DW SPI signature.`
+- `src\kernel\drivers\spi.asm:67` - `cmp eax, 0xFFFFFFFF`
+- `src\kernel\drivers\spi.asm:99` - `cmp eax, 0xFFFFFFFF`
+- `src\kernel\drivers\spi.asm:115` - `and eax, 0xFFFFFFF0`
+- `src\kernel\drivers\spi.asm:147` - `and eax, 0xFFFFFFF0`
+- `src\kernel\drivers\spi.asm:150` - `; Verify DW SPI signature: SR should read 0x00000006 when idle (TFE+TFNF)`
+- `src\kernel\drivers\spi.asm:196` - `cmp eax, 0xFFFFFFFF`
+- `src\kernel\drivers\usb.asm:38` - `; Construct address: 0x80000000 | (Bus << 16) | (Dev << 11) | (Func << 8) | Register (0)`
+- `src\kernel\drivers\usb.asm:53` - `or eax, 0x80000000`
+- `src\kernel\drivers\usb.asm:65` - `or eax, 0x80000000`
+- `src\kernel\drivers\usb.asm:86` - `or eax, 0x80000000`
+- `src\kernel\drivers\usb.asm:146` - `and eax, 0xFFFFFFF0  ; Base Address`
+- `src\kernel\drivers\usb.asm:170` - `test eax, 0x00010000 ; Is BIOS owning it?`
+- `src\kernel\drivers\usb.asm:196` - `and eax, 0xFFFFFFF0`
+- `src\kernel\drivers\usb.asm:248` - `test edx, 0x00010000`
+- `src\kernel\drivers\usb_hid.asm:221` - `mov r8d, 0x01000680      ; Low dword of setup packet (GetDesc Device)`
+- `src\kernel\drivers\usb_hid.asm:222` - `mov r9d, 0x00120000      ; High dword (Len 18)`
+- `src\kernel\drivers\usb_hid.asm:239` - `mov r8d, 0x02000680`
+- `src\kernel\drivers\usb_hid.asm:240` - `mov r9d, 0x00090000`
+- `src\kernel\drivers\usb_hid.asm:251` - `mov r8d, 0x02000680`
+- `src\kernel\drivers\usb_hid.asm:270` - `mov r8d, 0x00010900`
+- `src\kernel\drivers\usb_hid.asm:271` - `mov r9d, 0x00000000`
+- `src\kernel\drivers\usb_hid.asm:287` - `mov r8d, 0x00000B21`
+- `src\kernel\drivers\usb_hid.asm:288` - `mov r9d, 0x00000000`
+- `src\kernel\drivers\usb_hid.asm:293` - `mov r8d, 0x00000A21`
+- `src\kernel\drivers\usb_hid.asm:294` - `mov r9d, 0x00000000`
+- `src\kernel\drivers\usb_hid.asm:304` - `mov r8d, 0x22000681         ; bmRequestType=0x81, GET_DESCRIPTOR, wValue=0x2200`
+- `src\kernel\drivers\usb_hid.asm:305` - `mov r9d, 0x02000000         ; wIndex=0, wLength=512`
+- `src\kernel\drivers\usb_hid.asm:900` - `mov r8d, 0x01000680`
+- `src\kernel\drivers\usb_hid.asm:901` - `mov r9d, 0x00120000`
+- `src\kernel\drivers\usb_hid.asm:909` - `mov r8d, 0x02000680`
+- `src\kernel\drivers\usb_hid.asm:910` - `mov r9d, 0x00090000`
+- `src\kernel\drivers\usb_hid.asm:917` - `mov r8d, 0x02000680`
+- `src\kernel\drivers\usb_hid.asm:965` - `mov r8d, 0x00010900`
+- `src\kernel\drivers\usb_hid.asm:966` - `mov r9d, 0x00000000`
+- `src\kernel\drivers\usb_hid.asm:975` - `mov r8d, 0x00000B21`
+- `src\kernel\drivers\usb_hid.asm:976` - `mov r9d, 0x00000000`
+- `src\kernel\drivers\usb_hid.asm:980` - `mov r8d, 0x00000A21`
+- `src\kernel\drivers\usb_hid.asm:981` - `mov r9d, 0x00000000`
+- `src\kernel\drivers\xhci.asm:219` - `mov eax, 0x80000000`
+- `src\kernel\drivers\xhci.asm:274` - `; Build PCI base addr for register access: 0x80000000 | bus<<16 | dev<<11 | func<<8`
+- `src\kernel\drivers\xhci.asm:275` - `mov eax, 0x80000000`
+- `src\kernel\drivers\xhci.asm:294` - `and ecx, 0xFFFFFFF0`
+- `src\kernel\fs\fat16.asm:62` - `FAT16_SECTOR_BUF    equ 0x1A00000   ; 512 byte sector buffer`
+- `src\kernel\fs\fat16.asm:63` - `FAT16_FAT_CACHE     equ 0x1A01000   ; FAT table cache (up to 64KB)`
+- `src\kernel\fs\fat16.asm:64` - `FAT16_ROOT_CACHE    equ 0x1A11000   ; Root directory cache (up to 32 sectors = 16KB)`
+- `src\kernel\fs\fat16.asm:65` - `FAT16_FILE_BUF      equ 0x1A21000   ; File read buffer (up to 64KB)`
+- `src\kernel\fs\fat16.asm:66` - `FAT16_DIR_CACHE     equ 0x1A31000   ; Current directory listing cache`
+- `src\kernel\fs\fat16.asm:68` - `; Moved to 13MB region to avoid XHCI conflict (0x900000-0x9F0000)`
+- `src\kernel\fs\fat16.asm:69` - `FAT16_SECTOR_BUF    equ 0xD00000   ; 512 byte sector buffer`
+- `src\kernel\fs\fat16.asm:70` - `FAT16_FAT_CACHE     equ 0xD01000   ; FAT table cache (up to 64KB)`
+- `src\kernel\fs\fat16.asm:71` - `FAT16_ROOT_CACHE    equ 0xD11000   ; Root directory cache (up to 32 sectors = 16KB)`
+- `src\kernel\fs\fat16.asm:72` - `FAT16_FILE_BUF      equ 0xD21000   ; File read buffer (up to 64KB)`
+- `src\kernel\fs\fat16.asm:73` - `FAT16_DIR_CACHE     equ 0xD31000   ; Current directory listing cache`
+- `src\kernel\gui\cursor.asm:253` - `mov ecx, 0x00FFFFFF      ; Default white`
+- `src\kernel\gui\cursor.asm:400` - `mov dword [r14 + rcx*4], 0x00FFFFFF`
+- `src\kernel\gui\desktop.asm:89` - `mov r8d, 0x00AA8822`
+- `src\kernel\gui\desktop.asm:98` - `mov ecx, 0x0054FC54   ; VGA lightgreen`
+- `src\kernel\gui\desktop.asm:99` - `mov r8d, 0x00000000   ; VGA black bg`
+- `src\kernel\gui\desktop.asm:109` - `mov r8d, 0x00CCCCCC`
+- `src\kernel\gui\desktop.asm:115` - `mov r8d, 0x00CCCCCC`
+- `src\kernel\gui\desktop.asm:121` - `mov r8d, 0x00CCCCCC`
+- `src\kernel\gui\desktop.asm:131` - `mov r8d, 0x00AAAAAA`
+- `src\kernel\gui\desktop.asm:137` - `mov r8d, 0x00AAAAAA`
+- `src\kernel\gui\desktop.asm:147` - `mov r8d, 0x00FF0000`
+- `src\kernel\gui\desktop.asm:153` - `mov r8d, 0x000000FF`
+- `src\kernel\gui\desktop.asm:159` - `mov r8d, 0x0000FF00`
+- `src\kernel\gui\desktop.asm:165` - `mov r8d, 0x00FFFF00`
+- `src\kernel\gui\desktop.asm:333` - `dd 0x00A85400`
+- `src\kernel\gui\desktop.asm:338` - `dd 0x00000000`
+- `src\kernel\gui\desktop.asm:343` - `dd 0x00FCFCFC`
+- `src\kernel\gui\desktop.asm:348` - `dd 0x00545454`
+- `src\kernel\gui\desktop.asm:353` - `dd 0x00A80000`
+- `src\kernel\gui\desktop.asm:358` - `dd 0x00335577`
+- `src\kernel\gui\taskbar.asm:30` - `MENU_COLOR_BG   equ 0x00A8A8A8   ; VGA chrome face #A8A8A8`
+- `src\kernel\gui\taskbar.asm:31` - `MENU_COLOR_HL   equ 0x00A80000   ; accent blue #0000A8 (BGRX)`
+- `src\kernel\gui\taskbar.asm:168` - `mov r8d, 0x003355AA`
+- `src\kernel\gui\taskbar.asm:172` - `mov r8d, 0x00222244`
+- `src\kernel\gui\taskbar.asm:271` - `MENU_ITEM 0, 0x00CCAA44, szMenuExplorer`
+- `src\kernel\gui\taskbar.asm:272` - `MENU_ITEM 1, 0x00222222, szMenuTerm`
+- `src\kernel\gui\taskbar.asm:273` - `MENU_ITEM 2, 0x00FFFFFF, szMenuNotepad`
+- `src\kernel\gui\taskbar.asm:274` - `MENU_ITEM 3, 0x00888888, szMenuSettings`
+- `src\kernel\gui\taskbar.asm:275` - `MENU_ITEM 4, 0x00FF8800, szMenuPaint`
+- `src\kernel\gui\taskbar.asm:282` - `mov r8d, 0x00555588`
+- `src\kernel\gui\taskbar.asm:322` - `mov ecx, 0x00FF0000        ; Red text`
+- `src\kernel\gui\taskbar.asm:351` - `mov r8d, 0x00AAAAAA        ; Light gray border`
+- `src\kernel\gui\taskbar.asm:361` - `mov r8d, 0x00111111`
+- `src\kernel\gui\taskbar.asm:371` - `mov r8d, 0x00AAAAAA`
+- `src\kernel\gui\taskbar.asm:386` - `mov r8d, 0x0022CC22        ; Green (>20%)`
+- `src\kernel\gui\taskbar.asm:389` - `mov r8d, 0x00CC2222        ; Red (<=20%)`
+- `src\kernel\gui\taskbar.asm:395` - `mov r8d, 0x002288FF        ; Blue fill when charging`
+- `src\kernel\gui\taskbar.asm:481` - `mov r8d, 0x00FFDD44`
+- `src\kernel\gui\taskbar.asm:790` - `mov r8d, 0x001E1E3E`
+- `src\kernel\gui\taskbar.asm:814` - `mov r8d, 0x001E1E3E`
+- `src\kernel\gui\taskbar.asm:824` - `mov ecx, 0x00FF8888`
+- `src\kernel\gui\taskbar.asm:825` - `mov r8d, 0x001E1E3E`
+- `src\kernel\kernel_build.asm:6` - `[org 0x100000]`
+- `src\kernel\lib\string.asm:103` - `imul eax, 0x01010101     ; Replicate byte across dword`
+- `src\kernel\proc\process.asm:11` - `PROCESS_POOL    equ 0x220000     ; 8 * 512 bytes = 4KB`
+- `src\kernel\proc\process.asm:54` - `mov qword [rbx + process_t.kernel_rsp], 0x200000`
+- `src\kernel\proc\syscall.asm:13` - `IA32_EFER           equ 0xC0000080`
+- `src\kernel\proc\syscall.asm:14` - `IA32_STAR           equ 0xC0000081`
+- `src\kernel\proc\syscall.asm:15` - `IA32_LSTAR          equ 0xC0000082`
+- `src\kernel\proc\syscall.asm:16` - `IA32_FMASK          equ 0xC0000084`
+- `src\kernel\proc\syscall.asm:24` - `FAT16_ROOT_CACHE    equ 0x1A11000`
+- `src\kernel\proc\syscall.asm:26` - `FAT16_ROOT_CACHE    equ 0xD11000`
+- `src\kernel\proc\syscall.asm:29` - `L3_DIR_ENTRY_CACHE_OFF equ 0xFA000`
+- `src\kernel\proc\syscall.asm:95` - `mov edx, 0x001B0008`
+- `src\kernel\proc\syscall.asm:114` - `mov eax, 0x00057700`
+- `src\kernel\proc\usermode.asm:38` - `L3_SLOT_MAGIC        equ 0x30544F4C5358414E`
+- `src\user\apps.asm:33` - `db 0x42, 0x53, 0x54, 0x52, 0x54, 0xDE, 0xAD, 0xBE    ; "BSTRT" + 0xDEADBE`
+- `src\user\apps.asm:54` - `db 0x42, 0x45, 0x4E, 0x44, 0x21, 0xCA, 0xFE, 0xBE    ; "BEND!" + 0xCAFEBE`
+- `src\user\apps\about.inc:19` - `mov r8d, 0x002255AA`
+- `src\user\apps\about.inc:29` - `mov r8d, 0x002255AA`
+- `src\user\apps\about.inc:38` - `mov ecx, 0x00222222`
+- `src\user\apps\about.inc:48` - `mov ecx, 0x00666666`
+- `src\user\apps\about.inc:60` - `mov r8d, 0x00CCCCCC`
+- `src\user\apps\about.inc:69` - `mov ecx, 0x00444444`
+- `src\user\apps\about.inc:78` - `mov ecx, 0x00444444`
+- `src\user\apps\about.inc:87` - `mov ecx, 0x00888888`
+- `src\user\apps\explorer.inc:22` - `mov r8d, 0x00E0E0E0`
+- `src\user\apps\explorer.inc:49` - `mov r8d, 0x00A0A0A0`
+- `src\user\apps\explorer.inc:58` - `mov ecx, 0x00000000`
+- `src\user\apps\explorer.inc:59` - `mov r8d, 0x00A0A0A0`
+- `src\user\apps\explorer.inc:64` - `mov ecx, 0x00333333`
+- `src\user\apps\explorer.inc:65` - `mov r8d, 0x00E0E0E0`
+- `src\user\apps\explorer.inc:79` - `mov r8, 0x00D0D0E0`
+- `src\user\apps\explorer.inc:87` - `mov ecx, 0x00333333`
+- `src\user\apps\explorer.inc:88` - `mov r8, 0x00D0D0E0`
+- `src\user\apps\explorer.inc:97` - `mov ecx, 0x00333333`
+- `src\user\apps\explorer.inc:98` - `mov r8d, 0x00D0D0E0`
+- `src\user\apps\explorer.inc:168` - `mov ecx, 0x00CC8800`
+- `src\user\apps\explorer.inc:171` - `mov ecx, 0x00333333`
+- `src\user\apps\explorer.inc:205` - `mov ecx, 0x00666666`
+- `src\user\apps\explorer.inc:220` - `mov ecx, 0x00999999`
+- `src\user\apps\explorer.inc:242` - `mov r8d, 0x00E8E8E8`
+- `src\user\apps\explorer.inc:251` - `mov ecx, 0x00666666`
+- `src\user\apps\explorer.inc:252` - `mov r8d, 0x00E8E8E8`
+- `src\user\apps\explorer.inc:268` - `mov r8d, 0x00334455`
+- `src\user\apps\explorer.inc:278` - `mov ecx, 0x00AACCFF`
+- `src\user\apps\explorer.inc:279` - `mov r8d, 0x00334455`
+- `src\user\apps\explorer.inc:290` - `mov r8d, 0x00334455`
+- `src\user\apps\explorer.inc:304` - `mov r8d, 0x00334455`
+- `src\user\apps\explorer.inc:322` - `mov r8d, 0x00443355`
+- `src\user\apps\explorer.inc:332` - `mov ecx, 0x00FFAACC`
+- `src\user\apps\explorer.inc:333` - `mov r8d, 0x00443355`
+- `src\user\apps\explorer.inc:344` - `mov r8d, 0x00443355`
+- `src\user\apps\explorer.inc:358` - `mov r8d, 0x00443355`
+- `src\user\apps\explorer.inc:376` - `mov r8d, 0x00228B22`
+- `src\user\apps\explorer.inc:388` - `mov r8d, 0x00228B22`
+- `src\user\apps\explorer.inc:404` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\explorer.inc:412` - `mov r8d, 0x00999999`
+- `src\user\apps\explorer.inc:421` - `mov ecx, 0x00222222`
+- `src\user\apps\explorer.inc:422` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\explorer.inc:431` - `mov ecx, 0x00222222`
+- `src\user\apps\explorer.inc:432` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\explorer.inc:441` - `mov ecx, 0x00222222`
+- `src\user\apps\explorer.inc:442` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\explorer.inc:451` - `mov ecx, 0x00666666`
+- `src\user\apps\explorer.inc:452` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\launch.inc:52` - `mov r8d, 0x0000AA44`
+- `src\user\apps\launch.inc:56` - `mov r8d, 0x0000AA44`
+- `src\user\apps\launch.inc:343` - `mov dword [paint_color], 0xFF000000 ; Black`
+- `src\user\apps\launch.inc:373` - `mov eax, 0xFFFFFFFF`
+- `src\user\apps\notepad.inc:22` - `mov r8d, 0x00E8E8E8`
+- `src\user\apps\notepad.inc:31` - `mov ecx, 0x00333333`
+- `src\user\apps\notepad.inc:32` - `mov r8d, 0x00E8E8E8`
+- `src\user\apps\notepad.inc:41` - `mov ecx, 0x00333333`
+- `src\user\apps\notepad.inc:42` - `mov r8d, 0x00E8E8E8`
+- `src\user\apps\notepad.inc:56` - `mov r8d, 0x00FFFFFF`
+- `src\user\apps\notepad.inc:97` - `mov ecx, 0x00000000`
+- `src\user\apps\notepad.inc:98` - `mov r8d, 0x00FFFFFF`
+- `src\user\apps\notepad.inc:129` - `mov ecx, 0x00000000`
+- `src\user\apps\notepad.inc:130` - `mov r8d, 0x00FFFFFF`
+- `src\user\apps\notepad.inc:151` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\notepad.inc:160` - `mov r8d, 0x00999999`
+- `src\user\apps\notepad.inc:168` - `mov ecx, 0x00222222`
+- `src\user\apps\notepad.inc:169` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\notepad.inc:177` - `mov ecx, 0x00222222`
+- `src\user\apps\notepad.inc:178` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\notepad.inc:186` - `mov ecx, 0x00222222`
+- `src\user\apps\notepad.inc:187` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\notepad.inc:199` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\notepad.inc:208` - `mov r8d, 0x00999999`
+- `src\user\apps\notepad.inc:216` - `mov ecx, 0x00222222`
+- `src\user\apps\notepad.inc:217` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\notepad.inc:224` - `mov ecx, 0x00222222`
+- `src\user\apps\notepad.inc:225` - `mov r8d, 0x00F0F0F0`
+- `src\user\apps\notepad.inc:241` - `mov r8d, 0x00223344`
+- `src\user\apps\notepad.inc:252` - `mov r8d, 0x004488AA`
+- `src\user\apps\notepad.inc:261` - `mov ecx, 0x00AADDFF`
+- `src\user\apps\notepad.inc:262` - `mov r8d, 0x00223344`
+- `src\user\apps\notepad.inc:271` - `mov ecx, 0x00CCCCCC`
+- `src\user\apps\notepad.inc:272` - `mov r8d, 0x00223344`
+- `src\user\apps\notepad.inc:283` - `mov r8d, 0x00FFFFFF`
+- `src\user\apps\notepad.inc:292` - `mov ecx, 0x00000000`
+- `src\user\apps\notepad.inc:293` - `mov r8d, 0x00FFFFFF`
+- `src\user\apps\notepad.inc:305` - `mov ecx, 0x00000000`
+- `src\user\apps\notepad.inc:306` - `mov r8d, 0x00FFFFFF`
+- `src\user\apps\notepad.inc:315` - `mov ecx, 0x00888888`
+- `src\user\apps\notepad.inc:316` - `mov r8d, 0x00223344`
+- `src\user\apps\notepad.inc:334` - `mov r8d, 0x00228B22   ; dark green`
+- `src\user\apps\notepad.inc:345` - `mov ecx, 0x00FFFFFF`
+- `src\user\apps\notepad.inc:346` - `mov r8d, 0x00228B22`
+- `src\user\apps\paint.inc:22` - `mov r8d, 0x00D0D0D0`
+- `src\user\apps\paint.inc:56` - `mov r8d, 0x00000000`
+- `src\user\apps\paint.inc:73` - `mov r8d, 0x00A0A0A0`
+- `src\user\apps\paint.inc:82` - `mov ecx, 0x00000000`
+- `src\user\apps\paint.inc:83` - `mov r8d, 0x00A0A0A0`
+- `src\user\apps\paint.inc:94` - `mov r8d, 0x00A0A0A0`
+- `src\user\apps\paint.inc:103` - `mov ecx, 0x00000000`
+- `src\user\apps\paint.inc:104` - `mov r8d, 0x00A0A0A0`
+- `src\user\apps\paint.inc:116` - `mov r8d, 0x00555555`
+- `src\user\apps\paint.inc:211` - `mov r8d, 0x00E0E0E0`
+- `src\user\apps\paint.inc:224` - `mov r8d, 0x00404040`
+- `src\user\apps\paint.inc:233` - `mov r8d, 0x00404040`
+- `src\user\apps\paint.inc:242` - `mov r8d, 0x00404040`
+- `src\user\apps\paint.inc:251` - `mov r8d, 0x00404040`
+- `src\user\apps\paint.inc:260` - `mov ecx, 0x00000000`
+- `src\user\apps\paint.inc:261` - `mov r8d, 0x00E0E0E0`
+- `src\user\apps\paint.inc:271` - `mov r8d, 0x00FFFFFF`
+- `src\user\apps\paint.inc:280` - `mov ecx, 0x00000000`
+- `src\user\apps\paint.inc:281` - `mov r8d, 0x00FFFFFF`
+- `src\user\apps\paint.inc:297` - `mov ecx, 0x00000000`
+- `src\user\apps\paint.inc:298` - `mov r8d, 0x00E0E0E0`
+- `src\user\apps\paint.inc:307` - `mov ecx, 0x00555555`
+- `src\user\apps\paint.inc:308` - `mov r8d, 0x00E0E0E0`
+- `src\user\apps\paint.inc:433` - `mov eax, 0xFFFFFFFF`
+- `src\user\apps\security_probe.inc:12` - `SEC_FAT16_ROOT_CACHE equ 0x1A11000`
+- `src\user\apps\security_probe.inc:14` - `SEC_FAT16_ROOT_CACHE equ 0xD11000`
+- `src\user\apps\security_probe.inc:52` - `mov r8d, 0x000000A8`
+- `src\user\apps\settings.inc:21` - `mov ecx, 0x00000000`
+- `src\user\apps\settings.inc:41` - `mov r8d, 0x00D0D0D0`
+- `src\user\apps\settings.inc:48` - `mov ecx, 0x00000000`
+- `src\user\apps\settings.inc:49` - `mov r8d, 0x00D0D0D0`
+- `src\user\apps\settings.inc:59` - `mov r8d, 0x00D0D0D0`
+- `src\user\apps\settings.inc:66` - `mov ecx, 0x00000000`
+- `src\user\apps\settings.inc:67` - `mov r8d, 0x00D0D0D0`
+- `src\user\apps\settings.inc:77` - `mov r8d, 0x00D0D0D0`
+- `src\user\apps\settings.inc:84` - `mov ecx, 0x00000000`
+- `src\user\apps\settings.inc:85` - `mov r8d, 0x00D0D0D0`
+- `src\user\apps\settings.inc:95` - `mov r8d, 0x00FFFFFF ; White box`
+- `src\user\apps\settings.inc:105` - `mov r8d, 0x00000000`
+- `src\user\apps\settings.inc:134` - `mov r8d, 0x00000000`
+- `src\user\apps\settings.inc:144` - `mov ecx, 0x00000000`
+- `src\user\apps\settings.inc:155` - `mov r8d, 0x00FFFFFF`
+- `src\user\apps\settings.inc:170` - `mov r8d, 0x00000000`
+- `src\user\apps\settings.inc:180` - `mov ecx, 0x00000000`
+- `src\user\apps\shell.inc:34` - `mov ecx, 0x00555555`
+- `src\user\apps\shell.inc:51` - `mov ecx, 0x00000000`
+- `src\user\apps\shell.inc:61` - `mov ecx, 0x00555555`
+- `src\user\apps\shell.inc:79` - `mov ecx, 0x00000000`
+- `src\user\apps\shell.inc:89` - `mov ecx, 0x00555555`
+- `src\user\apps\shell.inc:113` - `mov ecx, 0x00000000`
+- `src\user\apps\shell.inc:123` - `mov ecx, 0x00555555`
+- `src\user\apps\shell.inc:133` - `mov ecx, 0x00000000`
+- `src\user\apps\state.inc:263` - `dd 0xFF000000 ; Black`
+- `src\user\apps\state.inc:264` - `dd 0xFFFFFFFF ; White`
+- `src\user\apps\state.inc:265` - `dd 0xFFFF0000 ; Red`
+- `src\user\apps\state.inc:266` - `dd 0xFF00FF00 ; Green`
+- `src\user\apps\state.inc:267` - `dd 0xFF0000FF ; Blue`
+- `src\user\apps\state.inc:268` - `dd 0xFFFFFF00 ; Yellow`
+- `src\user\apps\state.inc:269` - `dd 0xFF00FFFF ; Cyan`
+- `src\user\apps\state.inc:270` - `dd 0xFFFF00FF ; Magenta`
+- `src\user\apps\state.inc:277` - `paint_color dd 0xFF000000`
+- `src\user\apps\terminal.inc:29` - `mov r8, 0x00111111`
+- `src\user\apps\terminal.inc:39` - `mov r10, 0x0000DD00`
+- `src\user\apps\terminal.inc:52` - `mov r10, 0x00CCCCCC`
+- `src\user\apps\terminal.inc:72` - `mov r10, 0x00CCCCCC`
+- `src\user\apps\terminal.inc:96` - `mov r10, 0x0000FF00`
+- `src\user\apps\terminal.inc:107` - `mov r10, 0x00FFFFFF`
+- `src\user\apps\terminal.inc:121` - `mov r10, 0x00FFFFFF`
+- `src\user\lib\nexus_window.inc:29` - `APP_SLOT_BMP_FILE_OFF     equ 0x40000`
+- `src\user\lib\nexus_window.inc:31` - `APP_SLOT_PAINT_CANVAS_OFF equ 0x80000`
+- `src\user\lib\nexus_window.inc:33` - `APP_SLOT_SAVE_BMP_OFF     equ 0xA0000`
+- `src\user\poc\exploit_poc_syscall9.asm:18` - `POC_BAD_INDEX       equ 0xFFFFFFFFFFFFFFFF`
+- `src\user\poc\exploit_poc_syscall9.asm:19` - `POC_MAGIC           equ 0xDEADBEEFCAFEBABE`
+- `src\user\templates\hello_callback.asm:11` - `SYS_GUI_TEXT 24, 24, rax, 0x00FFFFFF, 0`

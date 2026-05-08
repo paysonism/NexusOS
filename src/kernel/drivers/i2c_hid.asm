@@ -865,7 +865,9 @@ i2c_hid_bus_reset:
 ; ============================================================================
 i2c_hid_poll:
     cmp byte [i2c_hid_active], 1
-    jne .poll_ret
+    jne .poll_ret_noframe
+
+    push rbx                    ; rbx is callee-saved; clobbered by xor ebx,ebx below
 
     mov rsi, [i2c_base_addr]
 
@@ -878,6 +880,7 @@ i2c_hid_poll:
     cmp dword [i2c_error_count], 50
     jge .do_bus_reset
     mov byte [i2c_poll_state], 0
+    pop rbx
     ret
 .no_abort:
 
@@ -1104,10 +1107,13 @@ i2c_hid_poll:
     mov byte [mouse_moved], 1
 
 .poll_ret:
+    pop rbx
+.poll_ret_noframe:
     ret
 
 .do_bus_reset:
     call i2c_hid_bus_reset
+    pop rbx
     ret
 
 ; ============================================================================

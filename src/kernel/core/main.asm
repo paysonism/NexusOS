@@ -7,11 +7,11 @@ bits 64
 %include "macros.inc"
 
 section .text
-global kmain
-global process_keyboard
-global process_mouse
-global debug_print
-global serial_poll_command
+; auto-wrapped (FN_BEGIN emits global): global kmain
+; auto-wrapped (FN_BEGIN emits global): global process_keyboard
+; auto-wrapped (FN_BEGIN emits global): global process_mouse
+; auto-wrapped (FN_BEGIN emits global): global debug_print
+; auto-wrapped (FN_BEGIN emits global): global serial_poll_command
 
 ; Kernel
 extern idt_init
@@ -29,6 +29,7 @@ extern perfdiag_print_profile
 extern perfdiag_print_memory
 extern perfdiag_print_smp
 extern perfdiag_benchmark
+extern trace_dump_serial
 
 ; Drivers
 extern mouse_init
@@ -92,6 +93,7 @@ extern display_flip_rect
 extern call_app_l3
 extern bb_addr
 extern scr_pitch
+extern scr_pitch_q
 extern display_flip
 extern wait_vsync
 extern vsync_enabled
@@ -142,7 +144,7 @@ section .text
 
 ; --- debug_print ---
 ; RSI = string pointer
-debug_print:
+FN_BEGIN debug_print, 0, 0, FN_RET_SCALAR
     push rax
     push rbx
     push rcx
@@ -200,7 +202,7 @@ debug_print:
     ret
 
 ; --- Kernel Entry ---
-kmain:
+FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     extern app_blob_init
     call app_blob_init          ; read loaded APPS.BIN pointer before anyone uses it
     call display_init
@@ -241,6 +243,7 @@ kmain:
     call wm_init
     
     mov byte [gui_initialized], 1
+
     call render_frame
 
 .infinite:
@@ -265,10 +268,10 @@ kmain:
 ; ============================================================================
 ; serial_poll_command - poll COM1 for serial automation input
 ;  raw bytes become focused-window keypresses
-;  0x01 + '2'..'7' launches app IDs directly
+;  0x01 + '2'..'8' launches app IDs directly
 ;  0x01 + 'x' closes the focused window
 ; ============================================================================
-serial_poll_command:
+FN_BEGIN serial_poll_command, 0, 0, FN_RET_SCALAR
     push rax
     push rcx
     push rdx
@@ -311,7 +314,7 @@ serial_poll_command:
 serial_dispatch_control:
     cmp al, '2'
     jb .check_close
-    cmp al, '7'
+    cmp al, '8'
     ja .check_close
     movzx edi, al
     sub edi, '0'
@@ -343,6 +346,8 @@ serial_dispatch_control:
     je .diag_memory
     cmp al, 's'
     je .diag_smp
+    cmp al, 't'
+    je .dump_trace
     cmp al, 'b'
     je .diag_bench
     cmp al, 'x'
@@ -387,6 +392,12 @@ serial_dispatch_control:
 
 .diag_bench:
     call perfdiag_benchmark
+    ret
+
+.dump_trace:
+%ifdef ENABLE_TRACE
+    call trace_dump_serial
+%endif
     ret
 
 .close_focused:
@@ -446,7 +457,7 @@ serial_forward_input:
 ; ============================================================================
 ; Process mouse input - sets scene_dirty if needed
 ; ============================================================================
-process_mouse:
+FN_BEGIN process_mouse, 0, 0, FN_RET_SCALAR
     call mouse_check_moved
     test al, al
     jz .pm_done
@@ -529,7 +540,7 @@ process_mouse:
 ; ============================================================================
 ; Process keyboard input - sets scene_dirty if needed
 ; ============================================================================
-process_keyboard:
+FN_BEGIN process_keyboard, 0, 0, FN_RET_SCALAR
     call keyboard_read
     test eax, eax
     jz .pk_done
@@ -647,6 +658,16 @@ process_keyboard:
 ; Render one frame
 ; ============================================================================
 render_frame:
+    mov rax, [tick_count]
+    xor edx, edx
+    mov ecx, 30
+    div ecx
+    and al, 1
+    cmp al, [ui_blink_phase]
+    je .rf_blink_unchanged
+    mov [ui_blink_phase], al
+    mov byte [scene_dirty], 1
+.rf_blink_unchanged:
     cmp qword [wm_drag_window_id], -1
     jne .rf_draw_drag
     cmp byte [scene_dirty], 0
@@ -732,14 +753,14 @@ render_frame:
     ret
 
 .rf_restore_fps_region:
-    mov eax, FPS_REGION_Y
-    imul eax, [scr_pitch]
-    add eax, FPS_REGION_X * 4
+    mov rax, FPS_REGION_Y
+    imul rax, [scr_pitch_q]
+    add rax, FPS_REGION_X * 4
     mov r8, [bb_addr]
     add r8, rax
     mov r9, BACK_BUFFER_SAVE_ADDR
     add r9, rax
-    movsxd r10, dword [scr_pitch]
+    mov r10, [scr_pitch_q]
     mov r11d, FPS_REGION_H
 .rfr_row:
     mov rdi, r8
@@ -758,3 +779,4 @@ fps_str     times 16 db 0
 
 section .bss
 serial_command_armed resb 1
+ui_blink_phase resb 1

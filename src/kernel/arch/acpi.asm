@@ -109,26 +109,27 @@ acpi_init:
 .handle_facp:
     push rsi
     push rdi
+    push rcx                ; preserve outer-loop counter across AML callees
     ; DSDT pointer is at FADT offset 40 (32-bit physical address)
     mov esi, [rdi + 40]
     test rsi, rsi
     jz .facp_done
-    
+
     ; Setup AML parser bounds
     call aml_init
-    
+
     ; Search for Touchpad: Try ELAN (Elantech)
     mov edi, 'ELAN'
     call aml_find_object
     test eax, eax
     jnz .found_touchpad
-    
+
     ; Fallback: Try SYNA (Synaptics)
     mov edi, 'SYNA'
     call aml_find_object
     test eax, eax
-    jz .facp_done
-    
+    jnz .found_touchpad     ; SYNA found - use it (was previously discarded)
+
     ; Fallback: Try FTE (FocalTech)
     mov edi, 'FTE'
     call aml_find_object
@@ -166,6 +167,7 @@ acpi_init:
     jmp .scan_resources
 
 .facp_done:
+    pop rcx
     pop rdi
     pop rsi
     jmp .next_table

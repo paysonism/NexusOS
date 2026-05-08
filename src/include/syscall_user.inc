@@ -130,4 +130,46 @@
     syscall
 %endmacro
 
+%macro SYS_TICKS 0
+    mov rax, 18
+    syscall
+%endmacro
+
+%macro SYS_FS_DELETE 1
+    mov rax, 19
+    mov rdi, %1
+    syscall
+%endmacro
+
+%macro SYS_FS_RENAME 2
+    mov rax, 20
+    mov rdi, %1
+    mov rsi, %2
+    syscall
+%endmacro
+
+%macro SYS_FS_MKDIR 1
+    mov rax, 21
+    mov rdi, %1
+    syscall
+%endmacro
+
+; SYS_OPEN_FILE_NP(dir_entry_handle) — kernel-side: launch notepad and load file
+;   rdi = slot-cached dir entry pointer (from SYS_FS_ENTRY)
+;   returns rax = notepad window id, or -1
+%macro SYS_OPEN_FILE_NP 1
+    mov rax, 22
+    mov rdi, %1
+    syscall
+%endmacro
+
+; SYS_APP_OPEN(command_line)
+;   command_line format: "app" or "app param1,param2"
+;   returns rax = launched window id, or -1
+%macro SYS_APP_OPEN 1
+    mov rax, 23
+    mov rdi, %1
+    syscall
+%endmacro
+
 %endif

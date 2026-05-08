@@ -1,6 +1,5 @@
 ; NexusHL generated — do not edit by hand
 ; app="Notepad" stack=8192
-bits 64
 extern fat16_write_file
 extern filename_to_83
 extern notepad_buf
@@ -13,29 +12,844 @@ extern np_num_lines
 extern np_open_entry
 extern np_save_dialog
 extern np_save_done_msg
+extern np_save_field
 extern np_save_total_bytes
 extern np_saveas_83
 extern np_saveas_buf
 extern np_saveas_cursor
 extern np_saved_content
+extern np_saveloc_83
+extern np_saveloc_buf
+extern np_saveloc_cursor
 extern np_scroll_top
 extern render_rect
 extern render_text
 extern szCursor
-extern szEditClear
-extern szEditSelAll
-extern szFileClose
-extern szFileNew
-extern szFileSave
-extern szNoteMenuEdit
-extern szNoteMenuFile
-extern szSaveAsFilename
-extern szSaveAsHint
-extern szSaveAsTitle
-extern szSavedMsg
-section .text
-global app_hl_notepad_line_ptr
-app_hl_notepad_line_ptr:
+FN_BEGIN app_hl_notepad_ui_win_x, 1, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 8
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    mov rax, [rax]
+    jmp .fn_end_0_app_hl_notepad_ui_win_x
+.fn_end_0_app_hl_notepad_ui_win_x:
+    FN_END app_hl_notepad_ui_win_x
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_win_y, 1, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 16
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    mov rax, [rax]
+    jmp .fn_end_0_app_hl_notepad_ui_win_y
+.fn_end_0_app_hl_notepad_ui_win_y:
+    FN_END app_hl_notepad_ui_win_y
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_win_w, 1, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 24
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    mov rax, [rax]
+    jmp .fn_end_0_app_hl_notepad_ui_win_w
+.fn_end_0_app_hl_notepad_ui_win_w:
+    FN_END app_hl_notepad_ui_win_w
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_win_h, 1, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 32
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    mov rax, [rax]
+    jmp .fn_end_0_app_hl_notepad_ui_win_h
+.fn_end_0_app_hl_notepad_ui_win_h:
+    FN_END app_hl_notepad_ui_win_h
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_rect, 5, 0, FN_RET_SCALAR
+FN_ARG 0, x, FN_KIND_SCALAR
+FN_ARG 1, y, FN_KIND_SCALAR
+FN_ARG 2, w, FN_KIND_SCALAR
+FN_ARG 3, h, FN_KIND_SCALAR
+FN_ARG 4, color, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    mov [rbp-32], rcx
+    mov [rbp-40], r8
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, [rbp-40]
+    push rax
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL render_rect, 5
+.fn_end_0_app_hl_notepad_ui_rect:
+    FN_END app_hl_notepad_ui_rect
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_text, 5, 0, FN_RET_SCALAR
+FN_ARG 0, x, FN_KIND_SCALAR
+FN_ARG 1, y, FN_KIND_SCALAR
+FN_ARG 2, text, FN_KIND_SCALAR
+FN_ARG 3, fg, FN_KIND_SCALAR
+FN_ARG 4, bg, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    mov [rbp-32], rcx
+    mov [rbp-40], r8
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, [rbp-40]
+    push rax
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL render_text, 5
+.fn_end_0_app_hl_notepad_ui_text:
+    FN_END app_hl_notepad_ui_text
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_rect_at, 6, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, x, FN_KIND_SCALAR
+FN_ARG 2, y, FN_KIND_SCALAR
+FN_ARG 3, w, FN_KIND_SCALAR
+FN_ARG 4, h, FN_KIND_SCALAR
+FN_ARG 5, color, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    mov [rbp-32], rcx
+    mov [rbp-40], r8
+    mov [rbp-48], r9
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    pop rdi
+    FN_CALL app_hl_notepad_ui_win_x, 1
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-16]
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-8]
+    push rax
+    pop rdi
+    FN_CALL app_hl_notepad_ui_win_y, 1
+    push rax
+    mov rax, 24
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-24]
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, [rbp-40]
+    push rax
+    mov rax, [rbp-48]
+    push rax
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_rect, 5
+.fn_end_0_app_hl_notepad_ui_rect_at:
+    FN_END app_hl_notepad_ui_rect_at
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_text_at, 6, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, x, FN_KIND_SCALAR
+FN_ARG 2, y, FN_KIND_SCALAR
+FN_ARG 3, text, FN_KIND_SCALAR
+FN_ARG 4, fg, FN_KIND_SCALAR
+FN_ARG 5, bg, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    mov [rbp-32], rcx
+    mov [rbp-40], r8
+    mov [rbp-48], r9
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    pop rdi
+    FN_CALL app_hl_notepad_ui_win_x, 1
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-16]
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-8]
+    push rax
+    pop rdi
+    FN_CALL app_hl_notepad_ui_win_y, 1
+    push rax
+    mov rax, 24
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-24]
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, [rbp-40]
+    push rax
+    mov rax, [rbp-48]
+    push rax
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_text, 5
+.fn_end_0_app_hl_notepad_ui_text_at:
+    FN_END app_hl_notepad_ui_text_at
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_fill_client_below, 3, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, top, FN_KIND_SCALAR
+FN_ARG 2, color, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    pop rdi
+    FN_CALL app_hl_notepad_ui_win_w, 1
+    push rax
+    mov rax, 2
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    imul rax, rcx
+    mov rcx, rax
+    pop rax
+    sub rax, rcx
+    mov [rbp-40], rax
+    mov rax, [rbp-8]
+    push rax
+    pop rdi
+    FN_CALL app_hl_notepad_ui_win_h, 1
+    push rax
+    mov rax, 24
+    mov rcx, rax
+    pop rax
+    sub rax, rcx
+    push rax
+    mov rax, [rbp-16]
+    mov rcx, rax
+    pop rax
+    sub rax, rcx
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    sub rax, rcx
+    mov [rbp-48], rax
+    mov rax, [rbp-48]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setle al
+    movzx rax, al
+    test rax, rax
+    jz .else1
+    jmp .fn_end_0_app_hl_notepad_ui_fill_client_below
+    jmp .endif2
+.else1:
+.endif2:
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 0
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-40]
+    push rax
+    mov rax, [rbp-48]
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_rect_at, 6
+.fn_end_0_app_hl_notepad_ui_fill_client_below:
+    FN_END app_hl_notepad_ui_fill_client_below
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_menu_bar, 1, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 0
+    push rax
+    mov rax, 0
+    push rax
+    mov rax, [rbp-8]
+    push rax
+    pop rdi
+    FN_CALL app_hl_notepad_ui_win_w, 1
+    push rax
+    mov rax, 2
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    imul rax, rcx
+    mov rcx, rax
+    pop rax
+    sub rax, rcx
+    push rax
+    mov rax, 22
+    push rax
+    mov rax, 15263976
+    push rax
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_rect_at, 6
+.fn_end_2_app_hl_notepad_ui_menu_bar:
+    FN_END app_hl_notepad_ui_menu_bar
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_menu_label, 3, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, x, FN_KIND_SCALAR
+FN_ARG 2, text, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, 5
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 0
+    push rax
+    mov rax, 15263976
+    push rax
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_text_at, 6
+.fn_end_2_app_hl_notepad_ui_menu_label:
+    FN_END app_hl_notepad_ui_menu_label
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_dropdown, 5, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, x, FN_KIND_SCALAR
+FN_ARG 2, y, FN_KIND_SCALAR
+FN_ARG 3, w, FN_KIND_SCALAR
+FN_ARG 4, item_count, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    mov [rbp-32], rcx
+    mov [rbp-40], r8
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, [rbp-40]
+    push rax
+    mov rax, 20
+    mov rcx, rax
+    pop rax
+    imul rax, rcx
+    push rax
+    mov rax, 4
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 15790320
+    push rax
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_rect_at, 6
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 1
+    push rax
+    mov rax, 10066329
+    push rax
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_rect_at, 6
+.fn_end_2_app_hl_notepad_ui_dropdown:
+    FN_END app_hl_notepad_ui_dropdown
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_dropdown_item, 5, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, x, FN_KIND_SCALAR
+FN_ARG 2, y, FN_KIND_SCALAR
+FN_ARG 3, index, FN_KIND_SCALAR
+FN_ARG 4, text, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    mov [rbp-32], rcx
+    mov [rbp-40], r8
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, 8
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 4
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 20
+    mov rcx, rax
+    pop rax
+    imul rax, rcx
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-40]
+    push rax
+    mov rax, 0
+    push rax
+    mov rax, 15790320
+    push rax
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_text_at, 6
+.fn_end_2_app_hl_notepad_ui_dropdown_item:
+    FN_END app_hl_notepad_ui_dropdown_item
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_caret, 3, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, x, FN_KIND_SCALAR
+FN_ARG 2, y, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 2
+    push rax
+    mov rax, 14
+    push rax
+    mov rax, 0
+    push rax
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_rect_at, 6
+.fn_end_2_app_hl_notepad_ui_caret:
+    FN_END app_hl_notepad_ui_caret
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_ticks, 0, 0, FN_RET_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    push rbx
+    push r12
+    mov rax, 18
+    syscall
+    jmp .fn_end_2_app_hl_notepad_ui_ticks
+.fn_end_2_app_hl_notepad_ui_ticks:
+    FN_END app_hl_notepad_ui_ticks
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_caret_blink, 3, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, x, FN_KIND_SCALAR
+FN_ARG 2, y, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    push rbx
+    push r12
+    FN_CALL app_hl_notepad_ui_ticks, 0
+    push rax
+    mov rax, 30
+    mov rcx, rax
+    pop rax
+    cqo
+    idiv rcx
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    cqo
+    idiv rcx
+    mov rax, rdx
+    mov [rbp-40], rax
+    mov rax, [rbp-40]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else3
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_caret, 3
+    jmp .endif4
+.else3:
+.endif4:
+.fn_end_2_app_hl_notepad_ui_caret_blink:
+    FN_END app_hl_notepad_ui_caret_blink
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_ui_input, 6, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, x, FN_KIND_SCALAR
+FN_ARG 2, y, FN_KIND_SCALAR
+FN_ARG 3, w, FN_KIND_SCALAR
+FN_ARG 4, text, FN_KIND_SCALAR
+FN_ARG 5, cursor_col, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov [rbp-24], rdx
+    mov [rbp-32], rcx
+    mov [rbp-40], r8
+    mov [rbp-48], r9
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 18
+    push rax
+    mov rax, 16777215
+    push rax
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_rect_at, 6
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, 4
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 3
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-40]
+    push rax
+    mov rax, 0
+    push rax
+    mov rax, 16777215
+    push rax
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_text_at, 6
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, 4
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-48]
+    push rax
+    mov rax, 8
+    mov rcx, rax
+    pop rax
+    imul rax, rcx
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_caret_blink, 3
+.fn_end_4_app_hl_notepad_ui_input:
+    FN_END app_hl_notepad_ui_input
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_line_ptr, 1, 0, FN_RET_SCALAR
+FN_ARG 0, row, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -53,15 +867,16 @@ app_hl_notepad_line_ptr:
     mov rcx, rax
     pop rax
     add rax, rcx
-    jmp .fn_end_0_app_hl_notepad_line_ptr
-.fn_end_0_app_hl_notepad_line_ptr:
+    jmp .fn_end_4_app_hl_notepad_line_ptr
+.fn_end_4_app_hl_notepad_line_ptr:
+    FN_END app_hl_notepad_line_ptr
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_len_ptr
-app_hl_notepad_len_ptr:
+FN_BEGIN app_hl_notepad_len_ptr, 1, 0, FN_RET_SCALAR
+FN_ARG 0, row, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -79,15 +894,15 @@ app_hl_notepad_len_ptr:
     mov rcx, rax
     pop rax
     add rax, rcx
-    jmp .fn_end_0_app_hl_notepad_len_ptr
-.fn_end_0_app_hl_notepad_len_ptr:
+    jmp .fn_end_4_app_hl_notepad_len_ptr
+.fn_end_4_app_hl_notepad_len_ptr:
+    FN_END app_hl_notepad_len_ptr
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_clear_buffer
-app_hl_notepad_clear_buffer:
+FN_BEGIN app_hl_notepad_clear_buffer, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -95,7 +910,7 @@ app_hl_notepad_clear_buffer:
     push r12
     mov rax, 0
     mov [rbp-16], rax
-.wst1:
+.wst5:
     mov rax, [rbp-16]
     push rax
     mov rax, 32
@@ -110,7 +925,7 @@ app_hl_notepad_clear_buffer:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend2
+    jz .wend6
     lea rax, [rel notepad_buf]
     push rax
     mov rax, [rbp-16]
@@ -130,11 +945,11 @@ app_hl_notepad_clear_buffer:
     pop rax
     add rax, rcx
     mov [rbp-16], rax
-    jmp .wst1
-.wend2:
+    jmp .wst5
+.wend6:
     mov rax, 0
     mov [rbp-24], rax
-.wst3:
+.wst7:
     mov rax, [rbp-24]
     push rax
     mov rax, 32
@@ -144,7 +959,7 @@ app_hl_notepad_clear_buffer:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend4
+    jz .wend8
     lea rax, [rel np_line_len]
     push rax
     mov rax, [rbp-24]
@@ -169,8 +984,8 @@ app_hl_notepad_clear_buffer:
     pop rax
     add rax, rcx
     mov [rbp-24], rax
-    jmp .wst3
-.wend4:
+    jmp .wst7
+.wend8:
     lea rax, [rel np_cursor_row]
     push rax
     mov rax, 0
@@ -199,14 +1014,14 @@ app_hl_notepad_clear_buffer:
     pop rax
     mov [rax], ecx
     xor rax, rax
-.fn_end_0_app_hl_notepad_clear_buffer:
+.fn_end_4_app_hl_notepad_clear_buffer:
+    FN_END app_hl_notepad_clear_buffer
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_ensure_visible
-app_hl_notepad_ensure_visible:
+FN_BEGIN app_hl_notepad_ensure_visible, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -227,7 +1042,7 @@ app_hl_notepad_ensure_visible:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else5
+    jz .else9
     lea rax, [rel np_scroll_top]
     push rax
     mov rax, [rbp-16]
@@ -235,10 +1050,10 @@ app_hl_notepad_ensure_visible:
     pop rax
     mov [rax], ecx
     xor rax, rax
-    jmp .fn_end_4_app_hl_notepad_ensure_visible
-    jmp .endif6
-.else5:
-.endif6:
+    jmp .fn_end_8_app_hl_notepad_ensure_visible
+    jmp .endif10
+.else9:
+.endif10:
     mov rax, [rbp-16]
     push rax
     mov rax, [rbp-24]
@@ -253,7 +1068,7 @@ app_hl_notepad_ensure_visible:
     setge al
     movzx rax, al
     test rax, rax
-    jz .else7
+    jz .else11
     lea rax, [rel np_scroll_top]
     push rax
     mov rax, [rbp-16]
@@ -266,23 +1081,45 @@ app_hl_notepad_ensure_visible:
     pop rax
     mov [rax], ecx
     xor rax, rax
-    jmp .endif8
-.else7:
-.endif8:
-.fn_end_4_app_hl_notepad_ensure_visible:
+    jmp .endif12
+.else11:
+.endif12:
+.fn_end_8_app_hl_notepad_ensure_visible:
+    FN_END app_hl_notepad_ensure_visible
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_insert_char
-app_hl_notepad_insert_char:
+FN_BEGIN app_hl_notepad_insert_char, 1, 0, FN_RET_SCALAR
+FN_ARG 0, ch, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
     mov [rbp-8], rdi
     push rbx
     push r12
+    lea rax, [rel np_num_lines]
+    mov eax, [rax]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else13
+    lea rax, [rel np_num_lines]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    mov [rax], ecx
+    xor rax, rax
+    jmp .endif14
+.else13:
+.endif14:
     lea rax, [rel np_cursor_row]
     mov eax, [rax]
     mov [rbp-24], rax
@@ -291,12 +1128,125 @@ app_hl_notepad_insert_char:
     mov [rbp-32], rax
     mov rax, [rbp-24]
     push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else15
+    jmp .fn_end_12_app_hl_notepad_insert_char
+    jmp .endif16
+.else15:
+.endif16:
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 32
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else17
+    jmp .fn_end_12_app_hl_notepad_insert_char
+    jmp .endif18
+.else17:
+.endif18:
+    mov rax, [rbp-24]
+    push rax
+    lea rax, [rel np_num_lines]
+    mov eax, [rax]
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else19
+    jmp .fn_end_12_app_hl_notepad_insert_char
+    jmp .endif20
+.else19:
+.endif20:
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else21
+    jmp .fn_end_12_app_hl_notepad_insert_char
+    jmp .endif22
+.else21:
+.endif22:
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 80
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else23
+    jmp .fn_end_12_app_hl_notepad_insert_char
+    jmp .endif24
+.else23:
+.endif24:
+    mov rax, [rbp-24]
+    push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov [rbp-40], rax
     mov rax, [rbp-40]
     mov eax, [rax]
     mov [rbp-48], rax
+    mov rax, [rbp-48]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else25
+    jmp .fn_end_12_app_hl_notepad_insert_char
+    jmp .endif26
+.else25:
+.endif26:
+    mov rax, [rbp-48]
+    push rax
+    mov rax, 80
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else27
+    jmp .fn_end_12_app_hl_notepad_insert_char
+    jmp .endif28
+.else27:
+.endif28:
+    mov rax, [rbp-32]
+    push rax
+    mov rax, [rbp-48]
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setg al
+    movzx rax, al
+    test rax, rax
+    jz .else29
+    jmp .fn_end_12_app_hl_notepad_insert_char
+    jmp .endif30
+.else29:
+.endif30:
     mov rax, [rbp-48]
     push rax
     mov rax, 80
@@ -311,19 +1261,19 @@ app_hl_notepad_insert_char:
     setge al
     movzx rax, al
     test rax, rax
-    jz .else9
-    jmp .fn_end_8_app_hl_notepad_insert_char
-    jmp .endif10
-.else9:
-.endif10:
+    jz .else31
+    jmp .fn_end_12_app_hl_notepad_insert_char
+    jmp .endif32
+.else31:
+.endif32:
     mov rax, [rbp-24]
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-56], rax
     mov rax, [rbp-48]
     mov [rbp-64], rax
-.wst11:
+.wst33:
     mov rax, [rbp-64]
     push rax
     mov rax, [rbp-32]
@@ -333,7 +1283,7 @@ app_hl_notepad_insert_char:
     setg al
     movzx rax, al
     test rax, rax
-    jz .wend12
+    jz .wend34
     mov rax, [rbp-56]
     push rax
     mov rax, [rbp-64]
@@ -364,8 +1314,8 @@ app_hl_notepad_insert_char:
     pop rax
     sub rax, rcx
     mov [rbp-64], rax
-    jmp .wst11
-.wend12:
+    jmp .wst33
+.wend34:
     mov rax, [rbp-56]
     push rax
     mov rax, [rbp-32]
@@ -419,14 +1369,14 @@ app_hl_notepad_insert_char:
     pop rax
     mov [rax], ecx
     xor rax, rax
-.fn_end_8_app_hl_notepad_insert_char:
+.fn_end_12_app_hl_notepad_insert_char:
+    FN_END app_hl_notepad_insert_char
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_do_backspace
-app_hl_notepad_do_backspace:
+FN_BEGIN app_hl_notepad_do_backspace, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -438,6 +1388,77 @@ app_hl_notepad_do_backspace:
     lea rax, [rel np_cursor_row]
     mov eax, [rax]
     mov [rbp-24], rax
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else35
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif36
+.else35:
+.endif36:
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 32
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else37
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif38
+.else37:
+.endif38:
+    mov rax, [rbp-24]
+    push rax
+    lea rax, [rel np_num_lines]
+    mov eax, [rax]
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else39
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif40
+.else39:
+.endif40:
+    mov rax, [rbp-16]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else41
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif42
+.else41:
+.endif42:
+    mov rax, [rbp-16]
+    push rax
+    mov rax, 80
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setg al
+    movzx rax, al
+    test rax, rax
+    jz .else43
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif44
+.else43:
+.endif44:
     mov rax, [rbp-16]
     push rax
     mov rax, 0
@@ -447,23 +1468,65 @@ app_hl_notepad_do_backspace:
     setg al
     movzx rax, al
     test rax, rax
-    jz .else13
+    jz .else45
     mov rax, [rbp-24]
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-32], rax
     mov rax, [rbp-24]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov [rbp-40], rax
     mov rax, [rbp-40]
     mov eax, [rax]
     mov [rbp-48], rax
+    mov rax, [rbp-48]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else47
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif48
+.else47:
+.endif48:
+    mov rax, [rbp-48]
+    push rax
+    mov rax, 80
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else49
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif50
+.else49:
+.endif50:
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-48]
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setg al
+    movzx rax, al
+    test rax, rax
+    jz .else51
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif52
+.else51:
+.endif52:
     mov rax, [rbp-16]
     mov [rbp-56], rax
-.wst15:
+.wst53:
     mov rax, [rbp-56]
     push rax
     mov rax, [rbp-48]
@@ -473,7 +1536,7 @@ app_hl_notepad_do_backspace:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend16
+    jz .wend54
     mov rax, [rbp-32]
     push rax
     mov rax, [rbp-56]
@@ -504,8 +1567,8 @@ app_hl_notepad_do_backspace:
     pop rax
     add rax, rcx
     mov [rbp-56], rax
-    jmp .wst15
-.wend16:
+    jmp .wst53
+.wend54:
     mov rax, [rbp-40]
     push rax
     mov rax, [rbp-48]
@@ -547,10 +1610,10 @@ app_hl_notepad_do_backspace:
     pop rax
     mov [rax], ecx
     xor rax, rax
-    jmp .fn_end_12_app_hl_notepad_do_backspace
-    jmp .endif14
-.else13:
-.endif14:
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif46
+.else45:
+.endif46:
     mov rax, [rbp-24]
     push rax
     mov rax, 0
@@ -560,11 +1623,11 @@ app_hl_notepad_do_backspace:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else17
-    jmp .fn_end_12_app_hl_notepad_do_backspace
-    jmp .endif18
-.else17:
-.endif18:
+    jz .else55
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif56
+.else55:
+.endif56:
     mov rax, [rbp-24]
     push rax
     mov rax, 1
@@ -575,25 +1638,81 @@ app_hl_notepad_do_backspace:
     mov rax, [rbp-64]
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-72], rax
     mov rax, [rbp-64]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov eax, [rax]
     mov [rbp-80], rax
     mov rax, [rbp-24]
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-88], rax
     mov rax, [rbp-24]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov eax, [rax]
     mov [rbp-96], rax
+    mov rax, [rbp-80]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else57
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif58
+.else57:
+.endif58:
+    mov rax, [rbp-96]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else59
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif60
+.else59:
+.endif60:
+    mov rax, [rbp-80]
+    push rax
+    mov rax, 80
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else61
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif62
+.else61:
+.endif62:
+    mov rax, [rbp-96]
+    push rax
+    mov rax, 80
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else63
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif64
+.else63:
+.endif64:
     mov rax, [rbp-80]
     push rax
     mov rax, [rbp-96]
@@ -613,14 +1732,14 @@ app_hl_notepad_do_backspace:
     setge al
     movzx rax, al
     test rax, rax
-    jz .else19
-    jmp .fn_end_12_app_hl_notepad_do_backspace
-    jmp .endif20
-.else19:
-.endif20:
+    jz .else65
+    jmp .fn_end_34_app_hl_notepad_do_backspace
+    jmp .endif66
+.else65:
+.endif66:
     mov rax, 0
     mov [rbp-104], rax
-.wst21:
+.wst67:
     mov rax, [rbp-104]
     push rax
     mov rax, [rbp-96]
@@ -630,7 +1749,7 @@ app_hl_notepad_do_backspace:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend22
+    jz .wend68
     mov rax, [rbp-72]
     push rax
     mov rax, [rbp-80]
@@ -661,12 +1780,12 @@ app_hl_notepad_do_backspace:
     pop rax
     add rax, rcx
     mov [rbp-104], rax
-    jmp .wst21
-.wend22:
+    jmp .wst67
+.wend68:
     mov rax, [rbp-64]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     push rax
     mov rax, [rbp-80]
     push rax
@@ -700,7 +1819,7 @@ app_hl_notepad_do_backspace:
     mov [rbp-112], rax
     mov rax, [rbp-24]
     mov [rbp-120], rax
-.wst23:
+.wst69:
     mov rax, [rbp-120]
     push rax
     mov rax, 1
@@ -715,7 +1834,7 @@ app_hl_notepad_do_backspace:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend24
+    jz .wend70
     mov rax, [rbp-120]
     push rax
     mov rax, 1
@@ -724,16 +1843,16 @@ app_hl_notepad_do_backspace:
     add rax, rcx
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-128], rax
     mov rax, [rbp-120]
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-136], rax
     mov rax, 0
     mov [rbp-144], rax
-.wst25:
+.wst71:
     mov rax, [rbp-144]
     push rax
     mov rax, 80
@@ -743,7 +1862,7 @@ app_hl_notepad_do_backspace:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend26
+    jz .wend72
     mov rax, [rbp-136]
     push rax
     mov rax, [rbp-144]
@@ -769,12 +1888,12 @@ app_hl_notepad_do_backspace:
     pop rax
     add rax, rcx
     mov [rbp-144], rax
-    jmp .wst25
-.wend26:
+    jmp .wst71
+.wend72:
     mov rax, [rbp-120]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     push rax
     mov rax, [rbp-120]
     push rax
@@ -784,7 +1903,7 @@ app_hl_notepad_do_backspace:
     add rax, rcx
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov eax, [rax]
     mov rcx, rax
     pop rax
@@ -797,8 +1916,8 @@ app_hl_notepad_do_backspace:
     pop rax
     add rax, rcx
     mov [rbp-120], rax
-    jmp .wst23
-.wend24:
+    jmp .wst69
+.wend70:
     lea rax, [rel np_num_lines]
     push rax
     mov rax, [rbp-112]
@@ -825,15 +1944,15 @@ app_hl_notepad_do_backspace:
     pop rax
     mov [rax], ecx
     xor rax, rax
-    call app_hl_notepad_ensure_visible
-.fn_end_12_app_hl_notepad_do_backspace:
+    FN_CALL app_hl_notepad_ensure_visible, 0
+.fn_end_34_app_hl_notepad_do_backspace:
+    FN_END app_hl_notepad_do_backspace
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_do_enter
-app_hl_notepad_do_enter:
+FN_BEGIN app_hl_notepad_do_enter, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -856,11 +1975,11 @@ app_hl_notepad_do_enter:
     setge al
     movzx rax, al
     test rax, rax
-    jz .else27
-    jmp .fn_end_26_app_hl_notepad_do_enter
-    jmp .endif28
-.else27:
-.endif28:
+    jz .else73
+    jmp .fn_end_72_app_hl_notepad_do_enter
+    jmp .endif74
+.else73:
+.endif74:
     lea rax, [rel np_cursor_row]
     mov eax, [rax]
     mov [rbp-24], rax
@@ -874,7 +1993,7 @@ app_hl_notepad_do_enter:
     pop rax
     sub rax, rcx
     mov [rbp-40], rax
-.wst29:
+.wst75:
     mov rax, [rbp-40]
     push rax
     mov rax, [rbp-24]
@@ -884,11 +2003,11 @@ app_hl_notepad_do_enter:
     setg al
     movzx rax, al
     test rax, rax
-    jz .wend30
+    jz .wend76
     mov rax, [rbp-40]
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-48], rax
     mov rax, [rbp-40]
     push rax
@@ -898,11 +2017,11 @@ app_hl_notepad_do_enter:
     add rax, rcx
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-56], rax
     mov rax, 0
     mov [rbp-64], rax
-.wst31:
+.wst77:
     mov rax, [rbp-64]
     push rax
     mov rax, 80
@@ -912,7 +2031,7 @@ app_hl_notepad_do_enter:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend32
+    jz .wend78
     mov rax, [rbp-56]
     push rax
     mov rax, [rbp-64]
@@ -938,8 +2057,8 @@ app_hl_notepad_do_enter:
     pop rax
     add rax, rcx
     mov [rbp-64], rax
-    jmp .wst31
-.wend32:
+    jmp .wst77
+.wend78:
     mov rax, [rbp-40]
     push rax
     mov rax, 1
@@ -948,12 +2067,12 @@ app_hl_notepad_do_enter:
     add rax, rcx
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     push rax
     mov rax, [rbp-40]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov eax, [rax]
     mov rcx, rax
     pop rax
@@ -966,12 +2085,12 @@ app_hl_notepad_do_enter:
     pop rax
     sub rax, rcx
     mov [rbp-40], rax
-    jmp .wst29
-.wend30:
+    jmp .wst75
+.wend76:
     mov rax, [rbp-24]
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-72], rax
     mov rax, [rbp-24]
     push rax
@@ -981,12 +2100,12 @@ app_hl_notepad_do_enter:
     add rax, rcx
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-80], rax
     mov rax, [rbp-24]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov [rbp-88], rax
     mov rax, [rbp-88]
     mov eax, [rax]
@@ -995,7 +2114,7 @@ app_hl_notepad_do_enter:
     mov [rbp-104], rax
     mov rax, 0
     mov [rbp-112], rax
-.wst33:
+.wst79:
     mov rax, [rbp-104]
     push rax
     mov rax, [rbp-96]
@@ -1005,7 +2124,7 @@ app_hl_notepad_do_enter:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend34
+    jz .wend80
     mov rax, [rbp-80]
     push rax
     mov rax, [rbp-112]
@@ -1038,8 +2157,8 @@ app_hl_notepad_do_enter:
     pop rax
     add rax, rcx
     mov [rbp-112], rax
-    jmp .wst33
-.wend34:
+    jmp .wst79
+.wend80:
     mov rax, [rbp-80]
     push rax
     mov rax, [rbp-112]
@@ -1060,7 +2179,7 @@ app_hl_notepad_do_enter:
     add rax, rcx
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     push rax
     mov rax, [rbp-96]
     push rax
@@ -1122,15 +2241,15 @@ app_hl_notepad_do_enter:
     pop rax
     mov [rax], ecx
     xor rax, rax
-    call app_hl_notepad_ensure_visible
-.fn_end_26_app_hl_notepad_do_enter:
+    FN_CALL app_hl_notepad_ensure_visible, 0
+.fn_end_72_app_hl_notepad_do_enter:
+    FN_END app_hl_notepad_do_enter
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_do_tab
-app_hl_notepad_do_tab:
+FN_BEGIN app_hl_notepad_do_tab, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -1138,7 +2257,7 @@ app_hl_notepad_do_tab:
     push r12
     mov rax, 0
     mov [rbp-16], rax
-.wst35:
+.wst81:
     mov rax, [rbp-16]
     push rax
     mov rax, 4
@@ -1148,11 +2267,11 @@ app_hl_notepad_do_tab:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend36
+    jz .wend82
     mov rax, 32
     push rax
     pop rdi
-    call app_hl_notepad_insert_char
+    FN_CALL app_hl_notepad_insert_char, 1
     mov rax, [rbp-16]
     push rax
     mov rax, 1
@@ -1160,16 +2279,16 @@ app_hl_notepad_do_tab:
     pop rax
     add rax, rcx
     mov [rbp-16], rax
-    jmp .wst35
-.wend36:
-.fn_end_34_app_hl_notepad_do_tab:
+    jmp .wst81
+.wend82:
+.fn_end_80_app_hl_notepad_do_tab:
+    FN_END app_hl_notepad_do_tab
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_arrow_up
-app_hl_notepad_arrow_up:
+FN_BEGIN app_hl_notepad_arrow_up, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -1187,11 +2306,11 @@ app_hl_notepad_arrow_up:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else37
-    jmp .fn_end_36_app_hl_notepad_arrow_up
-    jmp .endif38
-.else37:
-.endif38:
+    jz .else83
+    jmp .fn_end_82_app_hl_notepad_arrow_up
+    jmp .endif84
+.else83:
+.endif84:
     mov rax, [rbp-16]
     push rax
     mov rax, 1
@@ -1209,7 +2328,7 @@ app_hl_notepad_arrow_up:
     mov rax, [rbp-16]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov eax, [rax]
     mov [rbp-24], rax
     lea rax, [rel np_cursor_col]
@@ -1222,7 +2341,7 @@ app_hl_notepad_arrow_up:
     setg al
     movzx rax, al
     test rax, rax
-    jz .else39
+    jz .else85
     lea rax, [rel np_cursor_col]
     push rax
     mov rax, [rbp-24]
@@ -1230,18 +2349,18 @@ app_hl_notepad_arrow_up:
     pop rax
     mov [rax], ecx
     xor rax, rax
-    jmp .endif40
-.else39:
-.endif40:
-    call app_hl_notepad_ensure_visible
-.fn_end_36_app_hl_notepad_arrow_up:
+    jmp .endif86
+.else85:
+.endif86:
+    FN_CALL app_hl_notepad_ensure_visible, 0
+.fn_end_82_app_hl_notepad_arrow_up:
+    FN_END app_hl_notepad_arrow_up
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_arrow_down
-app_hl_notepad_arrow_down:
+FN_BEGIN app_hl_notepad_arrow_down, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -1267,11 +2386,11 @@ app_hl_notepad_arrow_down:
     setge al
     movzx rax, al
     test rax, rax
-    jz .else41
-    jmp .fn_end_40_app_hl_notepad_arrow_down
-    jmp .endif42
-.else41:
-.endif42:
+    jz .else87
+    jmp .fn_end_86_app_hl_notepad_arrow_down
+    jmp .endif88
+.else87:
+.endif88:
     lea rax, [rel np_cursor_row]
     push rax
     mov rax, [rbp-16]
@@ -1282,7 +2401,7 @@ app_hl_notepad_arrow_down:
     mov rax, [rbp-16]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov eax, [rax]
     mov [rbp-24], rax
     lea rax, [rel np_cursor_col]
@@ -1295,7 +2414,7 @@ app_hl_notepad_arrow_down:
     setg al
     movzx rax, al
     test rax, rax
-    jz .else43
+    jz .else89
     lea rax, [rel np_cursor_col]
     push rax
     mov rax, [rbp-24]
@@ -1303,18 +2422,18 @@ app_hl_notepad_arrow_down:
     pop rax
     mov [rax], ecx
     xor rax, rax
-    jmp .endif44
-.else43:
-.endif44:
-    call app_hl_notepad_ensure_visible
-.fn_end_40_app_hl_notepad_arrow_down:
+    jmp .endif90
+.else89:
+.endif90:
+    FN_CALL app_hl_notepad_ensure_visible, 0
+.fn_end_86_app_hl_notepad_arrow_down:
+    FN_END app_hl_notepad_arrow_down
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_arrow_left
-app_hl_notepad_arrow_left:
+FN_BEGIN app_hl_notepad_arrow_left, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -1332,7 +2451,7 @@ app_hl_notepad_arrow_left:
     setg al
     movzx rax, al
     test rax, rax
-    jz .else45
+    jz .else91
     lea rax, [rel np_cursor_col]
     push rax
     mov rax, [rbp-16]
@@ -1345,10 +2464,10 @@ app_hl_notepad_arrow_left:
     pop rax
     mov [rax], ecx
     xor rax, rax
-    jmp .fn_end_44_app_hl_notepad_arrow_left
-    jmp .endif46
-.else45:
-.endif46:
+    jmp .fn_end_90_app_hl_notepad_arrow_left
+    jmp .endif92
+.else91:
+.endif92:
     lea rax, [rel np_cursor_row]
     mov eax, [rax]
     mov [rbp-24], rax
@@ -1361,11 +2480,11 @@ app_hl_notepad_arrow_left:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else47
-    jmp .fn_end_44_app_hl_notepad_arrow_left
-    jmp .endif48
-.else47:
-.endif48:
+    jz .else93
+    jmp .fn_end_90_app_hl_notepad_arrow_left
+    jmp .endif94
+.else93:
+.endif94:
     mov rax, [rbp-24]
     push rax
     mov rax, 1
@@ -1385,21 +2504,21 @@ app_hl_notepad_arrow_left:
     mov rax, [rbp-24]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov eax, [rax]
     mov rcx, rax
     pop rax
     mov [rax], ecx
     xor rax, rax
-    call app_hl_notepad_ensure_visible
-.fn_end_44_app_hl_notepad_arrow_left:
+    FN_CALL app_hl_notepad_ensure_visible, 0
+.fn_end_90_app_hl_notepad_arrow_left:
+    FN_END app_hl_notepad_arrow_left
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_arrow_right
-app_hl_notepad_arrow_right:
+FN_BEGIN app_hl_notepad_arrow_right, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -1414,7 +2533,7 @@ app_hl_notepad_arrow_right:
     mov rax, [rbp-16]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov eax, [rax]
     mov [rbp-32], rax
     mov rax, [rbp-24]
@@ -1426,7 +2545,7 @@ app_hl_notepad_arrow_right:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else49
+    jz .else95
     lea rax, [rel np_cursor_col]
     push rax
     mov rax, [rbp-24]
@@ -1439,10 +2558,10 @@ app_hl_notepad_arrow_right:
     pop rax
     mov [rax], ecx
     xor rax, rax
-    jmp .fn_end_48_app_hl_notepad_arrow_right
-    jmp .endif50
-.else49:
-.endif50:
+    jmp .fn_end_94_app_hl_notepad_arrow_right
+    jmp .endif96
+.else95:
+.endif96:
     mov rax, [rbp-16]
     push rax
     mov rax, 1
@@ -1460,11 +2579,11 @@ app_hl_notepad_arrow_right:
     setge al
     movzx rax, al
     test rax, rax
-    jz .else51
-    jmp .fn_end_48_app_hl_notepad_arrow_right
-    jmp .endif52
-.else51:
-.endif52:
+    jz .else97
+    jmp .fn_end_94_app_hl_notepad_arrow_right
+    jmp .endif98
+.else97:
+.endif98:
     lea rax, [rel np_cursor_row]
     push rax
     mov rax, [rbp-16]
@@ -1479,15 +2598,15 @@ app_hl_notepad_arrow_right:
     pop rax
     mov [rax], ecx
     xor rax, rax
-    call app_hl_notepad_ensure_visible
-.fn_end_48_app_hl_notepad_arrow_right:
+    FN_CALL app_hl_notepad_ensure_visible, 0
+.fn_end_94_app_hl_notepad_arrow_right:
+    FN_END app_hl_notepad_arrow_right
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_build_save_content
-app_hl_notepad_build_save_content:
+FN_BEGIN app_hl_notepad_build_save_content, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -1500,7 +2619,7 @@ app_hl_notepad_build_save_content:
     mov [rbp-24], rax
     mov rax, 0
     mov [rbp-32], rax
-.wst53:
+.wst99:
     mov rax, [rbp-24]
     push rax
     mov rax, [rbp-16]
@@ -1510,21 +2629,21 @@ app_hl_notepad_build_save_content:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend54
+    jz .wend100
     mov rax, [rbp-24]
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-40], rax
     mov rax, [rbp-24]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov eax, [rax]
     mov [rbp-48], rax
     mov rax, 0
     mov [rbp-56], rax
-.wst55:
+.wst101:
     mov rax, [rbp-56]
     push rax
     mov rax, [rbp-48]
@@ -1534,7 +2653,7 @@ app_hl_notepad_build_save_content:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend56
+    jz .wend102
     lea rax, [rel np_saved_content]
     push rax
     mov rax, [rbp-32]
@@ -1567,8 +2686,8 @@ app_hl_notepad_build_save_content:
     pop rax
     add rax, rcx
     mov [rbp-56], rax
-    jmp .wst55
-.wend56:
+    jmp .wst101
+.wend102:
     mov rax, [rbp-24]
     push rax
     mov rax, 1
@@ -1583,7 +2702,7 @@ app_hl_notepad_build_save_content:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else57
+    jz .else103
     lea rax, [rel np_saved_content]
     push rax
     mov rax, [rbp-32]
@@ -1622,9 +2741,9 @@ app_hl_notepad_build_save_content:
     pop rax
     add rax, rcx
     mov [rbp-32], rax
-    jmp .endif58
-.else57:
-.endif58:
+    jmp .endif104
+.else103:
+.endif104:
     mov rax, [rbp-24]
     push rax
     mov rax, 1
@@ -1632,8 +2751,8 @@ app_hl_notepad_build_save_content:
     pop rax
     add rax, rcx
     mov [rbp-24], rax
-    jmp .wst53
-.wend54:
+    jmp .wst99
+.wend100:
     lea rax, [rel np_save_total_bytes]
     push rax
     mov rax, [rbp-32]
@@ -1642,22 +2761,23 @@ app_hl_notepad_build_save_content:
     mov [rax], ecx
     xor rax, rax
     mov rax, [rbp-32]
-    jmp .fn_end_52_app_hl_notepad_build_save_content
-.fn_end_52_app_hl_notepad_build_save_content:
+    jmp .fn_end_98_app_hl_notepad_build_save_content
+.fn_end_98_app_hl_notepad_build_save_content:
+    FN_END app_hl_notepad_build_save_content
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_do_save_to
-app_hl_notepad_do_save_to:
+FN_BEGIN app_hl_notepad_do_save_to, 1, 0, FN_RET_SCALAR
+FN_ARG 0, name83, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
     mov [rbp-8], rdi
     push rbx
     push r12
-    call app_hl_notepad_build_save_content
+    FN_CALL app_hl_notepad_build_save_content, 0
     mov [rbp-24], rax
     mov rax, [rbp-8]
     push rax
@@ -1668,7 +2788,7 @@ app_hl_notepad_do_save_to:
     pop rdx
     pop rsi
     pop rdi
-    call fat16_write_file
+    FN_CALL fat16_write_file, 3
     lea rax, [rel np_has_saved]
     push rax
     mov rax, 1
@@ -1683,14 +2803,470 @@ app_hl_notepad_do_save_to:
     pop rax
     mov [rax], cl
     xor rax, rax
-.fn_end_58_app_hl_notepad_do_save_to:
+.fn_end_104_app_hl_notepad_do_save_to:
+    FN_END app_hl_notepad_do_save_to
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_draw
-app_hl_notepad_draw:
+FN_BEGIN app_hl_notepad_str_is_root_or_empty, 1, 0, FN_RET_SCALAR
+FN_ARG 0, s, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    push rbx
+    push r12
+    mov rax, [rbp-8]
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else105
+    mov rax, 1
+    jmp .fn_end_104_app_hl_notepad_str_is_root_or_empty
+    jmp .endif106
+.else105:
+.endif106:
+    mov rax, [rbp-8]
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 47
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else107
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else109
+    mov rax, 1
+    jmp .fn_end_104_app_hl_notepad_str_is_root_or_empty
+    jmp .endif110
+.else109:
+.endif110:
+    jmp .endif108
+.else107:
+.endif108:
+    mov rax, 0
+    jmp .fn_end_104_app_hl_notepad_str_is_root_or_empty
+.fn_end_104_app_hl_notepad_str_is_root_or_empty:
+    FN_END app_hl_notepad_str_is_root_or_empty
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_entry_name_eq, 2, 0, FN_RET_SCALAR
+FN_ARG 0, ent, FN_KIND_SCALAR
+FN_ARG 1, name83, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    push rbx
+    push r12
+    mov rax, 0
+    mov [rbp-32], rax
+.wst111:
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 11
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .wend112
+    mov rax, [rbp-8]
+    push rax
+    mov rax, [rbp-32]
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    movzx rax, byte [rax]
+    push rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-32]
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    movzx rax, byte [rax]
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setne al
+    movzx rax, al
+    test rax, rax
+    jz .else113
+    mov rax, 0
+    jmp .fn_end_110_app_hl_notepad_entry_name_eq
+    jmp .endif114
+.else113:
+.endif114:
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    mov [rbp-32], rax
+    jmp .wst111
+.wend112:
+    mov rax, 1
+    jmp .fn_end_110_app_hl_notepad_entry_name_eq
+.fn_end_110_app_hl_notepad_entry_name_eq:
+    FN_END app_hl_notepad_entry_name_eq
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_find_root_dir_cluster, 1, 0, FN_RET_SCALAR
+FN_ARG 0, name83, FN_KIND_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    mov [rbp-8], rdi
+    push rbx
+    push r12
+    mov rax, 0
+    push rax
+    pop rdi
+    mov rax, 6
+    syscall
+    mov rax, 4
+    syscall
+    mov [rbp-24], rax
+    mov rax, 0
+    mov [rbp-32], rax
+.wst115:
+    mov rax, [rbp-32]
+    push rax
+    mov rax, [rbp-24]
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .wend116
+    mov rax, [rbp-32]
+    push rax
+    pop rdi
+    mov rax, 5
+    syscall
+    mov [rbp-40], rax
+    mov rax, [rbp-40]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setne al
+    movzx rax, al
+    test rax, rax
+    jz .else117
+    mov rax, [rbp-40]
+    push rax
+    mov rax, [rbp-8]
+    push rax
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_entry_name_eq, 2
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else119
+    mov rax, [rbp-40]
+    push rax
+    mov rax, 11
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 16
+    mov rcx, rax
+    pop rax
+    and rax, rcx
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setne al
+    movzx rax, al
+    test rax, rax
+    jz .else121
+    mov rax, [rbp-40]
+    push rax
+    mov rax, 26
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    mov eax, [rax]
+    jmp .fn_end_114_app_hl_notepad_find_root_dir_cluster
+    jmp .endif122
+.else121:
+.endif122:
+    jmp .endif120
+.else119:
+.endif120:
+    jmp .endif118
+.else117:
+.endif118:
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    mov [rbp-32], rax
+    jmp .wst115
+.wend116:
+    mov rax, 0
+    jmp .fn_end_114_app_hl_notepad_find_root_dir_cluster
+.fn_end_114_app_hl_notepad_find_root_dir_cluster:
+    FN_END app_hl_notepad_find_root_dir_cluster
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_save_dialog_reset, 0, 0, FN_RET_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    push rbx
+    push r12
+    lea rax, [rel np_save_dialog]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    lea rax, [rel np_save_field]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    lea rax, [rel np_saveas_cursor]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], ecx
+    xor rax, rax
+    lea rax, [rel np_saveloc_cursor]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    mov [rax], ecx
+    xor rax, rax
+    lea rax, [rel np_saveas_buf]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    lea rax, [rel np_saveloc_buf]
+    push rax
+    mov rax, 47
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    lea rax, [rel np_saveloc_buf]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+.fn_end_122_app_hl_notepad_save_dialog_reset:
+    FN_END app_hl_notepad_save_dialog_reset
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_save_dialog_commit, 0, 0, FN_RET_SCALAR
+    push rbp
+    mov rbp, rsp
+    sub rsp, 512
+    push rbx
+    push r12
+    lea rax, [rel np_save_dialog]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    lea rax, [rel np_saveas_buf]
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else123
+    jmp .fn_end_122_app_hl_notepad_save_dialog_commit
+    jmp .endif124
+.else123:
+.endif124:
+    mov rax, 0
+    mov [rbp-16], rax
+    lea rax, [rel np_saveloc_buf]
+    push rax
+    pop rdi
+    FN_CALL app_hl_notepad_str_is_root_or_empty, 1
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else125
+    lea rax, [rel np_saveloc_buf]
+    mov [rbp-24], rax
+    mov rax, [rbp-24]
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 47
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else127
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    mov [rbp-24], rax
+    jmp .endif128
+.else127:
+.endif128:
+    mov rax, [rbp-24]
+    push rax
+    lea rax, [rel np_saveloc_83]
+    push rax
+    pop rsi
+    pop rdi
+    FN_CALL filename_to_83, 2
+    lea rax, [rel np_saveloc_83]
+    push rax
+    pop rdi
+    FN_CALL app_hl_notepad_find_root_dir_cluster, 1
+    mov [rbp-16], rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else129
+    lea rax, [rel np_save_done_msg]
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    mov rax, 0
+    push rax
+    pop rdi
+    mov rax, 6
+    syscall
+    jmp .fn_end_122_app_hl_notepad_save_dialog_commit
+    jmp .endif130
+.else129:
+.endif130:
+    jmp .endif126
+.else125:
+.endif126:
+    mov rax, [rbp-16]
+    push rax
+    pop rdi
+    mov rax, 6
+    syscall
+    lea rax, [rel np_saveas_buf]
+    push rax
+    lea rax, [rel np_saveas_83]
+    push rax
+    pop rsi
+    pop rdi
+    FN_CALL filename_to_83, 2
+    lea rax, [rel np_saveas_83]
+    push rax
+    pop rdi
+    FN_CALL app_hl_notepad_do_save_to, 1
+    mov rax, 0
+    push rax
+    pop rdi
+    mov rax, 6
+    syscall
+.fn_end_122_app_hl_notepad_save_dialog_commit:
+    FN_END app_hl_notepad_save_dialog_commit
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+FN_BEGIN app_hl_notepad_draw, 1, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -1729,114 +3305,30 @@ app_hl_notepad_draw:
     add rax, rcx
     mov rax, [rax]
     mov [rbp-48], rax
-    mov rax, [rbp-24]
+    mov rax, [rbp-8]
     push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    pop rdi
+    FN_CALL app_hl_notepad_ui_menu_bar, 1
+    mov rax, [rbp-8]
     push rax
-    mov rax, [rbp-32]
+    mov rax, 6
     push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    lea rax, [rel app_hl_notepad_str0]
     push rax
-    mov rax, [rbp-40]
-    push rax
-    mov rax, 2
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    imul rax, rcx
-    mov rcx, rax
-    pop rax
-    sub rax, rcx
-    push rax
-    mov rax, 18
-    push rax
-    mov rax, 15263976
-    push rax
-    pop r8
-    pop rcx
     pop rdx
     pop rsi
     pop rdi
-    call render_rect
-    mov rax, [rbp-24]
+    FN_CALL app_hl_notepad_ui_menu_label, 3
+    mov rax, [rbp-8]
     push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    mov rax, 54
     push rax
-    mov rax, 4
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    lea rax, [rel app_hl_notepad_str1]
     push rax
-    mov rax, [rbp-32]
-    push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    lea rax, [rel szNoteMenuFile]
-    push rax
-    mov rax, 3355443
-    push rax
-    mov rax, 15263976
-    push rax
-    pop r8
-    pop rcx
     pop rdx
     pop rsi
     pop rdi
-    call render_text
-    mov rax, [rbp-24]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 52
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, [rbp-32]
-    push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    lea rax, [rel szNoteMenuEdit]
-    push rax
-    mov rax, 3355443
-    push rax
-    mov rax, 15263976
-    push rax
-    pop r8
-    pop rcx
-    pop rdx
-    pop rsi
-    pop rdi
-    call render_text
+    FN_CALL app_hl_notepad_ui_menu_label, 3
     mov rax, [rbp-48]
     push rax
     mov rax, 24
@@ -1844,7 +3336,7 @@ app_hl_notepad_draw:
     pop rax
     sub rax, rcx
     push rax
-    mov rax, 20
+    mov rax, 24
     mov rcx, rax
     pop rax
     sub rax, rcx
@@ -1863,11 +3355,11 @@ app_hl_notepad_draw:
     setle al
     movzx rax, al
     test rax, rax
-    jz .else59
-    jmp .fn_end_58_app_hl_notepad_draw
-    jmp .endif60
-.else59:
-.endif60:
+    jz .else131
+    jmp .fn_end_130_app_hl_notepad_draw
+    jmp .endif132
+.else131:
+.endif132:
     mov rax, [rbp-24]
     push rax
     mov rax, 2
@@ -1882,7 +3374,7 @@ app_hl_notepad_draw:
     pop rax
     add rax, rcx
     push rax
-    mov rax, 20
+    mov rax, 24
     mov rcx, rax
     pop rax
     add rax, rcx
@@ -1908,7 +3400,7 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_rect
+    FN_CALL render_rect, 5
     mov rax, [rbp-56]
     push rax
     mov rax, 14
@@ -1926,11 +3418,11 @@ app_hl_notepad_draw:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else61
-    jmp .fn_end_58_app_hl_notepad_draw
-    jmp .endif62
-.else61:
-.endif62:
+    jz .else133
+    jmp .fn_end_130_app_hl_notepad_draw
+    jmp .endif134
+.else133:
+.endif134:
     lea rax, [rel np_scroll_top]
     mov eax, [rax]
     mov [rbp-72], rax
@@ -1941,7 +3433,7 @@ app_hl_notepad_draw:
     mov [rbp-88], rax
     mov rax, [rbp-72]
     mov [rbp-96], rax
-.wst63:
+.wst135:
     mov rax, [rbp-88]
     push rax
     mov rax, [rbp-64]
@@ -1951,7 +3443,7 @@ app_hl_notepad_draw:
     setl al
     movzx rax, al
     test rax, rax
-    jz .wend64
+    jz .wend136
     mov rax, [rbp-96]
     push rax
     mov rax, [rbp-80]
@@ -1961,12 +3453,12 @@ app_hl_notepad_draw:
     setge al
     movzx rax, al
     test rax, rax
-    jz .else65
+    jz .else137
     mov rax, [rbp-64]
     mov [rbp-88], rax
-    jmp .endif66
-.else65:
-.endif66:
+    jmp .endif138
+.else137:
+.endif138:
     mov rax, [rbp-88]
     push rax
     mov rax, [rbp-64]
@@ -1976,11 +3468,11 @@ app_hl_notepad_draw:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else67
+    jz .else139
     mov rax, [rbp-96]
     push rax
     pop rdi
-    call app_hl_notepad_line_ptr
+    FN_CALL app_hl_notepad_line_ptr, 1
     mov [rbp-104], rax
     mov rax, [rbp-104]
     movzx rax, byte [rax]
@@ -1992,7 +3484,7 @@ app_hl_notepad_draw:
     setne al
     movzx rax, al
     test rax, rax
-    jz .else69
+    jz .else141
     mov rax, [rbp-24]
     push rax
     mov rax, 2
@@ -2012,7 +3504,7 @@ app_hl_notepad_draw:
     pop rax
     add rax, rcx
     push rax
-    mov rax, 20
+    mov rax, 24
     mov rcx, rax
     pop rax
     add rax, rcx
@@ -2043,10 +3535,10 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_text
-    jmp .endif70
-.else69:
-.endif70:
+    FN_CALL render_text, 5
+    jmp .endif142
+.else141:
+.endif142:
     mov rax, [rbp-96]
     push rax
     mov rax, 1
@@ -2061,11 +3553,11 @@ app_hl_notepad_draw:
     pop rax
     add rax, rcx
     mov [rbp-88], rax
-    jmp .endif68
-.else67:
-.endif68:
-    jmp .wst63
-.wend64:
+    jmp .endif140
+.else139:
+.endif140:
+    jmp .wst135
+.wend136:
     lea rax, [rel np_cursor_row]
     mov eax, [rax]
     mov [rbp-112], rax
@@ -2088,7 +3580,7 @@ app_hl_notepad_draw:
     setge al
     movzx rax, al
     test rax, rax
-    jz .else71
+    jz .else143
     mov rax, [rbp-128]
     push rax
     mov rax, [rbp-64]
@@ -2098,18 +3590,10 @@ app_hl_notepad_draw:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else73
-    mov rax, [rbp-24]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    jz .else145
+    mov rax, [rbp-8]
     push rax
     mov rax, 4
-    mov rcx, rax
-    pop rax
-    add rax, rcx
     push rax
     mov rax, [rbp-120]
     push rax
@@ -2121,17 +3605,7 @@ app_hl_notepad_draw:
     pop rax
     add rax, rcx
     push rax
-    mov rax, [rbp-32]
-    push rax
     mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 20
-    mov rcx, rax
-    pop rax
-    add rax, rcx
     push rax
     mov rax, 2
     mov rcx, rax
@@ -2148,24 +3622,16 @@ app_hl_notepad_draw:
     pop rax
     add rax, rcx
     push rax
-    lea rax, [rel szCursor]
-    push rax
-    mov rax, 0
-    push rax
-    mov rax, 16777215
-    push rax
-    pop r8
-    pop rcx
     pop rdx
     pop rsi
     pop rdi
-    call render_text
-    jmp .endif74
-.else73:
-.endif74:
-    jmp .endif72
-.else71:
-.endif72:
+    FN_CALL app_hl_notepad_ui_caret_blink, 3
+    jmp .endif146
+.else145:
+.endif146:
+    jmp .endif144
+.else143:
+.endif144:
     lea rax, [rel np_menu_open]
     movzx rax, byte [rax]
     mov [rbp-136], rax
@@ -2178,220 +3644,74 @@ app_hl_notepad_draw:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else75
-    mov rax, [rbp-24]
+    jz .else147
+    mov rax, [rbp-8]
     push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    mov rax, 0
     push rax
-    mov rax, [rbp-32]
-    push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 18
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    mov rax, 22
     push rax
     mov rax, 100
     push rax
-    mov rax, 20
-    push rax
     mov rax, 3
-    mov rcx, rax
-    pop rax
-    imul rax, rcx
-    push rax
-    mov rax, 4
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 15790320
     push rax
     pop r8
     pop rcx
     pop rdx
     pop rsi
     pop rdi
-    call render_rect
-    mov rax, [rbp-24]
+    FN_CALL app_hl_notepad_ui_dropdown, 5
+    mov rax, [rbp-8]
     push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    mov rax, 0
     push rax
-    mov rax, [rbp-32]
+    mov rax, 22
     push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    mov rax, 0
     push rax
-    mov rax, 18
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    lea rax, [rel app_hl_notepad_str2]
     push rax
-    mov rax, 100
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_dropdown_item, 5
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 0
+    push rax
+    mov rax, 22
     push rax
     mov rax, 1
     push rax
-    mov rax, 10066329
+    lea rax, [rel app_hl_notepad_str3]
     push rax
     pop r8
     pop rcx
     pop rdx
     pop rsi
     pop rdi
-    call render_rect
-    mov rax, [rbp-24]
+    FN_CALL app_hl_notepad_ui_dropdown_item, 5
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 0
+    push rax
+    mov rax, 22
     push rax
     mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
     push rax
-    mov rax, 8
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, [rbp-32]
-    push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 18
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 4
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    lea rax, [rel szFileNew]
-    push rax
-    mov rax, 2236962
-    push rax
-    mov rax, 15790320
+    lea rax, [rel app_hl_notepad_str4]
     push rax
     pop r8
     pop rcx
     pop rdx
     pop rsi
     pop rdi
-    call render_text
-    mov rax, [rbp-24]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 8
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, [rbp-32]
-    push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 18
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 4
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 20
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    lea rax, [rel szFileSave]
-    push rax
-    mov rax, 2236962
-    push rax
-    mov rax, 15790320
-    push rax
-    pop r8
-    pop rcx
-    pop rdx
-    pop rsi
-    pop rdi
-    call render_text
-    mov rax, [rbp-24]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 8
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, [rbp-32]
-    push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 18
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 4
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 20
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    imul rax, rcx
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    lea rax, [rel szFileClose]
-    push rax
-    mov rax, 2236962
-    push rax
-    mov rax, 15790320
-    push rax
-    pop r8
-    pop rcx
-    pop rdx
-    pop rsi
-    pop rdi
-    call render_text
-    jmp .endif76
-.else75:
-.endif76:
+    FN_CALL app_hl_notepad_ui_dropdown_item, 5
+    jmp .endif148
+.else147:
+.endif148:
     mov rax, [rbp-136]
     push rax
     mov rax, 2
@@ -2401,179 +3721,58 @@ app_hl_notepad_draw:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else77
-    mov rax, [rbp-24]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    jz .else149
+    mov rax, [rbp-8]
     push rax
     mov rax, 48
-    mov rcx, rax
-    pop rax
-    add rax, rcx
     push rax
-    mov rax, [rbp-32]
-    push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 18
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    mov rax, 22
     push rax
     mov rax, 110
     push rax
-    mov rax, 20
-    push rax
     mov rax, 2
-    mov rcx, rax
-    pop rax
-    imul rax, rcx
-    push rax
-    mov rax, 4
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 15790320
     push rax
     pop r8
     pop rcx
     pop rdx
     pop rsi
     pop rdi
-    call render_rect
-    mov rax, [rbp-24]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    FN_CALL app_hl_notepad_ui_dropdown, 5
+    mov rax, [rbp-8]
     push rax
     mov rax, 48
-    mov rcx, rax
-    pop rax
-    add rax, rcx
     push rax
-    mov rax, [rbp-32]
+    mov rax, 22
     push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    mov rax, 0
     push rax
-    mov rax, 18
-    mov rcx, rax
-    pop rax
-    add rax, rcx
+    lea rax, [rel app_hl_notepad_str5]
     push rax
-    mov rax, 110
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_dropdown_item, 5
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 48
+    push rax
+    mov rax, 22
     push rax
     mov rax, 1
     push rax
-    mov rax, 10066329
+    lea rax, [rel app_hl_notepad_str6]
     push rax
     pop r8
     pop rcx
     pop rdx
     pop rsi
     pop rdi
-    call render_rect
-    mov rax, [rbp-24]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 56
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, [rbp-32]
-    push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 18
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 4
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    lea rax, [rel szEditSelAll]
-    push rax
-    mov rax, 2236962
-    push rax
-    mov rax, 15790320
-    push rax
-    pop r8
-    pop rcx
-    pop rdx
-    pop rsi
-    pop rdi
-    call render_text
-    mov rax, [rbp-24]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 56
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, [rbp-32]
-    push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 18
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 4
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 20
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    lea rax, [rel szEditClear]
-    push rax
-    mov rax, 2236962
-    push rax
-    mov rax, 15790320
-    push rax
-    pop r8
-    pop rcx
-    pop rdx
-    pop rsi
-    pop rdi
-    call render_text
-    jmp .endif78
-.else77:
-.endif78:
+    FN_CALL app_hl_notepad_ui_dropdown_item, 5
+    jmp .endif150
+.else149:
+.endif150:
     lea rax, [rel np_save_dialog]
     movzx rax, byte [rax]
     push rax
@@ -2584,7 +3783,7 @@ app_hl_notepad_draw:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else79
+    jz .else151
     mov rax, [rbp-40]
     push rax
     mov rax, 2
@@ -2628,7 +3827,7 @@ app_hl_notepad_draw:
     push rax
     mov rax, [rbp-144]
     push rax
-    mov rax, 80
+    mov rax, 112
     push rax
     mov rax, 2241348
     push rax
@@ -2637,7 +3836,7 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_rect
+    FN_CALL render_rect, 5
     mov rax, [rbp-24]
     push rax
     mov rax, 2
@@ -2673,7 +3872,7 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_rect
+    FN_CALL render_rect, 5
     mov rax, [rbp-24]
     push rax
     mov rax, 2
@@ -2698,7 +3897,7 @@ app_hl_notepad_draw:
     pop rax
     add rax, rcx
     push rax
-    lea rax, [rel szSaveAsTitle]
+    lea rax, [rel app_hl_notepad_str7]
     push rax
     mov rax, 11197951
     push rax
@@ -2709,7 +3908,7 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_text
+    FN_CALL render_text, 5
     mov rax, [rbp-24]
     push rax
     mov rax, 2
@@ -2734,7 +3933,7 @@ app_hl_notepad_draw:
     pop rax
     add rax, rcx
     push rax
-    lea rax, [rel szSaveAsFilename]
+    lea rax, [rel app_hl_notepad_str8]
     push rax
     mov rax, 13421772
     push rax
@@ -2745,7 +3944,7 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_text
+    FN_CALL render_text, 5
     mov rax, [rbp-40]
     push rax
     mov rax, 2
@@ -2798,7 +3997,7 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_rect
+    FN_CALL render_rect, 5
     mov rax, [rbp-24]
     push rax
     mov rax, 2
@@ -2834,56 +4033,7 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_text
-    lea rax, [rel np_saveas_cursor]
-    mov eax, [rax]
-    mov [rbp-160], rax
-    mov rax, [rbp-24]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 108
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, [rbp-160]
-    push rax
-    mov rax, 8
-    mov rcx, rax
-    pop rax
-    imul rax, rcx
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, [rbp-32]
-    push rax
-    mov rax, 24
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    mov rax, 65
-    mov rcx, rax
-    pop rax
-    add rax, rcx
-    push rax
-    lea rax, [rel szCursor]
-    push rax
-    mov rax, 0
-    push rax
-    mov rax, 16777215
-    push rax
-    pop r8
-    pop rcx
-    pop rdx
-    pop rsi
-    pop rdi
-    call render_text
+    FN_CALL render_text, 5
     mov rax, [rbp-24]
     push rax
     mov rax, 2
@@ -2903,12 +4053,194 @@ app_hl_notepad_draw:
     pop rax
     add rax, rcx
     push rax
-    mov rax, 86
+    mov rax, 88
     mov rcx, rax
     pop rax
     add rax, rcx
     push rax
-    lea rax, [rel szSaveAsHint]
+    lea rax, [rel app_hl_notepad_str9]
+    push rax
+    mov rax, 13421772
+    push rax
+    mov rax, 2241348
+    push rax
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL render_text, 5
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 104
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 24
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 84
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-152]
+    push rax
+    mov rax, 18
+    push rax
+    mov rax, 16777215
+    push rax
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL render_rect, 5
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 108
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 24
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 87
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    lea rax, [rel np_saveloc_buf]
+    push rax
+    mov rax, 0
+    push rax
+    mov rax, 16777215
+    push rax
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL render_text, 5
+    lea rax, [rel np_save_field]
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else153
+    lea rax, [rel np_saveas_cursor]
+    mov eax, [rax]
+    mov [rbp-160], rax
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 108
+    push rax
+    mov rax, [rbp-160]
+    push rax
+    mov rax, 8
+    mov rcx, rax
+    pop rax
+    imul rax, rcx
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 64
+    push rax
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_caret_blink, 3
+    jmp .endif154
+.else153:
+.endif154:
+    lea rax, [rel np_save_field]
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else155
+    lea rax, [rel np_saveloc_cursor]
+    mov eax, [rax]
+    mov [rbp-168], rax
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 108
+    push rax
+    mov rax, [rbp-168]
+    push rax
+    mov rax, 8
+    mov rcx, rax
+    pop rax
+    imul rax, rcx
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 86
+    push rax
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL app_hl_notepad_ui_caret_blink, 3
+    jmp .endif156
+.else155:
+.endif156:
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 30
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 24
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 112
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    lea rax, [rel app_hl_notepad_str10]
     push rax
     mov rax, 8947848
     push rax
@@ -2919,10 +4251,10 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_text
-    jmp .endif80
-.else79:
-.endif80:
+    FN_CALL render_text, 5
+    jmp .endif152
+.else151:
+.endif152:
     lea rax, [rel np_save_done_msg]
     movzx rax, byte [rax]
     push rax
@@ -2933,7 +4265,7 @@ app_hl_notepad_draw:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else81
+    jz .else157
     mov rax, [rbp-24]
     push rax
     mov rax, [rbp-40]
@@ -2951,8 +4283,8 @@ app_hl_notepad_draw:
     mov rcx, rax
     pop rax
     add rax, rcx
-    mov [rbp-168], rax
-    mov rax, [rbp-168]
+    mov [rbp-176], rax
+    mov rax, [rbp-176]
     push rax
     mov rax, [rbp-32]
     push rax
@@ -2977,7 +4309,7 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_rect
+    FN_CALL render_rect, 5
     mov rax, [rbp-24]
     push rax
     mov rax, [rbp-40]
@@ -3008,7 +4340,7 @@ app_hl_notepad_draw:
     pop rax
     add rax, rcx
     push rax
-    lea rax, [rel szSavedMsg]
+    lea rax, [rel app_hl_notepad_str11]
     push rax
     mov rax, 16777215
     push rax
@@ -3019,18 +4351,110 @@ app_hl_notepad_draw:
     pop rdx
     pop rsi
     pop rdi
-    call render_text
-    jmp .endif82
-.else81:
-.endif82:
-.fn_end_58_app_hl_notepad_draw:
+    FN_CALL render_text, 5
+    jmp .endif158
+.else157:
+.endif158:
+    lea rax, [rel np_save_done_msg]
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else159
+    mov rax, [rbp-24]
+    push rax
+    mov rax, [rbp-40]
+    push rax
+    mov rax, 176
+    mov rcx, rax
+    pop rax
+    sub rax, rcx
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    cqo
+    idiv rcx
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    mov [rbp-184], rax
+    mov rax, [rbp-184]
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 24
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 60
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 176
+    push rax
+    mov rax, 30
+    push rax
+    mov rax, 9445408
+    push rax
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL render_rect, 5
+    mov rax, [rbp-184]
+    push rax
+    mov rax, 8
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-32]
+    push rax
+    mov rax, 24
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 68
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    lea rax, [rel app_hl_notepad_str12]
+    push rax
+    mov rax, 16777215
+    push rax
+    mov rax, 9445408
+    push rax
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    FN_CALL render_text, 5
+    jmp .endif160
+.else159:
+.endif160:
+.fn_end_130_app_hl_notepad_draw:
+    FN_END app_hl_notepad_draw
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_click
-app_hl_notepad_click:
+FN_BEGIN app_hl_notepad_click, 3, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, cx, FN_KIND_SCALAR
+FN_ARG 2, cy, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -3039,32 +4463,10 @@ app_hl_notepad_click:
     mov [rbp-24], rdx
     push rbx
     push r12
-    lea rax, [rel np_save_done_msg]
-    movzx rax, byte [rax]
-    push rax
-    mov rax, 1
-    mov rcx, rax
-    pop rax
-    cmp rax, rcx
-    sete al
-    movzx rax, al
-    test rax, rax
-    jz .else83
-    lea rax, [rel np_save_done_msg]
-    push rax
-    mov rax, 0
-    mov rcx, rax
-    pop rax
-    mov [rax], cl
-    xor rax, rax
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif84
-.else83:
-.endif84:
-    lea rax, [rel np_menu_open]
-    movzx rax, byte [rax]
+    mov rax, 24
     mov [rbp-40], rax
-    mov rax, [rbp-40]
+    lea rax, [rel np_save_done_msg]
+    movzx rax, byte [rax]
     push rax
     mov rax, 0
     mov rcx, rax
@@ -3073,8 +4475,20 @@ app_hl_notepad_click:
     setne al
     movzx rax, al
     test rax, rax
-    jz .else85
-    mov rax, [rbp-40]
+    jz .else161
+    lea rax, [rel np_save_done_msg]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif162
+.else161:
+.endif162:
+    lea rax, [rel np_save_dialog]
+    movzx rax, byte [rax]
     push rax
     mov rax, 1
     mov rcx, rax
@@ -3083,37 +4497,132 @@ app_hl_notepad_click:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else87
+    jz .else163
     mov rax, [rbp-24]
     push rax
-    mov rax, 18
+    mov rax, 62
     mov rcx, rax
     pop rax
-    sub rax, rcx
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else165
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 82
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else167
+    lea rax, [rel np_save_field]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif168
+.else167:
+.endif168:
+    jmp .endif166
+.else165:
+.endif166:
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 84
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else169
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 104
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else171
+    lea rax, [rel np_save_field]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif172
+.else171:
+.endif172:
+    jmp .endif170
+.else169:
+.endif170:
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif164
+.else163:
+.endif164:
+    lea rax, [rel np_menu_open]
+    movzx rax, byte [rax]
     mov [rbp-48], rax
     mov rax, [rbp-48]
     push rax
-    mov rax, 4
-    mov rcx, rax
-    pop rax
-    cmp rax, rcx
-    setl al
-    movzx rax, al
-    test rax, rax
-    jz .else89
-    lea rax, [rel np_menu_open]
-    push rax
     mov rax, 0
     mov rcx, rax
     pop rax
-    mov [rax], cl
-    xor rax, rax
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif90
-.else89:
-.endif90:
+    cmp rax, rcx
+    setne al
+    movzx rax, al
+    test rax, rax
+    jz .else173
     mov rax, [rbp-48]
     push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else175
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 22
+    mov rcx, rax
+    pop rax
+    sub rax, rcx
+    mov [rbp-56], rax
+    mov rax, [rbp-56]
+    push rax
+    mov rax, 4
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setl al
+    movzx rax, al
+    test rax, rax
+    jz .else177
+    lea rax, [rel np_menu_open]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif178
+.else177:
+.endif178:
+    mov rax, [rbp-56]
+    push rax
     mov rax, 4
     mov rcx, rax
     pop rax
@@ -3124,7 +4633,7 @@ app_hl_notepad_click:
     pop rax
     cqo
     idiv rcx
-    mov [rbp-56], rax
+    mov [rbp-64], rax
     lea rax, [rel np_menu_open]
     push rax
     mov rax, 0
@@ -3132,34 +4641,6 @@ app_hl_notepad_click:
     pop rax
     mov [rax], cl
     xor rax, rax
-    mov rax, [rbp-56]
-    push rax
-    mov rax, 0
-    mov rcx, rax
-    pop rax
-    cmp rax, rcx
-    sete al
-    movzx rax, al
-    test rax, rax
-    jz .else91
-    call app_hl_notepad_clear_buffer
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif92
-.else91:
-.endif92:
-    mov rax, [rbp-56]
-    push rax
-    mov rax, 1
-    mov rcx, rax
-    pop rax
-    cmp rax, rcx
-    sete al
-    movzx rax, al
-    test rax, rax
-    jz .else93
-    lea rax, [rel np_open_entry]
-    mov rax, [rax]
-    mov [rbp-64], rax
     mov rax, [rbp-64]
     push rax
     mov rax, 0
@@ -3169,99 +4650,64 @@ app_hl_notepad_click:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else95
-    lea rax, [rel np_save_dialog]
+    jz .else179
+    FN_CALL app_hl_notepad_clear_buffer, 0
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif180
+.else179:
+.endif180:
+    mov rax, [rbp-64]
     push rax
     mov rax, 1
     mov rcx, rax
     pop rax
-    mov [rax], cl
-    xor rax, rax
-    lea rax, [rel np_saveas_cursor]
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else181
+    FN_CALL app_hl_notepad_save_dialog_reset, 0
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif182
+.else181:
+.endif182:
+    mov rax, [rbp-64]
     push rax
-    mov rax, 0
+    mov rax, 2
     mov rcx, rax
     pop rax
-    mov [rax], ecx
-    xor rax, rax
-    lea rax, [rel np_saveas_buf]
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else183
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif184
+.else183:
+.endif184:
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif176
+.else175:
+.endif176:
+    mov rax, [rbp-48]
     push rax
-    mov rax, 0
+    mov rax, 2
     mov rcx, rax
     pop rax
-    mov [rax], cl
-    xor rax, rax
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif96
-.else95:
-.endif96:
-    call app_hl_notepad_build_save_content
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else185
+    mov rax, [rbp-24]
+    push rax
+    mov rax, 22
+    mov rcx, rax
+    pop rax
+    sub rax, rcx
     mov [rbp-72], rax
-    mov rax, [rbp-64]
-    push rax
-    lea rax, [rel np_saved_content]
-    push rax
     mov rax, [rbp-72]
     push rax
-    pop rdx
-    pop rsi
-    pop rdi
-    call fat16_write_file
-    lea rax, [rel np_has_saved]
-    push rax
-    mov rax, 1
-    mov rcx, rax
-    pop rax
-    mov [rax], cl
-    xor rax, rax
-    lea rax, [rel np_save_done_msg]
-    push rax
-    mov rax, 1
-    mov rcx, rax
-    pop rax
-    mov [rax], cl
-    xor rax, rax
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif94
-.else93:
-.endif94:
-    mov rax, [rbp-56]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    cmp rax, rcx
-    sete al
-    movzx rax, al
-    test rax, rax
-    jz .else97
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif98
-.else97:
-.endif98:
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif88
-.else87:
-.endif88:
-    mov rax, [rbp-40]
-    push rax
-    mov rax, 2
-    mov rcx, rax
-    pop rax
-    cmp rax, rcx
-    sete al
-    movzx rax, al
-    test rax, rax
-    jz .else99
-    mov rax, [rbp-24]
-    push rax
-    mov rax, 18
-    mov rcx, rax
-    pop rax
-    sub rax, rcx
-    mov [rbp-80], rax
-    mov rax, [rbp-80]
-    push rax
     mov rax, 4
     mov rcx, rax
     pop rax
@@ -3269,7 +4715,7 @@ app_hl_notepad_click:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else101
+    jz .else187
     lea rax, [rel np_menu_open]
     push rax
     mov rax, 0
@@ -3277,11 +4723,11 @@ app_hl_notepad_click:
     pop rax
     mov [rax], cl
     xor rax, rax
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif102
-.else101:
-.endif102:
-    mov rax, [rbp-80]
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif188
+.else187:
+.endif188:
+    mov rax, [rbp-72]
     push rax
     mov rax, 4
     mov rcx, rax
@@ -3293,7 +4739,7 @@ app_hl_notepad_click:
     pop rax
     cqo
     idiv rcx
-    mov [rbp-88], rax
+    mov [rbp-80], rax
     lea rax, [rel np_menu_open]
     push rax
     mov rax, 0
@@ -3301,7 +4747,7 @@ app_hl_notepad_click:
     pop rax
     mov [rax], cl
     xor rax, rax
-    mov rax, [rbp-88]
+    mov rax, [rbp-80]
     push rax
     mov rax, 1
     mov rcx, rax
@@ -3310,15 +4756,15 @@ app_hl_notepad_click:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else103
-    call app_hl_notepad_clear_buffer
-    jmp .endif104
-.else103:
-.endif104:
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif100
-.else99:
-.endif100:
+    jz .else189
+    FN_CALL app_hl_notepad_clear_buffer, 0
+    jmp .endif190
+.else189:
+.endif190:
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif186
+.else185:
+.endif186:
     lea rax, [rel np_menu_open]
     push rax
     mov rax, 0
@@ -3326,21 +4772,28 @@ app_hl_notepad_click:
     pop rax
     mov [rax], cl
     xor rax, rax
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif86
-.else85:
-.endif86:
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif174
+.else173:
+.endif174:
     mov rax, [rbp-24]
     push rax
-    mov rax, 20
+    mov rax, [rbp-40]
     mov rcx, rax
     pop rax
     cmp rax, rcx
     setl al
     movzx rax, al
     test rax, rax
-    jz .else105
+    jz .else191
     mov rax, [rbp-16]
+    push rax
+    mov rax, 2
+    mov rcx, rax
+    pop rax
+    sub rax, rcx
+    mov [rbp-88], rax
+    mov rax, [rbp-88]
     push rax
     mov rax, 48
     mov rcx, rax
@@ -3349,7 +4802,7 @@ app_hl_notepad_click:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else107
+    jz .else193
     lea rax, [rel np_menu_open]
     push rax
     mov rax, 1
@@ -3357,11 +4810,11 @@ app_hl_notepad_click:
     pop rax
     mov [rax], cl
     xor rax, rax
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif108
-.else107:
-.endif108:
-    mov rax, [rbp-16]
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif194
+.else193:
+.endif194:
+    mov rax, [rbp-88]
     push rax
     mov rax, 96
     mov rcx, rax
@@ -3370,7 +4823,7 @@ app_hl_notepad_click:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else109
+    jz .else195
     lea rax, [rel np_menu_open]
     push rax
     mov rax, 2
@@ -3378,14 +4831,14 @@ app_hl_notepad_click:
     pop rax
     mov [rax], cl
     xor rax, rax
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif110
-.else109:
-.endif110:
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif106
-.else105:
-.endif106:
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif196
+.else195:
+.endif196:
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif192
+.else191:
+.endif192:
     lea rax, [rel np_menu_open]
     push rax
     mov rax, 0
@@ -3395,7 +4848,7 @@ app_hl_notepad_click:
     xor rax, rax
     mov rax, [rbp-24]
     push rax
-    mov rax, 20
+    mov rax, [rbp-40]
     mov rcx, rax
     pop rax
     sub rax, rcx
@@ -3414,11 +4867,11 @@ app_hl_notepad_click:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else111
-    jmp .fn_end_82_app_hl_notepad_click
-    jmp .endif112
-.else111:
-.endif112:
+    jz .else197
+    jmp .fn_end_160_app_hl_notepad_click
+    jmp .endif198
+.else197:
+.endif198:
     mov rax, [rbp-96]
     push rax
     mov rax, 14
@@ -3447,7 +4900,7 @@ app_hl_notepad_click:
     setge al
     movzx rax, al
     test rax, rax
-    jz .else113
+    jz .else199
     mov rax, [rbp-120]
     push rax
     mov rax, 1
@@ -3455,9 +4908,9 @@ app_hl_notepad_click:
     pop rax
     sub rax, rcx
     mov [rbp-112], rax
-    jmp .endif114
-.else113:
-.endif114:
+    jmp .endif200
+.else199:
+.endif200:
     lea rax, [rel np_cursor_row]
     push rax
     mov rax, [rbp-112]
@@ -3481,12 +4934,12 @@ app_hl_notepad_click:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else115
+    jz .else201
     mov rax, 0
     mov [rbp-128], rax
-    jmp .endif116
-.else115:
-.endif116:
+    jmp .endif202
+.else201:
+.endif202:
     mov rax, [rbp-128]
     push rax
     mov rax, 8
@@ -3498,7 +4951,7 @@ app_hl_notepad_click:
     mov rax, [rbp-112]
     push rax
     pop rdi
-    call app_hl_notepad_len_ptr
+    FN_CALL app_hl_notepad_len_ptr, 1
     mov eax, [rax]
     mov [rbp-144], rax
     mov rax, [rbp-136]
@@ -3510,12 +4963,12 @@ app_hl_notepad_click:
     setg al
     movzx rax, al
     test rax, rax
-    jz .else117
+    jz .else203
     mov rax, [rbp-144]
     mov [rbp-136], rax
-    jmp .endif118
-.else117:
-.endif118:
+    jmp .endif204
+.else203:
+.endif204:
     lea rax, [rel np_cursor_col]
     push rax
     mov rax, [rbp-136]
@@ -3523,14 +4976,15 @@ app_hl_notepad_click:
     pop rax
     mov [rax], ecx
     xor rax, rax
-.fn_end_82_app_hl_notepad_click:
+.fn_end_160_app_hl_notepad_click:
+    FN_END app_hl_notepad_click
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_saveas_key
-app_hl_notepad_saveas_key:
+FN_BEGIN app_hl_notepad_saveas_key, 1, 0, FN_RET_SCALAR
+FN_ARG 0, k, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -3565,7 +5019,7 @@ app_hl_notepad_saveas_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else119
+    jz .else205
     lea rax, [rel np_save_dialog]
     push rax
     mov rax, 0
@@ -3573,10 +5027,10 @@ app_hl_notepad_saveas_key:
     pop rax
     mov [rax], cl
     xor rax, rax
-    jmp .fn_end_118_app_hl_notepad_saveas_key
-    jmp .endif120
-.else119:
-.endif120:
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif206
+.else205:
+.endif206:
     mov rax, [rbp-32]
     push rax
     mov rax, 13
@@ -3586,15 +5040,23 @@ app_hl_notepad_saveas_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else121
-    lea rax, [rel np_save_dialog]
+    jz .else207
+    FN_CALL app_hl_notepad_save_dialog_commit, 0
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif208
+.else207:
+.endif208:
+    mov rax, [rbp-32]
     push rax
-    mov rax, 0
+    mov rax, 9
     mov rcx, rax
     pop rax
-    mov [rax], cl
-    xor rax, rax
-    lea rax, [rel np_saveas_buf]
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else209
+    lea rax, [rel np_save_field]
     movzx rax, byte [rax]
     push rax
     mov rax, 0
@@ -3604,26 +5066,29 @@ app_hl_notepad_saveas_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else123
-    jmp .fn_end_118_app_hl_notepad_saveas_key
-    jmp .endif124
-.else123:
-.endif124:
-    lea rax, [rel np_saveas_buf]
+    jz .else211
+    lea rax, [rel np_save_field]
     push rax
-    lea rax, [rel np_saveas_83]
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif212
+.else211:
+.endif212:
+    lea rax, [rel np_save_field]
     push rax
-    pop rsi
-    pop rdi
-    call filename_to_83
-    lea rax, [rel np_saveas_83]
-    push rax
-    pop rdi
-    call app_hl_notepad_do_save_to
-    jmp .fn_end_118_app_hl_notepad_saveas_key
-    jmp .endif122
-.else121:
-.endif122:
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif210
+.else209:
+.endif210:
     mov rax, [rbp-32]
     push rax
     mov rax, 8
@@ -3633,8 +5098,19 @@ app_hl_notepad_saveas_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else125
-    lea rax, [rel np_saveas_cursor]
+    jz .else213
+    lea rax, [rel np_save_field]
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else215
+    lea rax, [rel np_saveloc_cursor]
     mov eax, [rax]
     mov [rbp-40], rax
     mov rax, [rbp-40]
@@ -3646,11 +5122,11 @@ app_hl_notepad_saveas_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else127
-    jmp .fn_end_118_app_hl_notepad_saveas_key
-    jmp .endif128
-.else127:
-.endif128:
+    jz .else217
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif218
+.else217:
+.endif218:
     mov rax, [rbp-40]
     push rax
     mov rax, 1
@@ -3658,7 +5134,7 @@ app_hl_notepad_saveas_key:
     pop rax
     sub rax, rcx
     mov [rbp-40], rax
-    lea rax, [rel np_saveas_buf]
+    lea rax, [rel np_saveloc_buf]
     push rax
     mov rax, [rbp-40]
     mov rcx, rax
@@ -3670,17 +5146,64 @@ app_hl_notepad_saveas_key:
     pop rax
     mov [rax], cl
     xor rax, rax
-    lea rax, [rel np_saveas_cursor]
+    lea rax, [rel np_saveloc_cursor]
     push rax
     mov rax, [rbp-40]
     mov rcx, rax
     pop rax
     mov [rax], ecx
     xor rax, rax
-    jmp .fn_end_118_app_hl_notepad_saveas_key
-    jmp .endif126
-.else125:
-.endif126:
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif216
+.else215:
+.endif216:
+    lea rax, [rel np_saveas_cursor]
+    mov eax, [rax]
+    mov [rbp-48], rax
+    mov rax, [rbp-48]
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else219
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif220
+.else219:
+.endif220:
+    mov rax, [rbp-48]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    sub rax, rcx
+    mov [rbp-48], rax
+    lea rax, [rel np_saveas_buf]
+    push rax
+    mov rax, [rbp-48]
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    lea rax, [rel np_saveas_cursor]
+    push rax
+    mov rax, [rbp-48]
+    mov rcx, rax
+    pop rax
+    mov [rax], ecx
+    xor rax, rax
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif214
+.else213:
+.endif214:
     mov rax, [rbp-32]
     push rax
     mov rax, 32
@@ -3690,11 +5213,11 @@ app_hl_notepad_saveas_key:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else129
-    jmp .fn_end_118_app_hl_notepad_saveas_key
-    jmp .endif130
-.else129:
-.endif130:
+    jz .else221
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif222
+.else221:
+.endif222:
     mov rax, [rbp-32]
     push rax
     mov rax, 126
@@ -3704,15 +5227,26 @@ app_hl_notepad_saveas_key:
     setg al
     movzx rax, al
     test rax, rax
-    jz .else131
-    jmp .fn_end_118_app_hl_notepad_saveas_key
-    jmp .endif132
-.else131:
-.endif132:
-    lea rax, [rel np_saveas_cursor]
+    jz .else223
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif224
+.else223:
+.endif224:
+    lea rax, [rel np_save_field]
+    movzx rax, byte [rax]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else225
+    lea rax, [rel np_saveloc_cursor]
     mov eax, [rax]
-    mov [rbp-48], rax
-    mov rax, [rbp-48]
+    mov [rbp-56], rax
+    mov rax, [rbp-56]
     push rax
     mov rax, 22
     mov rcx, rax
@@ -3721,14 +5255,76 @@ app_hl_notepad_saveas_key:
     setge al
     movzx rax, al
     test rax, rax
-    jz .else133
-    jmp .fn_end_118_app_hl_notepad_saveas_key
-    jmp .endif134
-.else133:
-.endif134:
+    jz .else227
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif228
+.else227:
+.endif228:
+    lea rax, [rel np_saveloc_buf]
+    push rax
+    mov rax, [rbp-56]
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, [rbp-32]
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    lea rax, [rel np_saveloc_buf]
+    push rax
+    mov rax, [rbp-56]
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    push rax
+    mov rax, 0
+    mov rcx, rax
+    pop rax
+    mov [rax], cl
+    xor rax, rax
+    lea rax, [rel np_saveloc_cursor]
+    push rax
+    mov rax, [rbp-56]
+    push rax
+    mov rax, 1
+    mov rcx, rax
+    pop rax
+    add rax, rcx
+    mov rcx, rax
+    pop rax
+    mov [rax], ecx
+    xor rax, rax
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif226
+.else225:
+.endif226:
+    lea rax, [rel np_saveas_cursor]
+    mov eax, [rax]
+    mov [rbp-64], rax
+    mov rax, [rbp-64]
+    push rax
+    mov rax, 22
+    mov rcx, rax
+    pop rax
+    cmp rax, rcx
+    setge al
+    movzx rax, al
+    test rax, rax
+    jz .else229
+    jmp .fn_end_204_app_hl_notepad_saveas_key
+    jmp .endif230
+.else229:
+.endif230:
     lea rax, [rel np_saveas_buf]
     push rax
-    mov rax, [rbp-48]
+    mov rax, [rbp-64]
     mov rcx, rax
     pop rax
     add rax, rcx
@@ -3740,7 +5336,7 @@ app_hl_notepad_saveas_key:
     xor rax, rax
     lea rax, [rel np_saveas_buf]
     push rax
-    mov rax, [rbp-48]
+    mov rax, [rbp-64]
     mov rcx, rax
     pop rax
     add rax, rcx
@@ -3757,7 +5353,7 @@ app_hl_notepad_saveas_key:
     xor rax, rax
     lea rax, [rel np_saveas_cursor]
     push rax
-    mov rax, [rbp-48]
+    mov rax, [rbp-64]
     push rax
     mov rax, 1
     mov rcx, rax
@@ -3767,14 +5363,16 @@ app_hl_notepad_saveas_key:
     pop rax
     mov [rax], ecx
     xor rax, rax
-.fn_end_118_app_hl_notepad_saveas_key:
+.fn_end_204_app_hl_notepad_saveas_key:
+    FN_END app_hl_notepad_saveas_key
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
-global app_hl_notepad_key
-app_hl_notepad_key:
+FN_BEGIN app_hl_notepad_key, 2, 0, FN_RET_SCALAR
+FN_ARG 0, win, FN_KIND_SCALAR
+FN_ARG 1, k, FN_KIND_SCALAR
     push rbp
     mov rbp, rsp
     sub rsp, 512
@@ -3792,15 +5390,15 @@ app_hl_notepad_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else135
+    jz .else231
     mov rax, [rbp-16]
     push rax
     pop rdi
-    call app_hl_notepad_saveas_key
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif136
-.else135:
-.endif136:
+    FN_CALL app_hl_notepad_saveas_key, 1
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif232
+.else231:
+.endif232:
     lea rax, [rel np_menu_open]
     push rax
     mov rax, 0
@@ -3836,12 +5434,12 @@ app_hl_notepad_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else137
-    call app_hl_notepad_arrow_up
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif138
-.else137:
-.endif138:
+    jz .else233
+    FN_CALL app_hl_notepad_arrow_up, 0
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif234
+.else233:
+.endif234:
     mov rax, [rbp-32]
     push rax
     mov rax, 208
@@ -3851,12 +5449,12 @@ app_hl_notepad_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else139
-    call app_hl_notepad_arrow_down
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif140
-.else139:
-.endif140:
+    jz .else235
+    FN_CALL app_hl_notepad_arrow_down, 0
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif236
+.else235:
+.endif236:
     mov rax, [rbp-32]
     push rax
     mov rax, 203
@@ -3866,12 +5464,12 @@ app_hl_notepad_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else141
-    call app_hl_notepad_arrow_left
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif142
-.else141:
-.endif142:
+    jz .else237
+    FN_CALL app_hl_notepad_arrow_left, 0
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif238
+.else237:
+.endif238:
     mov rax, [rbp-32]
     push rax
     mov rax, 205
@@ -3881,12 +5479,12 @@ app_hl_notepad_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else143
-    call app_hl_notepad_arrow_right
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif144
-.else143:
-.endif144:
+    jz .else239
+    FN_CALL app_hl_notepad_arrow_right, 0
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif240
+.else239:
+.endif240:
     mov rax, [rbp-40]
     push rax
     mov rax, 0
@@ -3896,11 +5494,11 @@ app_hl_notepad_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else145
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif146
-.else145:
-.endif146:
+    jz .else241
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif242
+.else241:
+.endif242:
     mov rax, [rbp-40]
     push rax
     mov rax, 8
@@ -3910,12 +5508,12 @@ app_hl_notepad_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else147
-    call app_hl_notepad_do_backspace
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif148
-.else147:
-.endif148:
+    jz .else243
+    FN_CALL app_hl_notepad_do_backspace, 0
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif244
+.else243:
+.endif244:
     mov rax, [rbp-40]
     push rax
     mov rax, 13
@@ -3925,12 +5523,12 @@ app_hl_notepad_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else149
-    call app_hl_notepad_do_enter
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif150
-.else149:
-.endif150:
+    jz .else245
+    FN_CALL app_hl_notepad_do_enter, 0
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif246
+.else245:
+.endif246:
     mov rax, [rbp-40]
     push rax
     mov rax, 9
@@ -3940,12 +5538,12 @@ app_hl_notepad_key:
     sete al
     movzx rax, al
     test rax, rax
-    jz .else151
-    call app_hl_notepad_do_tab
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif152
-.else151:
-.endif152:
+    jz .else247
+    FN_CALL app_hl_notepad_do_tab, 0
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif248
+.else247:
+.endif248:
     mov rax, [rbp-40]
     push rax
     mov rax, 32
@@ -3955,11 +5553,11 @@ app_hl_notepad_key:
     setl al
     movzx rax, al
     test rax, rax
-    jz .else153
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif154
-.else153:
-.endif154:
+    jz .else249
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif250
+.else249:
+.endif250:
     mov rax, [rbp-40]
     push rax
     mov rax, 126
@@ -3969,18 +5567,32 @@ app_hl_notepad_key:
     setg al
     movzx rax, al
     test rax, rax
-    jz .else155
-    jmp .fn_end_134_app_hl_notepad_key
-    jmp .endif156
-.else155:
-.endif156:
+    jz .else251
+    jmp .fn_end_230_app_hl_notepad_key
+    jmp .endif252
+.else251:
+.endif252:
     mov rax, [rbp-40]
     push rax
     pop rdi
-    call app_hl_notepad_insert_char
-.fn_end_134_app_hl_notepad_key:
+    FN_CALL app_hl_notepad_insert_char, 1
+.fn_end_230_app_hl_notepad_key:
+    FN_END app_hl_notepad_key
     pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
     ret
+app_hl_notepad_str0: db "File", 0
+app_hl_notepad_str1: db "Edit", 0
+app_hl_notepad_str2: db "New", 0
+app_hl_notepad_str3: db "Save", 0
+app_hl_notepad_str4: db "Close", 0
+app_hl_notepad_str5: db "Select All", 0
+app_hl_notepad_str6: db "Clear All", 0
+app_hl_notepad_str7: db "Save As", 0
+app_hl_notepad_str8: db "Name:", 0
+app_hl_notepad_str9: db "Location:", 0
+app_hl_notepad_str10: db "Tab=Field  Enter=Save  Esc=Cancel", 0
+app_hl_notepad_str11: db "Saved!", 0
+app_hl_notepad_str12: db "Location not found", 0

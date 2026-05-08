@@ -126,6 +126,7 @@ global cursor_draw
 cursor_draw:
     push rax
     push rbx
+    push r14
     push rcx
     push rdx
     push r8
@@ -424,6 +425,7 @@ cursor_draw:
     pop r8
     pop rdx
     pop rcx
+    pop r14
     pop rbx
     pop rax
     ret

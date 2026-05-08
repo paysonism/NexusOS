@@ -1,0 +1,2935 @@
+[
+  {
+    "fn_id": 4447979231326220744,
+    "name": "apic_eoi",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/arch/apic.asm",
+    "line": 73,
+    "args": []
+  },
+  {
+    "fn_id": 18118861412588808567,
+    "name": "apic_init",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/arch/apic.asm",
+    "line": 25,
+    "args": []
+  },
+  {
+    "fn_id": 18344132635635714301,
+    "name": "app_blob_init",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 69,
+    "args": []
+  },
+  {
+    "fn_id": 1933327184716918404,
+    "name": "app_hl_explorer_clamp_selection",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 959,
+    "args": []
+  },
+  {
+    "fn_id": 13514108593013624243,
+    "name": "app_hl_explorer_clear_text",
+    "argc": "2",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 1044,
+    "args": [
+      {
+        "index": "0",
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "cap",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 11232320025172059306,
+    "name": "app_hl_explorer_click",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 2319,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 15997830393195670297,
+    "name": "app_hl_explorer_current_is_root",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 888,
+    "args": []
+  },
+  {
+    "fn_id": 2723386925088673588,
+    "name": "app_hl_explorer_draw",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 1531,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 2505396530682479463,
+    "name": "app_hl_explorer_draw_overlay",
+    "argc": "6",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 1323,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "label",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "cursor",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "5",
+        "name": "xoff",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 3244417969105492770,
+    "name": "app_hl_explorer_edit_key",
+    "argc": "4",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 2533,
+    "args": [
+      {
+        "index": "0",
+        "name": "active",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "cursor_ptr",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "k",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 16525070286381883192,
+    "name": "app_hl_explorer_enter_selected",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 1242,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 7804703657091153904,
+    "name": "app_hl_explorer_file_count",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 872,
+    "args": []
+  },
+  {
+    "fn_id": 2530487951945978657,
+    "name": "app_hl_explorer_key",
+    "argc": "2",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 2745,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "k",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 14769020358533796856,
+    "name": "app_hl_explorer_selected_entry",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 852,
+    "args": []
+  },
+  {
+    "fn_id": 9154991413367191868,
+    "name": "app_hl_explorer_start_new_folder",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 1208,
+    "args": []
+  },
+  {
+    "fn_id": 1067354283236619949,
+    "name": "app_hl_explorer_start_rename",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 1095,
+    "args": []
+  },
+  {
+    "fn_id": 3460408206162537252,
+    "name": "app_hl_explorer_ui_caret",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 638,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 10767664072840763149,
+    "name": "app_hl_explorer_ui_caret_blink",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 692,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 16271556327853713228,
+    "name": "app_hl_explorer_ui_dropdown",
+    "argc": "5",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 505,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "item_count",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 17742335423515518946,
+    "name": "app_hl_explorer_ui_dropdown_item",
+    "argc": "5",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 576,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "index",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 16180041857865972540,
+    "name": "app_hl_explorer_ui_fill_client_below",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 333,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "top",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 1456148799684409487,
+    "name": "app_hl_explorer_ui_input",
+    "argc": "6",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 749,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "5",
+        "name": "cursor_col",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 3333426205119896508,
+    "name": "app_hl_explorer_ui_menu_bar",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 420,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 5644355637698186715,
+    "name": "app_hl_explorer_ui_menu_label",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 467,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 1363268055008982987,
+    "name": "app_hl_explorer_ui_rect",
+    "argc": "5",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 121,
+    "args": [
+      {
+        "index": "0",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 16001420201903983017,
+    "name": "app_hl_explorer_ui_rect_at",
+    "argc": "6",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 199,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "5",
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 10286207390820592458,
+    "name": "app_hl_explorer_ui_text",
+    "argc": "5",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 160,
+    "args": [
+      {
+        "index": "0",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "fg",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "bg",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 3487152730440606746,
+    "name": "app_hl_explorer_ui_text_at",
+    "argc": "6",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 266,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "fg",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "5",
+        "name": "bg",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 4565962854196433705,
+    "name": "app_hl_explorer_ui_ticks",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 676,
+    "args": []
+  },
+  {
+    "fn_id": 6086256435955405394,
+    "name": "app_hl_explorer_ui_win_h",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 98,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 6086277326676341403,
+    "name": "app_hl_explorer_ui_win_w",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 75,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 6086274028141456770,
+    "name": "app_hl_explorer_ui_win_x",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 29,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 6086275127653084981,
+    "name": "app_hl_explorer_ui_win_y",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/explorer.asm",
+    "line": 52,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 4298786556264898918,
+    "name": "app_hl_hello_hello_boot",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/hello.asm",
+    "line": 99,
+    "args": []
+  },
+  {
+    "fn_id": 3500880947688445826,
+    "name": "app_hl_hello_hello_click",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/hello.asm",
+    "line": 40,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 13055044479077350828,
+    "name": "app_hl_hello_hello_draw",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/hello.asm",
+    "line": 3,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 17837886377860219465,
+    "name": "app_hl_hello_hello_key",
+    "argc": "2",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/hello.asm",
+    "line": 64,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "k",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 18194415002739756982,
+    "name": "app_hl_notepad_arrow_down",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 2363,
+    "args": []
+  },
+  {
+    "fn_id": 5929391096560857083,
+    "name": "app_hl_notepad_arrow_left",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 2436,
+    "args": []
+  },
+  {
+    "fn_id": 4086565859434955076,
+    "name": "app_hl_notepad_arrow_right",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 2521,
+    "args": []
+  },
+  {
+    "fn_id": 4322387715801447939,
+    "name": "app_hl_notepad_arrow_up",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 2291,
+    "args": []
+  },
+  {
+    "fn_id": 11863667879173035046,
+    "name": "app_hl_notepad_build_save_content",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 2609,
+    "args": []
+  },
+  {
+    "fn_id": 9804412654736541436,
+    "name": "app_hl_notepad_clear_buffer",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 905,
+    "args": []
+  },
+  {
+    "fn_id": 13554568731191114236,
+    "name": "app_hl_notepad_click",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 4454,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 7146748348020687317,
+    "name": "app_hl_notepad_do_backspace",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 1379,
+    "args": []
+  },
+  {
+    "fn_id": 6962904097572159696,
+    "name": "app_hl_notepad_do_enter",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 1955,
+    "args": []
+  },
+  {
+    "fn_id": 823499973155902141,
+    "name": "app_hl_notepad_do_save_to",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 2772,
+    "args": [
+      {
+        "index": "0",
+        "name": "name83",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 17042199760548946933,
+    "name": "app_hl_notepad_do_tab",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 2252,
+    "args": []
+  },
+  {
+    "fn_id": 14037181736985620070,
+    "name": "app_hl_notepad_draw",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 3268,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 10162080056492723427,
+    "name": "app_hl_notepad_ensure_visible",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 1024,
+    "args": []
+  },
+  {
+    "fn_id": 4140246426034978977,
+    "name": "app_hl_notepad_entry_name_eq",
+    "argc": "2",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 2881,
+    "args": [
+      {
+        "index": "0",
+        "name": "ent",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "name83",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 4807856908580917897,
+    "name": "app_hl_notepad_find_root_dir_cluster",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 2949,
+    "args": [
+      {
+        "index": "0",
+        "name": "name83",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 16150497791739691358,
+    "name": "app_hl_notepad_insert_char",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 1094,
+    "args": [
+      {
+        "index": "0",
+        "name": "ch",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 14645921537755305955,
+    "name": "app_hl_notepad_key",
+    "argc": "2",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 5373,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "k",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 11360705279882547718,
+    "name": "app_hl_notepad_len_ptr",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 878,
+    "args": [
+      {
+        "index": "0",
+        "name": "row",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 14217603134161828679,
+    "name": "app_hl_notepad_line_ptr",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 851,
+    "args": [
+      {
+        "index": "0",
+        "name": "row",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 12145940301370292390,
+    "name": "app_hl_notepad_save_dialog_commit",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 3133,
+    "args": []
+  },
+  {
+    "fn_id": 2972869115642252894,
+    "name": "app_hl_notepad_save_dialog_reset",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 3066,
+    "args": []
+  },
+  {
+    "fn_id": 16044316824327325737,
+    "name": "app_hl_notepad_saveas_key",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 4986,
+    "args": [
+      {
+        "index": "0",
+        "name": "k",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 12625717571239926457,
+    "name": "app_hl_notepad_str_is_root_or_empty",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 2813,
+    "args": [
+      {
+        "index": "0",
+        "name": "s",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 10156472671712554162,
+    "name": "app_hl_notepad_ui_caret",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 637,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 17127532638913169091,
+    "name": "app_hl_notepad_ui_caret_blink",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 691,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 3020360821008836962,
+    "name": "app_hl_notepad_ui_dropdown",
+    "argc": "5",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 504,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "item_count",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 7019603754760513248,
+    "name": "app_hl_notepad_ui_dropdown_item",
+    "argc": "5",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 575,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "index",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 13221747498066718370,
+    "name": "app_hl_notepad_ui_fill_client_below",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 332,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "top",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 10643887459030118737,
+    "name": "app_hl_notepad_ui_input",
+    "argc": "6",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 748,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "5",
+        "name": "cursor_col",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 6443615470686678318,
+    "name": "app_hl_notepad_ui_menu_bar",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 419,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 8010641572493312009,
+    "name": "app_hl_notepad_ui_menu_label",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 466,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 4478101822949638757,
+    "name": "app_hl_notepad_ui_rect",
+    "argc": "5",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 120,
+    "args": [
+      {
+        "index": "0",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 2905285668807335019,
+    "name": "app_hl_notepad_ui_rect_at",
+    "argc": "6",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 198,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "5",
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 7289832534785233556,
+    "name": "app_hl_notepad_ui_text",
+    "argc": "5",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 159,
+    "args": [
+      {
+        "index": "0",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "fg",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "bg",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 5677733932448319244,
+    "name": "app_hl_notepad_ui_text_at",
+    "argc": "6",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 265,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "1",
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "2",
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "3",
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "4",
+        "name": "fg",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": "5",
+        "name": "bg",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 2860638551679575131,
+    "name": "app_hl_notepad_ui_ticks",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 675,
+    "args": []
+  },
+  {
+    "fn_id": 15590658980942831668,
+    "name": "app_hl_notepad_ui_win_h",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 97,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 15590631493152126393,
+    "name": "app_hl_notepad_ui_win_w",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 74,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 15590641388756780292,
+    "name": "app_hl_notepad_ui_win_x",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 28,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 15590642488268408503,
+    "name": "app_hl_notepad_ui_win_y",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "build/nxh/notepad.asm",
+    "line": 51,
+    "args": [
+      {
+        "index": "0",
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "fn_id": 13432921615487167331,
+    "name": "call_app_l3",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 252,
+    "args": []
+  },
+  {
+    "fn_id": 511232989076095690,
+    "name": "call_app_l3_return",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 378,
+    "args": []
+  },
+  {
+    "fn_id": 17792674034596253960,
+    "name": "debug_print",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/main.asm",
+    "line": 147,
+    "args": []
+  },
+  {
+    "fn_id": 15254853609224670319,
+    "name": "display_clear",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 797,
+    "args": []
+  },
+  {
+    "fn_id": 9261248097926626429,
+    "name": "display_flip",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 606,
+    "args": []
+  },
+  {
+    "fn_id": 1278642949888936788,
+    "name": "display_flip_rect",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 672,
+    "args": []
+  },
+  {
+    "fn_id": 16390369296735918692,
+    "name": "display_init",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 19,
+    "args": []
+  },
+  {
+    "fn_id": 8064512207893025732,
+    "name": "display_set_mode",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 955,
+    "args": []
+  },
+  {
+    "fn_id": 9229150239438695312,
+    "name": "draw_char",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 206,
+    "args": []
+  },
+  {
+    "fn_id": 11729132775550007062,
+    "name": "draw_hline",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 491,
+    "args": []
+  },
+  {
+    "fn_id": 16275706660612031123,
+    "name": "draw_rect_outline",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 548,
+    "args": []
+  },
+  {
+    "fn_id": 14407155665663026085,
+    "name": "draw_string",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 441,
+    "args": []
+  },
+  {
+    "fn_id": 5086746550581848284,
+    "name": "draw_vline",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 502,
+    "args": []
+  },
+  {
+    "fn_id": 18143128676516764166,
+    "name": "enter_usermode",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 117,
+    "args": []
+  },
+  {
+    "fn_id": 6441573172280782392,
+    "name": "fat16_change_dir",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 1230,
+    "args": []
+  },
+  {
+    "fn_id": 611346848891635827,
+    "name": "fat16_debug_dump_root",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 1390,
+    "args": []
+  },
+  {
+    "fn_id": 18199459295302940476,
+    "name": "fat16_delete_entry",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 870,
+    "args": []
+  },
+  {
+    "fn_id": 12481777222986924982,
+    "name": "fat16_file_count",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 268,
+    "args": []
+  },
+  {
+    "fn_id": 16579496333292413508,
+    "name": "fat16_flush_current_dir",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 802,
+    "args": []
+  },
+  {
+    "fn_id": 9889372251498364255,
+    "name": "fat16_flush_fats",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 760,
+    "args": []
+  },
+  {
+    "fn_id": 16888321784595423491,
+    "name": "fat16_get_entry",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 277,
+    "args": []
+  },
+  {
+    "fn_id": 10237847289831130909,
+    "name": "fat16_get_file_size",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 1353,
+    "args": []
+  },
+  {
+    "fn_id": 18352418255950081678,
+    "name": "fat16_init",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 80,
+    "args": []
+  },
+  {
+    "fn_id": 8705624566560290543,
+    "name": "fat16_mkdir",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 1000,
+    "args": []
+  },
+  {
+    "fn_id": 12351037588042894619,
+    "name": "fat16_read_file",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 329,
+    "args": []
+  },
+  {
+    "fn_id": 4507154714777992397,
+    "name": "fat16_rename_entry",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 931,
+    "args": []
+  },
+  {
+    "fn_id": 7933246389035461944,
+    "name": "fat16_sync_root",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 1361,
+    "args": []
+  },
+  {
+    "fn_id": 13863003621042001354,
+    "name": "fat16_write_file",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/fs/fat16.asm",
+    "line": 455,
+    "args": []
+  },
+  {
+    "fn_id": 7166783774968586679,
+    "name": "fill_rect",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 97,
+    "args": []
+  },
+  {
+    "fn_id": 10608205538152243536,
+    "name": "gesture_update",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/hid_parser.asm",
+    "line": 954,
+    "args": []
+  },
+  {
+    "fn_id": 11813870780197638291,
+    "name": "hid_extract_field",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/hid_parser.asm",
+    "line": 505,
+    "args": []
+  },
+  {
+    "fn_id": 11652678933749885309,
+    "name": "hid_extract_field_checked",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/hid_parser.asm",
+    "line": 571,
+    "args": []
+  },
+  {
+    "fn_id": 13668486010899470668,
+    "name": "hid_extract_field_signed",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/hid_parser.asm",
+    "line": 596,
+    "args": []
+  },
+  {
+    "fn_id": 8852565921858134938,
+    "name": "hid_extract_field_signed_checked",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/hid_parser.asm",
+    "line": 617,
+    "args": []
+  },
+  {
+    "fn_id": 12470254971783813587,
+    "name": "hid_parse_report_desc",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/hid_parser.asm",
+    "line": 67,
+    "args": []
+  },
+  {
+    "fn_id": 9839107087920446688,
+    "name": "hid_process_touchpad_report",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/hid_parser.asm",
+    "line": 647,
+    "args": []
+  },
+  {
+    "fn_id": 13532382243892881814,
+    "name": "irq_0",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 203,
+    "args": []
+  },
+  {
+    "fn_id": 13532383343404510025,
+    "name": "irq_1",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 204,
+    "args": []
+  },
+  {
+    "fn_id": 2790192874390232731,
+    "name": "irq_10",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 213,
+    "args": []
+  },
+  {
+    "fn_id": 2790191774878604520,
+    "name": "irq_11",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 214,
+    "args": []
+  },
+  {
+    "fn_id": 2790195073413489153,
+    "name": "irq_12",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 215,
+    "args": []
+  },
+  {
+    "fn_id": 2790193973901860942,
+    "name": "irq_13",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 216,
+    "args": []
+  },
+  {
+    "fn_id": 2790197272436745575,
+    "name": "irq_14",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 217,
+    "args": []
+  },
+  {
+    "fn_id": 2790196172925117364,
+    "name": "irq_15",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 218,
+    "args": []
+  },
+  {
+    "fn_id": 2790184078297207043,
+    "name": "irq_18",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 219,
+    "args": []
+  },
+  {
+    "fn_id": 13532380044869625392,
+    "name": "irq_2",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 205,
+    "args": []
+  },
+  {
+    "fn_id": 13532381144381253603,
+    "name": "irq_3",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 206,
+    "args": []
+  },
+  {
+    "fn_id": 13532386641939394658,
+    "name": "irq_4",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 207,
+    "args": []
+  },
+  {
+    "fn_id": 13532387741451022869,
+    "name": "irq_5",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 208,
+    "args": []
+  },
+  {
+    "fn_id": 13532384442916138236,
+    "name": "irq_6",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 209,
+    "args": []
+  },
+  {
+    "fn_id": 13532385542427766447,
+    "name": "irq_7",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 210,
+    "args": []
+  },
+  {
+    "fn_id": 13532391039985907502,
+    "name": "irq_8",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 211,
+    "args": []
+  },
+  {
+    "fn_id": 13532392139497535713,
+    "name": "irq_9",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 212,
+    "args": []
+  },
+  {
+    "fn_id": 15143150204183476408,
+    "name": "irq_common_stub",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/isr.asm",
+    "line": 223,
+    "args": []
+  },
+  {
+    "fn_id": 2543096704258648442,
+    "name": "isr_0",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 36,
+    "args": []
+  },
+  {
+    "fn_id": 2543097803770276653,
+    "name": "isr_1",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 37,
+    "args": []
+  },
+  {
+    "fn_id": 14262871102127194695,
+    "name": "isr_10",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 46,
+    "args": []
+  },
+  {
+    "fn_id": 14262870002615566484,
+    "name": "isr_11",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 47,
+    "args": []
+  },
+  {
+    "fn_id": 14262873301150451117,
+    "name": "isr_12",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 48,
+    "args": []
+  },
+  {
+    "fn_id": 14262872201638822906,
+    "name": "isr_13",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 49,
+    "args": []
+  },
+  {
+    "fn_id": 14262866704080681851,
+    "name": "isr_14",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 50,
+    "args": []
+  },
+  {
+    "fn_id": 14262865604569053640,
+    "name": "isr_15",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 51,
+    "args": []
+  },
+  {
+    "fn_id": 14262868903103938273,
+    "name": "isr_16",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 52,
+    "args": []
+  },
+  {
+    "fn_id": 14262867803592310062,
+    "name": "isr_17",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 53,
+    "args": []
+  },
+  {
+    "fn_id": 14262862306034169007,
+    "name": "isr_18",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 54,
+    "args": []
+  },
+  {
+    "fn_id": 14262861206522540796,
+    "name": "isr_19",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 55,
+    "args": []
+  },
+  {
+    "fn_id": 2543094505235392020,
+    "name": "isr_2",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 38,
+    "args": []
+  },
+  {
+    "fn_id": 14260036561150234412,
+    "name": "isr_20",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 56,
+    "args": []
+  },
+  {
+    "fn_id": 14260037660661862623,
+    "name": "isr_21",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 57,
+    "args": []
+  },
+  {
+    "fn_id": 14260038760173490834,
+    "name": "isr_22",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 58,
+    "args": []
+  },
+  {
+    "fn_id": 14260039859685119045,
+    "name": "isr_23",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 59,
+    "args": []
+  },
+  {
+    "fn_id": 14260032163103721568,
+    "name": "isr_24",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 60,
+    "args": []
+  },
+  {
+    "fn_id": 14260033262615349779,
+    "name": "isr_25",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 61,
+    "args": []
+  },
+  {
+    "fn_id": 14260034362126977990,
+    "name": "isr_26",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 62,
+    "args": []
+  },
+  {
+    "fn_id": 14260035461638606201,
+    "name": "isr_27",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 63,
+    "args": []
+  },
+  {
+    "fn_id": 14260045357243260100,
+    "name": "isr_28",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 64,
+    "args": []
+  },
+  {
+    "fn_id": 14260046456754888311,
+    "name": "isr_29",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 65,
+    "args": []
+  },
+  {
+    "fn_id": 2543095604747020231,
+    "name": "isr_3",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 39,
+    "args": []
+  },
+  {
+    "fn_id": 14261028320638691509,
+    "name": "isr_30",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 66,
+    "args": []
+  },
+  {
+    "fn_id": 14261027221127063298,
+    "name": "isr_31",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 67,
+    "args": []
+  },
+  {
+    "fn_id": 2543092306212135598,
+    "name": "isr_4",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 40,
+    "args": []
+  },
+  {
+    "fn_id": 2543093405723763809,
+    "name": "isr_5",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 41,
+    "args": []
+  },
+  {
+    "fn_id": 2543090107188879176,
+    "name": "isr_6",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 42,
+    "args": []
+  },
+  {
+    "fn_id": 2543091206700507387,
+    "name": "isr_7",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 43,
+    "args": []
+  },
+  {
+    "fn_id": 2543087908165622754,
+    "name": "isr_8",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 44,
+    "args": []
+  },
+  {
+    "fn_id": 2543089007677250965,
+    "name": "isr_9",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/core/isr.asm",
+    "line": 45,
+    "args": []
+  },
+  {
+    "fn_id": 6224960049782706572,
+    "name": "isr_common_stub",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/isr.asm",
+    "line": 71,
+    "args": []
+  },
+  {
+    "fn_id": 4635714403442283747,
+    "name": "kmain",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/main.asm",
+    "line": 205,
+    "args": []
+  },
+  {
+    "fn_id": 13878567539815072299,
+    "name": "l3_copy_app_blob_to_slot",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 183,
+    "args": []
+  },
+  {
+    "fn_id": 3565155290908137837,
+    "name": "l3_install_app_done_trampoline",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 176,
+    "args": []
+  },
+  {
+    "fn_id": 12794555910480171805,
+    "name": "l3_prepare_test_callback",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 103,
+    "args": []
+  },
+  {
+    "fn_id": 5220644885134541078,
+    "name": "l3_runtime_ptr",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 138,
+    "args": []
+  },
+  {
+    "fn_id": 14984904249425606743,
+    "name": "l3_slot_base",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 146,
+    "args": []
+  },
+  {
+    "fn_id": 13973713620715117755,
+    "name": "l3_slot_resolve_app_ptr",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 211,
+    "args": []
+  },
+  {
+    "fn_id": 5791321673451998973,
+    "name": "l3_syscall_stack_top",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 167,
+    "args": []
+  },
+  {
+    "fn_id": 13998502940817280127,
+    "name": "l3_translate_target",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 233,
+    "args": []
+  },
+  {
+    "fn_id": 15371654770163899829,
+    "name": "l3_user_stack_top",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 153,
+    "args": []
+  },
+  {
+    "fn_id": 14522556947961000340,
+    "name": "memory_get_free",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/memory.asm",
+    "line": 228,
+    "args": []
+  },
+  {
+    "fn_id": 17547717101923617053,
+    "name": "memory_init",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/memory.asm",
+    "line": 13,
+    "args": []
+  },
+  {
+    "fn_id": 3245766081037642352,
+    "name": "page_alloc",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/memory.asm",
+    "line": 112,
+    "args": []
+  },
+  {
+    "fn_id": 12226930206768806705,
+    "name": "page_free",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/memory.asm",
+    "line": 169,
+    "args": []
+  },
+  {
+    "fn_id": 17303361423764403320,
+    "name": "pixel_set",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 68,
+    "args": []
+  },
+  {
+    "fn_id": 5860480954336608173,
+    "name": "proc_is_active",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/process.asm",
+    "line": 360,
+    "args": []
+  },
+  {
+    "fn_id": 10574794635320677415,
+    "name": "process_create",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/process.asm",
+    "line": 70,
+    "args": []
+  },
+  {
+    "fn_id": 16967747222543379806,
+    "name": "process_keyboard",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/main.asm",
+    "line": 543,
+    "args": []
+  },
+  {
+    "fn_id": 12554277616602368524,
+    "name": "process_kill_window",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/process.asm",
+    "line": 373,
+    "args": []
+  },
+  {
+    "fn_id": 7097643575579188154,
+    "name": "process_mouse",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/main.asm",
+    "line": 460,
+    "args": []
+  },
+  {
+    "fn_id": 11645420320429340155,
+    "name": "process_restore_context",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/process.asm",
+    "line": 226,
+    "args": []
+  },
+  {
+    "fn_id": 1663911947223718070,
+    "name": "process_save_context",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/process.asm",
+    "line": 163,
+    "args": []
+  },
+  {
+    "fn_id": 7089680132447029630,
+    "name": "process_schedule",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/process.asm",
+    "line": 300,
+    "args": []
+  },
+  {
+    "fn_id": 14601121467915518745,
+    "name": "scheduler_init",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/process.asm",
+    "line": 35,
+    "args": []
+  },
+  {
+    "fn_id": 13688584767168521877,
+    "name": "serial_poll_command",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/core/main.asm",
+    "line": 274,
+    "args": []
+  },
+  {
+    "fn_id": 37156649021262767,
+    "name": "smp_ap_startup",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/arch/apic.asm",
+    "line": 80,
+    "args": []
+  },
+  {
+    "fn_id": 10181685369878376873,
+    "name": "syscall_entry",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/syscall.asm",
+    "line": 127,
+    "args": []
+  },
+  {
+    "fn_id": 4779521474346330073,
+    "name": "syscall_init",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/proc/syscall.asm",
+    "line": 83,
+    "args": []
+  },
+  {
+    "fn_id": 10753781018685631910,
+    "name": "tb_draw",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/gui/taskbar.asm",
+    "line": 86,
+    "args": []
+  },
+  {
+    "fn_id": 10441607621783887968,
+    "name": "tb_draw_submenu",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/gui/taskbar.asm",
+    "line": 779,
+    "args": []
+  },
+  {
+    "fn_id": 11869216557533467121,
+    "name": "tb_handle_click",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/gui/taskbar.asm",
+    "line": 518,
+    "args": []
+  },
+  {
+    "fn_id": 5295118213336920745,
+    "name": "tb_handle_rclick",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/gui/taskbar.asm",
+    "line": 674,
+    "args": []
+  },
+  {
+    "fn_id": 9992265501193340411,
+    "name": "tb_handle_submenu_click",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/gui/taskbar.asm",
+    "line": 838,
+    "args": []
+  },
+  {
+    "fn_id": 3655667879657034092,
+    "name": "test_syscall_proc",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/proc/syscall.asm",
+    "line": 957,
+    "args": []
+  },
+  {
+    "fn_id": 17179040285583896859,
+    "name": "test_usermode_proc",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/proc/usermode.asm",
+    "line": 419,
+    "args": []
+  },
+  {
+    "fn_id": 16500950231060386894,
+    "name": "usb_hid_init",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/usb_hid.asm",
+    "line": 69,
+    "args": []
+  },
+  {
+    "fn_id": 6095874909068232399,
+    "name": "usb_hid_init_same_ctrl",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/usb_hid.asm",
+    "line": 59,
+    "args": []
+  },
+  {
+    "fn_id": 17081671478286897703,
+    "name": "usb_hid_init_slot2",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/usb_hid.asm",
+    "line": 848,
+    "args": []
+  },
+  {
+    "fn_id": 16810660200208167191,
+    "name": "usb_poll_mouse",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/usb_hid.asm",
+    "line": 451,
+    "args": []
+  },
+  {
+    "fn_id": 14880248771361262302,
+    "name": "wait_vsync",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/drivers/display.asm",
+    "line": 868,
+    "args": []
+  },
+  {
+    "fn_id": 18037254203425507555,
+    "name": "wm_close_window",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/gui/window.asm",
+    "line": 198,
+    "args": []
+  },
+  {
+    "fn_id": 3493951330978142459,
+    "name": "wm_create_window",
+    "argc": "5",
+    "kindmask": "0",
+    "retkind": "FN_RET_HANDLE",
+    "source": "src/kernel/gui/window.asm",
+    "line": 55,
+    "args": []
+  },
+  {
+    "fn_id": 4362351682364185065,
+    "name": "wm_create_window_ex",
+    "argc": "6",
+    "kindmask": "0",
+    "retkind": "FN_RET_HANDLE",
+    "source": "src/kernel/gui/window.asm",
+    "line": 60,
+    "args": []
+  },
+  {
+    "fn_id": 8038527953422336423,
+    "name": "wm_draw_desktop",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/gui/window.asm",
+    "line": 271,
+    "args": []
+  },
+  {
+    "fn_id": 15994729418265806358,
+    "name": "wm_draw_drag_outline",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/gui/window.asm",
+    "line": 789,
+    "args": []
+  },
+  {
+    "fn_id": 13568344919950763489,
+    "name": "wm_draw_window",
+    "argc": "1",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/gui/window.asm",
+    "line": 332,
+    "args": []
+  },
+  {
+    "fn_id": 3203152787907864721,
+    "name": "wm_get_window_at",
+    "argc": "2",
+    "kindmask": "0",
+    "retkind": "FN_RET_HANDLE",
+    "source": "src/kernel/gui/window.asm",
+    "line": 886,
+    "args": []
+  },
+  {
+    "fn_id": 15535213005940424831,
+    "name": "wm_handle_mouse_event",
+    "argc": "3",
+    "kindmask": "0",
+    "retkind": "FN_RET_SCALAR",
+    "source": "src/kernel/gui/window.asm",
+    "line": 525,
+    "args": []
+  },
+  {
+    "fn_id": 11714594748897494416,
+    "name": "wm_init",
+    "argc": "0",
+    "kindmask": "0",
+    "retkind": "FN_RET_VOID",
+    "source": "src/kernel/gui/window.asm",
+    "line": 41,
+    "args": []
+  }
+]

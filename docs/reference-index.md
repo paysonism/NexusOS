@@ -14,6 +14,10 @@ through the whole tree first.
   Exported kernel entrypoints grouped by subsystem and owning file.
 - `memory-map-reference.md`
   Fixed-address regions, scratch buffers, and reserved memory ownership.
+- `invariant-registry.md`
+  Normative fixed addresses, L3 slot layout, syscall range, and callback rules.
+- `ownership-registry.md`
+  Normative owner file and guard for each critical subsystem.
 - `data-layout-reference.md`
   Live structure layouts for windows, processes, runtime frames, and FAT16.
 - `state-machine-reference.md`
@@ -24,8 +28,16 @@ through the whole tree first.
   High-level runtime flow from boot to kernel to ring 3.
 - `source-layout.md`
   Tree structure and editing rules.
+- `verification.md`
+  Normative staged build, serial boot, L3 app, Cache32Max, and SMP checks.
+- `build/reports/source-map.md`
+  Generated include order, exported labels, and fixed-address references.
+- `build/reports/complexity-dashboard.md`
+  Generated large-file, export, fixed-address, and TODO/STUB/FIXME counts.
 - `app-authoring.md`
   User-app development surface today.
+- `nexushl-gui.md`
+  NexusHL immediate-mode GUI library and widget ownership rules.
 - `app-loader-format.md`
   Proposed future external app binary and loader contract.
 
@@ -116,6 +128,8 @@ through the whole tree first.
 - Broken mouse/keyboard/touchpad: `kernel-function-reference.md` under
   `drivers`, then `state-machine-reference.md`
 - Files not reading/writing: `kernel-function-reference.md` under `fs`
+- File create/rename/delete/mkdir ABI: `syscalls.md` and
+  `src/user/lib/nexus_fs.inc`
 - Window/callback bug: `kernel-function-reference.md` under `gui` plus
   `usermode-reference.md` and `data-layout-reference.md`
 - Syscall reject or privilege bug: `syscalls.md` plus `src/kernel/proc/syscall.asm`

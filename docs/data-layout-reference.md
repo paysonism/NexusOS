@@ -102,7 +102,7 @@ Base:
 - `l3_runtime`
 
 Stride:
-- `L3_RT_SIZE = 120`
+- `L3_RT_SIZE = 128`
 
 Fields:
 
@@ -123,6 +123,7 @@ Fields:
 | `96` | `L3_RT_USER_R8` | saved R8 |
 | `104` | `L3_RT_USER_R9` | saved R9 |
 | `112` | `L3_RT_USER_R10` | saved R10 |
+| `120` | `L3_RT_SLOT` | slot index |
 
 Related layout constants:
 
@@ -196,6 +197,29 @@ Attributes:
 The return value from `fat16_get_entry` / `SYS_FS_ENTRY` should be treated as an
 opaque FAT16 handle, not as user-owned memory. Current syscall validation
 enforces that it points at an aligned entry inside `FAT16_ROOT_CACHE`.
+
+For usermode, `SYS_FS_ENTRY` returns a slot-local copy of the 32-byte entry so
+apps can inspect name, attribute, cluster, and size fields without receiving a
+direct writable kernel pointer. Mutating syscalls such as `SYS_FS_DELETE` and
+`SYS_FS_RENAME` translate that slot-local handle back to the matching
+`FAT16_ROOT_CACHE` offset before changing disk metadata.
+
+### Usermode filesystem kit
+
+Owner:
+- `src/user/lib/nexus_fs.inc`
+
+The user library defines:
+
+| Symbol | Meaning |
+|---|---|
+| `NFS_NAME_LEN` | FAT 8.3 syscall name length, always 11 bytes |
+| `NFS_ENTRY_SIZE` | FAT16 directory entry length, always 32 bytes |
+| `NFS_ATTR_OFF` | Attribute byte offset |
+| `NFS_CLUSTER_OFF` | First-cluster low word offset |
+| `NFS_SIZE_OFF` | File-size dword offset |
+| `NFS_NAME83 dst, src` | Macro wrapper around `nfs_name83` |
+| `nfs_name83` | Converts `NAME.EXT` strings to uppercase, space-padded 8.3 names |
 
 ## Input Event Structs
 

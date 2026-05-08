@@ -1,5 +1,6 @@
 param(
     [switch]$Release,
+    [switch]$Trace,
     [ValidateSet('Default', 'Cache32Max')]
     [string]$PerfProfile = 'Default'
 )
@@ -26,12 +27,17 @@ if ($PerfProfile -eq 'Cache32Max') {
     $KernelDefines += '-dNEXUS_CACHE32_AP_STARTUP'
     $LoaderDefines += '-dNEXUS_CACHE32_MAX'
 }
+if ($Trace) {
+    $KernelDefines += '-dENABLE_TRACE'
+    $KernelDefines += '-dENABLE_SIG_SECTION'
+}
 
 Write-Host ''
 Write-Host '  NexusOS UEFI Build System' -ForegroundColor Cyan
 Write-Host '  =========================' -ForegroundColor Cyan
 Write-Host ("  Mode: " + ($(if ($Release) { 'release' } else { 'debug' }))) -ForegroundColor DarkGray
 Write-Host "  Perf: $PerfProfile" -ForegroundColor DarkGray
+Write-Host ("  Trace: " + ($(if ($Trace) { 'on' } else { 'off' }))) -ForegroundColor DarkGray
 Write-Host ''
 
 New-Item -Path $ESP -ItemType Directory -Force | Out-Null
@@ -39,6 +45,11 @@ New-Item -Path $ESP -ItemType Directory -Force | Out-Null
 # 0. Compile NexusHL apps -> build/nxh/*.asm (included by src/user/apps.asm)
 & powershell -NoProfile -File (Join-Path $PSScriptRoot 'build_nxh.ps1')
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED NexusHL compile' -ForegroundColor Red; exit 1 }
+$CoverageTool = Join-Path $PSScriptRoot 'tools\check_coverage.py'
+if (Test-Path $CoverageTool) {
+    & python $CoverageTool
+    if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED signature coverage' -ForegroundColor Red; exit 1 }
+}
 
 # 1. Assemble UEFI Loader -> BOOTX64.EFI
 Write-Host '[1/2] Assembling UEFI Loader...' -ForegroundColor Yellow
@@ -55,7 +66,7 @@ Write-Host "  OK - BOOTX64.EFI ($sz bytes)" -ForegroundColor Green
 # 2. Assemble Kernel -> KERNEL.BIN
 Write-Host '[2/2] Assembling Kernel...' -ForegroundColor Yellow
 $ErrorActionPreference = 'Continue'
-& $NASM @KernelDefines -w-pp-macro-redef-multi -f bin -o "$ESP\KERNEL.BIN" -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
+& $NASM @KernelDefines -w-pp-macro-redef-multi -f bin -o "$ESP\KERNEL.BIN" -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" -I "$BUILD_DIR\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
 $ErrorActionPreference = 'Stop'
 if ($LASTEXITCODE -ne 0) {
     Write-Host '  FAILED' -ForegroundColor Red

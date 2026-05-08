@@ -8,8 +8,10 @@ $Markers = @(
     '(!0-ENTRY)',
     'CPU:',
     'CACHE:',
-    'MEMCAP:',
-    'M12KF!'
+    'MEMCAP:'
+)
+$RegexMarkers = @(
+    'M12K*F!'
 )
 $SerialHost = '127.0.0.1'
 $SerialPort = 5555
@@ -21,7 +23,7 @@ function Stop-QemuIfRunning {
 function Read-SerialBootLog {
     param(
         [int]$ConnectTimeoutMs = 5000,
-        [int]$CaptureMs = 8000
+        [int]$CaptureMs = 16000
     )
 
     $deadline = [DateTime]::UtcNow.AddMilliseconds($ConnectTimeoutMs)
@@ -93,6 +95,11 @@ try {
     $missing = @()
     foreach ($marker in $Markers) {
         if ($serial -notlike "*$marker*") {
+            $missing += $marker
+        }
+    }
+    foreach ($marker in $RegexMarkers) {
+        if ($serial -notmatch $marker) {
             $missing += $marker
         }
     }

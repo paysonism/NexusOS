@@ -29,7 +29,7 @@ Kernel entry, main init flow, IDT/ISR, memory, PIC/PIT, and TSS.
 ACPI/APIC/IOAPIC/RSDP/MADT/AML parsing and platform discovery code.
 
 `src/kernel/proc`
-Process, usermode, and syscall boundary code.
+Process, usermode, syscall dispatch, and syscall validation boundary code.
 
 `src/kernel/fs`
 Filesystem implementations and FS-facing kernel support.
@@ -54,6 +54,10 @@ responsibility instead of growing `apps.asm` again.
 
 `src/user/lib`
 Shared app-side includes and the future home for userland helper code.
+
+`src/user/nexushl`
+NexusHL SDK sources: compiler, standard library, and `.nxh` apps compiled into
+`build/nxh/generated_apps.inc` before kernel assembly.
 
 `src/user/templates`
 Small assembly templates for new user callbacks and app experiments.

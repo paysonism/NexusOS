@@ -37,6 +37,8 @@ extern hid_parsed_is_absolute
 extern hid_parsed_report_bytes
 extern hid_parsed_has_report_id
 
+extern tick_count
+
 ; SPI-HID packet constants
 SPI_SYNC_HOST       equ 0xFF    ; host->device sync byte
 SPI_SYNC_DEV        equ 0x80    ; device->host sync byte (when data ready)
@@ -75,11 +77,19 @@ spi_hid_init:
 
     ; Send reset
     call spi_hid_send_reset
-    ; Wait for device ready (~20ms equivalent in loops)
-    mov ecx, 2000000
+    ; Wait for device ready - PIT-based 50ms (5 ticks at 100Hz). CPU spin is
+    ; calibrated to QEMU and fires in microseconds on real HW.
+    push rbx
+    mov rbx, [tick_count]
+    add rbx, 5
 .reset_wait:
-    dec ecx
-    jnz .reset_wait
+    mov rax, [tick_count]
+    cmp rax, rbx
+    jae .reset_done
+    pause
+    jmp .reset_wait
+.reset_done:
+    pop rbx
 
     ; Fetch HID device descriptor
     call spi_hid_get_device_desc

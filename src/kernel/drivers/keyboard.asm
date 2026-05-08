@@ -28,6 +28,9 @@ keyboard_init:
     mov dword [kb_tail], 0
     mov byte [kb_modifiers], 0
     mov byte [kb_extended], 0
+    mov byte [kb_repeat_scancode], 0
+    mov byte [kb_repeat_ascii], 0
+    mov dword [kb_repeat_next_tick], 0
     ret
 
 ; --- IRQ1 Keyboard Handler (called from ISR) ---
@@ -100,12 +103,17 @@ keyboard_handler:
 
     mov [rbx], al             ; Scancode
     mov [rbx + 1], dl         ; ASCII
-    ; Save for key repeat (r8 is free here)
+    ; Only arm key-repeat for keys that produced a printable ASCII.
+    ; Scancodes with ASCII=0 (unmapped/stray bytes) never get a matching
+    ; release in the normal flow and would otherwise fire forever.
+    test dl, dl
+    jz .skip_repeat_arm
     mov [kb_repeat_scancode], al
     mov [kb_repeat_ascii], dl
     mov r8d, [tick_count]
     add r8d, KB_REPEAT_DELAY
     mov [kb_repeat_next_tick], r8d
+.skip_repeat_arm:
     mov dl, [kb_modifiers]
     mov [rbx + 2], dl         ; Modifiers
     mov byte [rbx + 3], 1     ; Pressed
@@ -195,10 +203,12 @@ keyboard_read:
     cmp ecx, [kb_tail]
     je .empty
 
+    push rbx
     mov r8d, ecx
     shl r8d, 2
     lea rbx, [kb_buffer + r8]
     mov eax, [rbx]           ; Read 4 bytes (packed key event)
+    pop rbx
 
     ; Advance head
     inc ecx

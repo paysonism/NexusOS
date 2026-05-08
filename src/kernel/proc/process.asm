@@ -17,14 +17,14 @@ GDT64_USER_CODE   equ 0x2B
 
 section .text
 
-global scheduler_init
-global process_create
-global process_schedule
+; auto-wrapped (FN_BEGIN emits global): global scheduler_init
+; auto-wrapped (FN_BEGIN emits global): global process_create
+; auto-wrapped (FN_BEGIN emits global): global process_schedule
 global current_process_id
-global proc_is_active
-global process_save_context
-global process_restore_context
-global process_kill_window
+; auto-wrapped (FN_BEGIN emits global): global proc_is_active
+; auto-wrapped (FN_BEGIN emits global): global process_save_context
+; auto-wrapped (FN_BEGIN emits global): global process_restore_context
+; auto-wrapped (FN_BEGIN emits global): global process_kill_window
 global process_find_by_window
 
 extern l3_user_stack_top
@@ -32,7 +32,7 @@ extern l3_syscall_stack_top
 extern tss64
 
 ; --- scheduler_init ---
-scheduler_init:
+FN_BEGIN scheduler_init, 0, 0, FN_RET_SCALAR
     push rdi
     push rcx
     push rax
@@ -67,7 +67,7 @@ scheduler_init:
 ; RSI = Slot (App Arena / Stack index)
 ; RDX = Window ID
 ; Returns: RAX = Process ID or -1
-process_create:
+FN_BEGIN process_create, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
@@ -80,6 +80,11 @@ process_create:
     mov r12, rdi        ; entry
     mov r13, rsi        ; slot
     mov r14, rdx        ; win_id
+
+    cmp r13, MAX_WINDOWS
+    jae .invalid_args
+    cmp r14, MAX_WINDOWS
+    jae .invalid_args
     
     ; Find free slot in process pool
     mov rbx, PROCESS_POOL
@@ -135,6 +140,10 @@ process_create:
     pop rbx
     ret
 
+.invalid_args:
+    mov rax, -1
+    jmp .done
+
 
 ; --- current_process_ptr ---
 ; Returns: RAX = pointer to current process PCB
@@ -151,7 +160,7 @@ current_process_ptr:
 
 ; --- process_save_context ---
 ; RDI = pointer to PUSH_ALL frame (RSP after PUSH_ALL)
-process_save_context:
+FN_BEGIN process_save_context, 0, 0, FN_RET_SCALAR
     push rax
     push rbx
     push rcx
@@ -214,7 +223,7 @@ process_save_context:
 
 ; --- process_restore_context ---
 ; RDI = pointer to PUSH_ALL frame to OVERWRITE
-process_restore_context:
+FN_BEGIN process_restore_context, 0, 0, FN_RET_SCALAR
     push rax
     push rbx
     push rcx
@@ -279,11 +288,6 @@ process_restore_context:
     mov cr3, rdx
 .skip_cr3:
     
-    ; Update Userland slot context
-    extern l3_current_slot
-    mov eax, [rbx + process_t.slot]
-    mov [l3_current_slot], eax
-
 .done:
     pop rcx
     pop rbx
@@ -293,7 +297,7 @@ process_restore_context:
 ; --- process_schedule ---
 ; Round-Robin Scheduler
 ; Returns: RAX = next PID, or -1 if none
-process_schedule:
+FN_BEGIN process_schedule, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     
@@ -353,7 +357,7 @@ process_schedule:
     pop rbx
     ret
 
-proc_is_active:
+FN_BEGIN proc_is_active, 0, 0, FN_RET_SCALAR
     ; EDI = PID
     push rbx
     mov rax, rdi
@@ -366,7 +370,7 @@ proc_is_active:
     pop rbx
     ret
 
-process_kill_window:
+FN_BEGIN process_kill_window, 0, 0, FN_RET_SCALAR
     push rax
     push rbx
     push rcx

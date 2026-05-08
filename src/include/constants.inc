@@ -2,21 +2,15 @@
 ; NexusOS v3.0 - System Constants
 ; ============================================================================
 
+%include "boot_memory.inc"
+
 ; --- Memory Layout ---
 ; Cache32Max speed tiers:
 ; - L1-hot: IRQ/syscall/scheduler/input flags/per-core state.
 ; - L2-warm: HID parser, window metadata, font/text primitives, FAT metadata.
 ; - L3/LLC GUI: framebuffer composition buffers in 4MB..16MB.
 ; - RAM-cold: app arenas, device DMA rings, filesystem staging, debug data.
-STAGE2_LOAD_ADDR    equ 0x7E00       ; Stage 2 load address
-E820_COUNT_ADDR     equ 0x1FF0       ; Number of E820 entries (dword)
-E820_MAP_ADDR       equ 0x2000       ; E820 memory map entries
-VBE_INFO_ADDR       equ 0x9000       ; VBE mode info block
-BOOT_DRIVE_ADDR     equ 0x9100       ; Saved boot drive number (byte)
-PAGE_TABLE_ADDR     equ 0x70000      ; PML4 page table base
-KERNEL_LOAD_ADDR    equ 0x100000     ; 1MB - kernel load address
-KERNEL_STACK_TOP    equ 0x200000     ; 2MB - top of kernel stack
-IDT_ADDR            equ 0x200000     ; IDT location (same as stack top for now, risky? No, IDT is small)
+; Core physical addresses live in boot_memory.inc.
 ; IDT is 256*16 = 4KB. If stack grows down from 2MB, IDT at 2MB grows up?
 ; IDT structure is fixed size.
 ; If Stack Top is 0x200000, IDT at 0x200000 overlaps stack top!
@@ -25,22 +19,9 @@ IDT_ADDR            equ 0x200000     ; IDT location (same as stack top for now, 
 ; If Stack starts at 0x200000, a push writes to 0x1FFFF8.
 ; So they don't overlap. This is safe.
 
-KERNEL_DATA_ADDR    equ 0x210000     ; Kernel data/heap
-PAGE_BITMAP_ADDR    equ 0x300000     ; Physical page bitmap
-BACK_BUFFER_ADDR    equ 0x400000     ; Display back buffer
-BACK_BUFFER_SAVE_ADDR equ 0xA00000     ; Saved back buffer (at 10MB)
-CURSOR_BG_ADDR      equ 0x700000     ; Cursor background save area
-WINDOW_POOL_ADDR    equ 0x710000     ; Window structure pool
-EVENT_BUFFER_ADDR   equ 0x720000     ; Event buffers
-APP_DATA_ADDR       equ 0x1000000    ; 16MB - application arena (user-mapped)
-APP_SLOT_SIZE       equ 0x100000     ; 1 MB private app arena per window/process
-L3_SYSCALL_STACK_ADDR equ 0x1800000  ; Kernel-only syscall stacks
-GUI_LLC_ARENA_START equ 0x400000     ; Cache32Max GUI arena start (4MB)
-GUI_LLC_ARENA_END   equ 0x1000000    ; Cache32Max GUI arena end (16MB)
 %ifdef NEXUS_CACHE32_MAX
 CACHE32_RAM_LIMIT   equ 0x2000000    ; 32MB strict profile cap
 SYSTEM_RESERVED_END equ 0x1B00000    ; Keep allocator above fixed cold buffers
-SMP_TRAMPOLINE_ADDR equ 0x8000       ; AP real-mode SIPI target page
 SMP_CORE_STATE_ADDR equ 0x220000     ; Cacheline-aligned per-core records
 SMP_CORE_STACK_BASE equ 0x240000     ; AP stacks grow down from here
 SMP_MAX_CORES       equ 8
@@ -66,13 +47,7 @@ SCREEN_PITCH        equ (SCREEN_WIDTH * 4)   ; 4096 bytes per scanline
 FRAMEBUFFER_SIZE    equ (SCREEN_WIDTH * SCREEN_HEIGHT * 4)  ; 3145728 = ~3MB
 
 
-; --- VBE info offsets (at VBE_INFO_ADDR) ---
-VBE_FB_ADDR_OFF     equ 0x00         ; Framebuffer physical address (8 bytes)
-VBE_WIDTH_OFF       equ 0x08         ; Screen width (4 bytes)
-VBE_HEIGHT_OFF      equ 0x0C         ; Screen height (4 bytes)
-VBE_PITCH_OFF       equ 0x10         ; Bytes per scanline (4 bytes)
-VBE_BPP_OFF         equ 0x14         ; Bits per pixel (4 bytes)
-VBE_SPP_OFF         equ 0x18         ; EFI_SIMPLE_POINTER_PROTOCOL interface ptr (qword, 0=none)
+; VBE info offsets live in boot_memory.inc.
 
 ; --- Colors (32-bit 0x00RRGGBB, stored as BGRX in memory) ---
 ; VGA 16-color palette (NexusOS Design System, format 0x00RRGGBB)

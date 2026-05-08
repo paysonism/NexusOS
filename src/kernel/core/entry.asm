@@ -106,9 +106,9 @@ _start:
     mov al, ')'
     out dx, al
 
-    ; Verify VBE info at 0x9000 before using it
+    ; Verify loader framebuffer info before using it.
     ; Print FB addr low byte as sanity check
-    mov rax, 0x9000
+    mov rax, VBE_INFO_ADDR
     mov rax, [rax]           ; FB address
 
     ; (!3-FB)
@@ -141,7 +141,7 @@ _start:
     out dx, al
 
     ; Reload rdi from VBE info
-    mov rax, 0x9000
+    mov rax, VBE_INFO_ADDR
     mov rdi, [rax]           ; Get LFB address
 
     ; (!4-PAINT)

@@ -1122,8 +1122,12 @@ xhci_find_port:
 .apply_reset:
     mov [rsi + rdx + XHCI_PORTSC], eax
 
-    ; Wait for reset complete: PRC (Port Reset Change) = 1 or WRC (Warm Reset Change = 1<<19)
-    mov ecx, 50000              ; ~50ms worth of MMIO polls at QEMU speed
+    ; Wait for reset complete: PRC or WRC. PIT-based deadline (60 ticks = 600ms)
+    ; ensures real-hardware safety; CPU spin alone is too short on fast cores.
+    push rbx
+    mov rbx, [tick_count]
+    add rbx, 60
+    mov ecx, 12000000
 .wait_reset:
     mov eax, [rsi + rdx + XHCI_PORTSC]
     test eax, XHCI_PORTSC_PRC
@@ -1131,9 +1135,14 @@ xhci_find_port:
     test eax, (1 << 19)                ; WRC bit
     jnz .reset_done
     dec ecx
-    jz .reset_done                ; timeout: proceed anyway
+    jz .reset_done
+    mov rax, [tick_count]
+    cmp rax, rbx
+    jge .reset_done                    ; timeout: proceed anyway
+    pause
     jmp .wait_reset
 .reset_done:
+    pop rbx
 
     ; Clear PRC and WRC by writing 1 to them
     mov eax, [rsi + rdx + XHCI_PORTSC]
@@ -1148,25 +1157,44 @@ xhci_find_port:
     and eax, 0x0F
     mov [xhci_port_speed], al
 
-    ; Wait 10ms after reset before enumeration (USB spec)
-    mov ecx, 20000
+    ; Wait 10ms after reset before enumeration (USB spec). PIT-based.
+    push rbx
+    mov rbx, [tick_count]
+    add rbx, 2                         ; 2 ticks = 20ms (>= 10ms required)
+    mov ecx, 1000000
 .post_reset_wait:
+    mov rax, [tick_count]
+    cmp rax, rbx
+    jge .post_reset_done
     dec ecx
-    jnz .post_reset_wait
+    jz .post_reset_done
+    pause
+    jmp .post_reset_wait
+.post_reset_done:
+    pop rbx
 .port_ready:
     ; Check PED (port enabled after reset) - give it extra time if needed
     mov eax, [rsi + rdx + XHCI_PORTSC]
     test eax, XHCI_PORTSC_PED
     jnz .ped_ok
-    ; PED not set - try a bit longer
-    mov ecx, 50000
+    ; PED not set - try a bit longer. PIT-based deadline.
+    push rbx
+    mov rbx, [tick_count]
+    add rbx, 50                        ; 50 ticks = 500ms
+    mov ecx, 10000000
 .wait_ped:
     mov eax, [rsi + rdx + XHCI_PORTSC]
     test eax, XHCI_PORTSC_PED
     jnz .ped_wait_done
     dec ecx
-    jnz .wait_ped
+    jz .ped_wait_done
+    mov rax, [tick_count]
+    cmp rax, rbx
+    jge .ped_wait_done
+    pause
+    jmp .wait_ped
 .ped_wait_done:
+    pop rbx
     ; Read final speed
     mov eax, [rsi + rdx + XHCI_PORTSC]
     shr eax, XHCI_PORTSC_SPEED_SHIFT
@@ -1690,6 +1718,9 @@ xhci_configure_endpoint:
     push r9
     push r10
     push r11
+    push r12
+    push r13
+    push r14
 
     ; Save args
     mov r12d, edi                 ; EP number
@@ -1836,6 +1867,9 @@ xhci_configure_endpoint:
 .cfg_fail:
     xor eax, eax
 .cfg_ret:
+    pop r14
+    pop r13
+    pop r12
     pop r11
     pop r10
     pop r9

@@ -5,12 +5,12 @@
 ; ============================================================================
 bits 16   ; We are in 16-bit Unreal Mode
 
+%include "src/include/boot_memory.inc"
+
 PAGE_PRESENT    equ 0x01
 PAGE_WRITABLE   equ 0x02
 PAGE_USER       equ 0x04     ; User-accessible (ring 3)
 PAGE_LARGE      equ 0x80     ; 2MB page (PS bit in PD entry)
-APP_DATA_ADDR   equ 0x1000000
-APP_SLOT_SIZE   equ 0x100000
 MAX_WINDOWS     equ 8
 APP_USER_PDE0   equ (APP_DATA_ADDR / 0x200000)
 APP_USER_PDE_COUNT equ ((MAX_WINDOWS * APP_SLOT_SIZE + 0x1FFFFF) / 0x200000)

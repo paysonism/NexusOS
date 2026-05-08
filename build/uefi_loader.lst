@@ -1,0 +1,1980 @@
+     1                                  ; ============================================================================
+     2                                  ; NexusOS v3.0 - UEFI Bootloader
+     3                                  ; Loads the full kernel via UEFI, calls ExitBootServices, jumps to kernel
+     4                                  ; Output: BOOTX64.EFI (PE32+ UEFI application)
+     5                                  ; ============================================================================
+     6                                  bits 64
+     7                                  default rel
+     8                                  
+     9                                  ; --- PE layout constants ---
+    10                                  %define HEADER_SIZE   0x200
+    11                                  %define TEXT_RAWSIZE  0x10000
+    12                                  %define TEXT_VADDR    0x1000
+    13                                  %define TEXT_VSIZE    0x10000
+    14                                  %define RELOC_FOFF    (HEADER_SIZE + TEXT_RAWSIZE)
+    15                                  %define RELOC_FSIZE   0x200
+    16                                  %define RELOC_VADDR   0x11000
+    17                                  %define RELOC_VSIZE   0x0C
+    18                                  %define IMAGE_SIZE    0x12000
+    19                                  
+    20                                  ; --- UEFI System Table offsets ---
+    21                                  %define ST_CONOUT     64
+    22                                  %define ST_BOOTSERV   96
+    23                                  %define CO_STR        8
+    24                                  %define CO_CLR        48
+    25                                  
+    26                                  ; --- Boot Services offsets ---
+    27                                  %define BS_ALLOCPOOL  64
+    28                                  %define BS_FREEPOOL   72
+    29                                  %define BS_GETMEMMAP  56
+    30                                  %define BS_ALLOCPAGES 40
+    31                                  %define BS_STALL      248
+    32                                  %define BS_WATCHDOG   256
+    33                                  %define BS_LOCATE     320
+    34                                  %define BS_EXITBOOT   232
+    35                                  %define BS_HANDLEPROTO 152
+    36                                  %define BS_LOCATEHANDLE 48
+    37                                  
+    38                                  ; --- GOP offsets ---
+    39                                  %define GOP_QUERY     0
+    40                                  %define GOP_SET       8
+    41                                  %define GOP_MODE      24
+    42                                  %define GOPM_MAX      0
+    43                                  %define GOPM_CUR      4
+    44                                  %define GOPM_INFO     8
+    45                                  %define GOPM_FBBASE   24
+    46                                  %define GOPM_FBSIZE   32
+    47                                  %define GOPI_HRES     4
+    48                                  %define GOPI_VRES     8
+    49                                  %define GOPI_PPSL     28
+    50                                  
+    51                                  ; --- File Protocol offsets ---
+    52                                  %define SFS_OPENVOL   8
+    53                                  %define FP_OPEN       8
+    54                                  %define FP_CLOSE      16
+    55                                  %define FP_READ       32
+    56                                  
+    57                                  ; --- Kernel expectations ---
+    58                                  %define VBE_INFO_ADDR  0x9000
+    59                                  %define PAGE_TBL_ADDR  0x70000
+    60                                  %define KERNEL_ADDR    0x100000
+    61                                  
+    62                                  ; UCS-2 string macro
+    63                                  %macro u 1+
+    64                                    %assign %%i 1
+    65                                    %strlen %%len %1
+    66                                    %rep %%len
+    67                                      %substr %%c %1 %%i
+    68                                      dw %%c
+    69                                      %assign %%i %%i+1
+    70                                    %endrep
+    71                                    dw 0
+    72                                  %endmacro
+    73                                  
+    74                                  ; ============================================================================
+    75                                  ; PE/COFF HEADER
+    76                                  ; ============================================================================
+    77                                  section .text start=0
+    78 00000000 4D5A                        dw 0x5A4D                        ; MZ signature
+    79 00000002 0000<rep 1Dh>               times 29 dw 0
+    80 0000003C [40000000]                  dd pe_hdr
+    81                                  
+    82                                  pe_hdr:
+    83 00000040 50450000                    dd 0x00004550                    ; PE signature
+    84 00000044 64860200                    dw 0x8664, 2                     ; x86-64, 2 sections
+    85 00000048 000000000000000000-         dd 0, 0, 0
+    85 00000051 000000             
+    86 00000054 A000                        dw opt_end - opt_hdr             ; Optional header size
+    87 00000056 0602                        dw 0x0206                        ; Characteristics
+    88                                  
+    89                                  opt_hdr:
+    90 00000058 0B02                        dw 0x020B                        ; PE32+
+    91 0000005A 0100                        db 1, 0                          ; Linker version
+    92 0000005C 000001000000000000-         dd TEXT_RAWSIZE, 0, 0, TEXT_VADDR, TEXT_VADDR
+    92 00000065 000000001000000010-
+    92 0000006E 0000               
+    93 00000070 0000100000000000            dq 0x100000                      ; Image base
+    94 00000078 0010000000020000            dd 0x1000, 0x200                 ; Section/file alignment
+    95 00000080 000000000000000000-         dw 0,0, 0,0, 0,0
+    95 00000089 000000             
+    96 0000008C 000000000020010000-         dd 0, IMAGE_SIZE, HEADER_SIZE, 0
+    96 00000095 02000000000000     
+    97 0000009C 0A000000                    dw 10, 0                         ; Subsystem: EFI Application
+    98 000000A0 000010000000000000-         dq 0x100000, 0x100000, 0x100000, 0x100000
+    98 000000A9 001000000000000000-
+    98 000000B2 100000000000000010-
+    98 000000BB 0000000000         
+    99 000000C0 0000000006000000            dd 0, 6                          ; Data directories
+   100 000000C8 000000000000000000-         dd 0,0, 0,0, 0,0, 0,0, 0,0
+   100 000000D1 000000000000000000-
+   100 000000DA 000000000000000000-
+   100 000000E3 000000000000000000-
+   100 000000EC 00000000           
+   101 000000F0 001001000C000000            dd RELOC_VADDR, RELOC_VSIZE      ; Base relocation directory
+   102                                  opt_end:
+   103                                  
+   104                                      ; .text section header
+   105 000000F8 2E74657874000000            db '.text',0,0,0
+   106 00000100 000001000010000000-         dd TEXT_VSIZE, TEXT_VADDR, TEXT_RAWSIZE, HEADER_SIZE
+   106 00000109 00010000020000     
+   107 00000110 0000000000000000            dd 0,0
+   108 00000118 00000000                    dw 0,0
+   109 0000011C 600000E0                    dd 0xE0000060                    ; Code | Execute | Read | Write
+   110                                  
+   111                                      ; .reloc section header
+   112 00000120 2E72656C6F630000            db '.reloc',0,0
+   113 00000128 0C0000000010010000-         dd RELOC_VSIZE, RELOC_VADDR, RELOC_FSIZE, RELOC_FOFF
+   113 00000131 02000000020100     
+   114 00000138 0000000000000000            dd 0,0
+   115 00000140 00000000                    dw 0,0
+   116 00000144 40000042                    dd 0x42000040                    ; Initialized data | Discardable | Read
+   117                                  
+   118 00000148 00<rep B8h>                 times (HEADER_SIZE - ($ - $$)) db 0
+   119                                  
+   120                                  ; ============================================================================
+   121                                  ; EFI ENTRY POINT
+   122                                  ; ============================================================================
+   123                                  _start:
+   124                                      ; Windows x64 calling convention: RCX=ImageHandle, RDX=SystemTable
+   125                                      ; Entry: RSP=16k-8. sub 120 → 16k-128=16(k-8). 0-mod-16 for calls.
+   126 00000200 4883EC78                    sub rsp, 120
+   127 00000204 48890D2D090000              mov [v_handle], rcx
+   128 0000020B 4889152E090000              mov [v_systab], rdx
+   129                                  
+   130                                      ; Cache Boot Services
+   131 00000212 488B4260                    mov rax, [rdx + ST_BOOTSERV]
+   132 00000216 4889052B090000              mov [v_bs], rax
+   133                                  
+   134                                      ; Cache ConOut
+   135 0000021D 488B4240                    mov rax, [rdx + ST_CONOUT]
+   136 00000221 48890528090000              mov [v_conout], rax
+   137                                  
+   138                                      ; Disable watchdog timer
+   139 00000228 488B0D19090000              mov rcx, [v_bs]
+   140 0000022F 488B8100010000              mov rax, [rcx + BS_WATCHDOG]
+   141 00000236 31C9                        xor ecx, ecx
+   142 00000238 31D2                        xor edx, edx
+   143 0000023A 4531C0                      xor r8d, r8d
+   144 0000023D 4531C9                      xor r9d, r9d
+   145 00000240 4883EC20                    sub rsp, 32
+   146 00000244 FFD0                        call rax
+   147 00000246 4883C420                    add rsp, 32
+   148                                  
+   149                                      ; Print banner
+   150 0000024A 488D1513060000              lea rdx, [str_banner]
+   151 00000251 E86E010000                  call print
+   152                                  
+   153                                      ; === STEP 0: Claim physical memory regions ===
+   154                                      ; Real UEFI firmware may use 0x9000, 0x70000, 0x100000.
+   155                                      ; AllocatePages(AllocateAddress=2, EfiLoaderData=2, pages, &addr)
+   156                                  
+   157                                      ; Claim 0x9000 (VBE info block, 1 page)
+   158 00000256 48C705530900000090-         mov qword [v_claim_addr], 0x9000
+   158 0000025F 0000               
+   159 00000261 488B0DE0080000              mov rcx, [v_bs]
+   160 00000268 488B4128                    mov rax, [rcx + BS_ALLOCPAGES]
+   161 0000026C B902000000                  mov ecx, 2                       ; AllocateAddress
+   162 00000271 BA02000000                  mov edx, 2                       ; EfiLoaderData
+   163 00000276 41B801000000                mov r8, 1                        ; 1 page
+   164 0000027C 4C8D0D31090000              lea r9, [v_claim_addr]
+   165 00000283 FFD0                        call rax
+   166                                      ; Ignore errors - some firmwares don't map low memory
+   167                                  
+   168                                      ; Claim 0x70000 (page tables, 6 pages = 24KB)
+   169 00000285 48C705240900000000-         mov qword [v_claim_addr], 0x70000
+   169 0000028E 0700               
+   170 00000290 488B0DB1080000              mov rcx, [v_bs]
+   171 00000297 488B4128                    mov rax, [rcx + BS_ALLOCPAGES]
+   172 0000029B B902000000                  mov ecx, 2
+   173 000002A0 BA02000000                  mov edx, 2
+   174 000002A5 41B806000000                mov r8, 6
+   175 000002AB 4C8D0D02090000              lea r9, [v_claim_addr]
+   176 000002B2 FFD0                        call rax
+   177                                  
+   178                                      ; Claim 0x100000 (kernel load address, 256 pages = 1MB)
+   179 000002B4 48C705F50800000000-         mov qword [v_claim_addr], 0x100000
+   179 000002BD 1000               
+   180 000002BF 488B0D82080000              mov rcx, [v_bs]
+   181 000002C6 488B4128                    mov rax, [rcx + BS_ALLOCPAGES]
+   182 000002CA B902000000                  mov ecx, 2
+   183 000002CF BA02000000                  mov edx, 2
+   184 000002D4 41B800010000                mov r8, 256
+   185 000002DA 4C8D0DD3080000              lea r9, [v_claim_addr]
+   186 000002E1 FFD0                        call rax
+   187                                  
+   188                                      ; === STEP 1: Initialize GOP ===
+   189 000002E3 488D15B0050000              lea rdx, [str_gop]
+   190 000002EA E8D5000000                  call print
+   191 000002EF E8EB000000                  call gop_init
+   192 000002F4 4885C0                      test rax, rax
+   193 000002F7 0F859B000000                jnz .fail_gop
+   194                                  
+   195 000002FD 488D1560060000              lea rdx, [str_ok]
+   196 00000304 E8BB000000                  call print
+   197                                  
+   198                                      ; === STEP 2: Load kernel from file ===
+   199 00000309 488D15B2050000              lea rdx, [str_kernel]
+   200 00000310 E8AF000000                  call print
+   201 00000315 E838020000                  call load_kernel
+   202 0000031A 4885C0                      test rax, rax
+   203 0000031D 0F8583000000                jnz .fail_kernel
+   204                                  
+   205 00000323 488D153A060000              lea rdx, [str_ok]
+   206 0000032A E895000000                  call print
+   207                                  
+   208                                      ; === STEP 3: Setup page tables ===
+   209 0000032F 488D15C8050000              lea rdx, [str_paging]
+   210 00000336 E889000000                  call print
+   211 0000033B E89A030000                  call setup_paging
+   212                                  
+   213 00000340 488D151D060000              lea rdx, [str_ok]
+   214 00000347 E878000000                  call print
+   215                                  
+   216                                      ; === STEP 4: ExitBootServices ===
+   217 0000034C 488D15D9050000              lea rdx, [str_exit]
+   218 00000353 E86C000000                  call print
+   219 00000358 E8EC030000                  call do_exit_boot_services
+   220 0000035D 4885C0                      test rax, rax
+   221 00000360 7552                        jnz .fail_exit
+   222                                  
+   223                                      ; ===================================================
+   224                                      ; Past this point: NO UEFI calls allowed!
+   225                                      ; We own the hardware. Set up GDT and jump to kernel.
+   226                                      ; ===================================================
+   227                                  
+   228                                      ; Disable interrupts
+   229 00000362 FA                          cli
+   230                                  
+   231                                      ; Load our GDT
+   232 00000363 0F0115BE040000              lgdt [gdt64_ptr]
+   233                                  
+   234                                      ; Reload code segment via far return
+   235 0000036A 6A08                        push qword 0x08                  ; Code selector
+   236 0000036C 488D0503000000              lea rax, [.reload_cs]
+   237 00000373 50                          push rax
+   238 00000374 48CB                        retfq
+   239                                  
+   240                                  .reload_cs:
+   241                                      ; Set data segments
+   242 00000376 66B81000                    mov ax, 0x10                     ; Data selector
+   243 0000037A 8ED8                        mov ds, ax
+   244 0000037C 8EC0                        mov es, ax
+   245 0000037E 8EE0                        mov fs, ax
+   246 00000380 8EE8                        mov gs, ax
+   247 00000382 8ED0                        mov ss, ax
+   248                                  
+   249                                      ; Switch to our page tables
+   250 00000384 B800000700                  mov rax, PAGE_TBL_ADDR
+   251 00000389 0F22D8                      mov cr3, rax
+   252                                  
+   253                                      ; Set kernel stack
+   254 0000038C BC00002000                  mov rsp, 0x200000
+   255                                  
+   256                                      ; Jump to kernel!
+   257 00000391 B800001000                  mov rax, KERNEL_ADDR
+   258 00000396 FFE0                        jmp rax
+   259                                  
+   260                                  ; --- Failure handlers ---
+   261                                  .fail_gop:
+   262 00000398 488D15D1050000              lea rdx, [str_fail_gop]
+   263 0000039F E820000000                  call print
+   264 000003A4 EB1A                        jmp .halt
+   265                                  .fail_kernel:
+   266 000003A6 488D1523060000              lea rdx, [str_fail_kernel]
+   267 000003AD E812000000                  call print
+   268 000003B2 EB0C                        jmp .halt
+   269                                  .fail_exit:
+   270 000003B4 488D158B060000              lea rdx, [str_fail_exit]
+   271 000003BB E804000000                  call print
+   272                                  .halt:
+   273 000003C0 FA                          cli
+   274 000003C1 F4                          hlt
+   275 000003C2 EBFC                        jmp .halt
+   276                                  
+   277                                  ; ============================================================================
+   278                                  ; PRINT - Output UCS-2 string via ConOut
+   279                                  ; RDX = pointer to UCS-2 string
+   280                                  ; ============================================================================
+   281                                  print:
+   282 000003C4 53                          push rbx
+   283 000003C5 4883EC20                    sub rsp, 32                      ; Shadow space. Entry 8-mod-16, push→0-mod-16, sub 32→0-mod-16. Good.
+   284 000003C9 488B1D80070000              mov rbx, [v_conout]
+   285 000003D0 4889D9                      mov rcx, rbx                     ; this = ConOut
+   286                                      ; rdx already set to string
+   287 000003D3 488B4308                    mov rax, [rbx + CO_STR]          ; OutputString method
+   288 000003D7 FFD0                        call rax
+   289 000003D9 4883C420                    add rsp, 32
+   290 000003DD 5B                          pop rbx
+   291 000003DE C3                          ret
+   292                                  
+   293                                  ; ============================================================================
+   294                                  ; GOP_INIT - Find and set 1024x768x32 mode
+   295                                  ; Returns: RAX = 0 on success, 1 on failure
+   296                                  ; Stores framebuffer info at VBE_INFO_ADDR (0x9000)
+   297                                  ; ============================================================================
+   298                                  gop_init:
+   299 000003DF 53                          push rbx
+   300 000003E0 4154                        push r12
+   301 000003E2 4155                        push r13
+   302 000003E4 4156                        push r14
+   303 000003E6 4157                        push r15
+   304 000003E8 4883EC60                    sub rsp, 96                      ; Shadow(32) + locals(64). RSP=0-mod-16 for calls.
+   305                                  
+   306                                      ; LocateProtocol(&GOP_GUID, NULL, &v_gop)
+   307 000003EC 488B0D55070000              mov rcx, [v_bs]
+   308 000003F3 488B8140010000              mov rax, [rcx + BS_LOCATE]
+   309 000003FA 488D0D33040000              lea rcx, [gop_guid]
+   310 00000401 31D2                        xor edx, edx
+   311 00000403 4C8D054E070000              lea r8, [v_gop]
+   312 0000040A FFD0                        call rax
+   313 0000040C 4885C0                      test rax, rax
+   314 0000040F 0F852A010000                jnz .gop_fail
+   315                                  
+   316                                      ; Get max mode count
+   317 00000415 488B1D3C070000              mov rbx, [v_gop]
+   318 0000041C 488B4318                    mov rax, [rbx + GOP_MODE]
+   319 00000420 448B20                      mov r12d, [rax + GOPM_MAX]       ; r12 = number of modes
+   320 00000423 41BD00000000                mov r13d, 0                      ; r13 = current mode index
+   321 00000429 41BEFFFFFFFF                mov r14d, 0xFFFFFFFF             ; r14 = best mode index (none)
+   322 0000042F 41BFFFFFFFFF                mov r15d, 0xFFFFFFFF             ; r15 = best resolution diff
+   323                                  
+   324                                      ; Enumerate modes to find 1024x768
+   325                                  .gop_loop:
+   326 00000435 4539E5                      cmp r13d, r12d
+   327 00000438 7D6F                        jge .gop_select
+   328                                  
+   329                                      ; QueryMode(this, mode_number, &info_size, &info_ptr)
+   330 0000043A 4889D9                      mov rcx, rbx                     ; GOP interface
+   331 0000043D 4489EA                      mov edx, r13d                    ; Mode number
+   332 00000440 4C8D442440                  lea r8, [rsp+64]                 ; &info_size
+   333 00000445 4C8D4C2448                  lea r9, [rsp+72]                 ; &info_ptr
+   334 0000044A 488B03                      mov rax, [rbx + GOP_QUERY]
+   335 0000044D FFD0                        call rax
+   336 0000044F 4885C0                      test rax, rax
+   337 00000452 7550                        jnz .gop_next
+   338                                  
+   339                                      ; Check resolution
+   340 00000454 488B442448                  mov rax, [rsp+72]                ; info_ptr
+   341 00000459 8B4804                      mov ecx, [rax + GOPI_HRES]       ; width
+   342 0000045C 8B5008                      mov edx, [rax + GOPI_VRES]       ; height
+   343                                  
+   344                                      ; Exact match 1024x768?
+   345 0000045F 81F900040000                cmp ecx, 1024
+   346 00000465 7510                        jne .gop_check_alt
+   347 00000467 81FA00030000                cmp edx, 768
+   348 0000046D 7508                        jne .gop_check_alt
+   349                                  
+   350                                      ; Perfect match!
+   351 0000046F 4589EE                      mov r14d, r13d
+   352 00000472 4531FF                      xor r15d, r15d                   ; diff = 0
+   353 00000475 EB32                        jmp .gop_select                  ; Stop searching
+   354                                  
+   355                                  .gop_check_alt:
+   356                                      ; Calculate distance from 1024x768: |w-1024| + |h-768|
+   357 00000477 81E900040000                sub ecx, 1024
+   358                                      ; abs(ecx)
+   359 0000047D 89C8                        mov eax, ecx
+   360 0000047F 99                          cdq
+   361 00000480 31D0                        xor eax, edx
+   362 00000482 29D0                        sub eax, edx
+   363 00000484 89C1                        mov ecx, eax
+   364                                  
+   365 00000486 8B442448                    mov eax, [rsp+72]
+   366 0000048A 8B4008                      mov eax, [rax + GOPI_VRES]
+   367 0000048D 2D00030000                  sub eax, 768
+   368                                      ; abs(eax)
+   369 00000492 99                          cdq
+   370 00000493 31D0                        xor eax, edx
+   371 00000495 29D0                        sub eax, edx
+   372 00000497 01C1                        add ecx, eax                     ; ecx = total diff
+   373                                  
+   374 00000499 4439F9                      cmp ecx, r15d
+   375 0000049C 7D06                        jge .gop_next
+   376 0000049E 4189CF                      mov r15d, ecx                    ; New best diff
+   377 000004A1 4589EE                      mov r14d, r13d                   ; New best mode
+   378                                  
+   379                                  .gop_next:
+   380 000004A4 41FFC5                      inc r13d
+   381 000004A7 EB8C                        jmp .gop_loop
+   382                                  
+   383                                  .gop_select:
+   384                                      ; Did we find any mode?
+   385 000004A9 4183FEFF                    cmp r14d, 0xFFFFFFFF
+   386 000004AD 0F848C000000                je .gop_fail
+   387                                  
+   388                                      ; Set the selected mode
+   389 000004B3 4889D9                      mov rcx, rbx                     ; GOP interface
+   390 000004B6 4489F2                      mov edx, r14d                    ; Mode number
+   391 000004B9 488B4308                    mov rax, [rbx + GOP_SET]
+   392 000004BD FFD0                        call rax
+   393 000004BF 4885C0                      test rax, rax
+   394 000004C2 757B                        jnz .gop_fail
+   395                                  
+   396                                      ; Read final mode info
+   397 000004C4 488B1D8D060000              mov rbx, [v_gop]
+   398 000004CB 488B4318                    mov rax, [rbx + GOP_MODE]
+   399 000004CF 4889058A060000              mov [v_gopmode], rax
+   400                                  
+   401 000004D6 488B4808                    mov rcx, [rax + GOPM_INFO]       ; Info pointer
+   402 000004DA 8B5104                      mov edx, [rcx + GOPI_HRES]
+   403 000004DD 89158D060000                mov [v_scrw], edx
+   404 000004E3 8B5108                      mov edx, [rcx + GOPI_VRES]
+   405 000004E6 891588060000                mov [v_scrh], edx
+   406 000004EC 8B511C                      mov edx, [rcx + GOPI_PPSL]
+   407 000004EF 891583060000                mov [v_pitch], edx
+   408                                  
+   409 000004F5 488B0564060000              mov rax, [v_gopmode]
+   410 000004FC 488B4018                    mov rax, [rax + GOPM_FBBASE]
+   411 00000500 48890561060000              mov [v_fb], rax
+   412                                  
+   413                                      ; Write VBE info block at 0x9000 (kernel expects this)
+   414 00000507 BF00900000                  mov rdi, VBE_INFO_ADDR
+   415 0000050C 488B0555060000              mov rax, [v_fb]
+   416 00000513 488907                      mov [rdi], rax                   ; +0x00: FB address (8 bytes)
+   417 00000516 8B0554060000                mov eax, [v_scrw]
+   418 0000051C 894708                      mov [rdi+8], eax                 ; +0x08: width (4 bytes)
+   419 0000051F 8B054F060000                mov eax, [v_scrh]
+   420 00000525 89470C                      mov [rdi+12], eax                ; +0x0C: height (4 bytes)
+   421 00000528 8B054A060000                mov eax, [v_pitch]
+   422 0000052E C1E002                      shl eax, 2                       ; pixels_per_scanline * 4 = bytes per scanline
+   423 00000531 894710                      mov [rdi+16], eax                ; +0x10: pitch in bytes (4 bytes)
+   424 00000534 C7471420000000              mov dword [rdi+20], 32           ; +0x14: BPP (4 bytes)
+   425                                  
+   426 0000053B 31C0                        xor eax, eax                     ; Success
+   427 0000053D EB05                        jmp .gop_done
+   428                                  
+   429                                  .gop_fail:
+   430 0000053F B801000000                  mov eax, 1
+   431                                  
+   432                                  .gop_done:
+   433 00000544 4883C460                    add rsp, 96
+   434 00000548 415F                        pop r15
+   435 0000054A 415E                        pop r14
+   436 0000054C 415D                        pop r13
+   437 0000054E 415C                        pop r12
+   438 00000550 5B                          pop rbx
+   439 00000551 C3                          ret
+   440                                  
+   441                                  ; ============================================================================
+   442                                  ; LOAD_KERNEL - Read KERNEL.BIN from EFI partition into 0x100000
+   443                                  ; Returns: RAX = 0 on success, 1 on failure
+   444                                  ; ============================================================================
+   445                                  load_kernel:
+   446 00000552 53                          push rbx
+   447 00000553 4154                        push r12
+   448 00000555 4155                        push r13
+   449 00000557 4156                        push r14
+   450                                      ; 4 pushes = 32 bytes. Entry RSP=16n-8. After pushes: 16n-8-32=16n-40=16(n-2)-8.
+   451                                      ; sub 56: 16(n-2)-8-56 = 16(n-2)-64 = 16(n-6). 0-mod-16. Good for calls.
+   452 00000559 4883EC38                    sub rsp, 56
+   453                                      ; Stack: [rsp+0..31]=shadow, [rsp+32]=5th arg, [rsp+40]=local1 (read_size), [rsp+48]=local2
+   454                                  
+   455                                      ; Get LoadedImage protocol to find our boot device
+   456                                      ; HandleProtocol(ImageHandle, &LIP_GUID, &lip_ptr)
+   457 0000055D 488B0DE4050000              mov rcx, [v_bs]
+   458 00000564 488B8198000000              mov rax, [rcx + BS_HANDLEPROTO]
+   459 0000056B 488B0DC6050000              mov rcx, [v_handle]              ; Our image handle
+   460 00000572 488D15DB020000              lea rdx, [lip_guid]
+   461 00000579 4C8D05FC050000              lea r8, [v_lip]
+   462 00000580 FFD0                        call rax
+   463 00000582 4885C0                      test rax, rax
+   464 00000585 0F85FA000000                jnz .lk_fail_lip
+   465                                  
+   466                                      ; Get DeviceHandle from LoadedImage (offset 24)
+   467 0000058B 488B05EA050000              mov rax, [v_lip]
+   468 00000592 488B4018                    mov rax, [rax + 24]             ; LIP->DeviceHandle
+   469 00000596 488905E7050000              mov [v_devhandle], rax
+   470                                  
+   471                                      ; HandleProtocol(DeviceHandle, &SFS_GUID, &sfs_ptr)
+   472 0000059D 488B0DA4050000              mov rcx, [v_bs]
+   473 000005A4 488B8198000000              mov rax, [rcx + BS_HANDLEPROTO]
+   474 000005AB 488B0DD2050000              mov rcx, [v_devhandle]
+   475 000005B2 488D158B020000              lea rdx, [sfs_guid]
+   476 000005B9 4C8D05CC050000              lea r8, [v_sfs]
+   477 000005C0 FFD0                        call rax
+   478 000005C2 4885C0                      test rax, rax
+   479 000005C5 0F85C8000000                jnz .lk_fail_sfs
+   480                                  
+   481                                      ; OpenVolume(sfs, &root)
+   482 000005CB 488B1DBA050000              mov rbx, [v_sfs]
+   483 000005D2 4889D9                      mov rcx, rbx
+   484 000005D5 488D15B8050000              lea rdx, [v_root]
+   485 000005DC 488B4308                    mov rax, [rbx + SFS_OPENVOL]
+   486 000005E0 FFD0                        call rax
+   487 000005E2 4885C0                      test rax, rax
+   488 000005E5 0F85B6000000                jnz .lk_fail_vol
+   489                                  
+   490                                      ; Open(\EFI\BOOT\KERNEL.BIN, &file, EFI_FILE_MODE_READ=1, 0)
+   491 000005EB 488B1DA2050000              mov rbx, [v_root]
+   492 000005F2 4889D9                      mov rcx, rbx                     ; root handle (This)
+   493 000005F5 488D15A0050000              lea rdx, [v_file]                ; &NewHandle output
+   494 000005FC 4C8D0507050000              lea r8, [kernel_path]            ; filename (UCS-2)
+   495 00000603 41B901000000                mov r9, 1                        ; Mode: Read
+   496 00000609 48C744242000000000          mov qword [rsp+32], 0            ; 5th arg: Attributes = 0
+   497 00000612 488B4308                    mov rax, [rbx + FP_OPEN]
+   498 00000616 FFD0                        call rax
+   499 00000618 4885C0                      test rax, rax
+   500 0000061B 0F858E000000                jnz .lk_fail_open
+   501                                  
+   502                                      ; Read the file into KERNEL_ADDR (0x100000)
+   503 00000621 48C744242800001000          mov qword [rsp+40], 1024*1024     ; Local: max read size (1MB)
+   504 0000062A 488B1D6B050000              mov rbx, [v_file]
+   505 00000631 4889D9                      mov rcx, rbx                     ; file handle (This)
+   506 00000634 488D542428                  lea rdx, [rsp+40]               ; &BufferSize (points to our local)
+   507 00000639 41B800001000                mov r8, KERNEL_ADDR              ; Buffer destination
+   508 0000063F 488B4320                    mov rax, [rbx + FP_READ]
+   509 00000643 FFD0                        call rax
+   510 00000645 4885C0                      test rax, rax
+   511 00000648 7573                        jnz .lk_fail_read
+   512                                  
+   513                                      ; Save actual bytes read
+   514 0000064A 488B442428                  mov rax, [rsp+40]
+   515 0000064F 4889054E050000              mov [v_ksize], rax
+   516                                  
+   517                                      ; Close file
+   518 00000656 488B1D3F050000              mov rbx, [v_file]
+   519 0000065D 4889D9                      mov rcx, rbx
+   520 00000660 488B4310                    mov rax, [rbx + FP_CLOSE]
+   521 00000664 FFD0                        call rax
+   522                                  
+   523                                      ; Close root
+   524 00000666 488B1D27050000              mov rbx, [v_root]
+   525 0000066D 4889D9                      mov rcx, rbx
+   526 00000670 488B4310                    mov rax, [rbx + FP_CLOSE]
+   527 00000674 FFD0                        call rax
+   528                                  
+   529                                      ; Verify kernel loaded (first 4 bytes != 0)
+   530 00000676 8B042500001000              mov eax, [abs KERNEL_ADDR]
+   531 0000067D 85C0                        test eax, eax
+   532 0000067F 7448                        jz .lk_fail
+   533                                  
+   534 00000681 31C0                        xor eax, eax                     ; Success
+   535 00000683 EB49                        jmp .lk_done
+   536                                  
+   537                                  .lk_fail_lip:
+   538 00000685 488D150C040000              lea rdx, [str_dbg_lip]
+   539 0000068C E833FDFFFF                  call print
+   540 00000691 EB36                        jmp .lk_fail
+   541                                  .lk_fail_sfs:
+   542 00000693 488D1514040000              lea rdx, [str_dbg_sfs]
+   543 0000069A E825FDFFFF                  call print
+   544 0000069F EB28                        jmp .lk_fail
+   545                                  .lk_fail_vol:
+   546 000006A1 488D151C040000              lea rdx, [str_dbg_vol]
+   547 000006A8 E817FDFFFF                  call print
+   548 000006AD EB1A                        jmp .lk_fail
+   549                                  .lk_fail_open:
+   550 000006AF 488D1524040000              lea rdx, [str_dbg_open]
+   551 000006B6 E809FDFFFF                  call print
+   552 000006BB EB0C                        jmp .lk_fail
+   553                                  .lk_fail_read:
+   554 000006BD 488D152E040000              lea rdx, [str_dbg_read]
+   555 000006C4 E8FBFCFFFF                  call print
+   556                                  
+   557                                  .lk_fail:
+   558 000006C9 B801000000                  mov eax, 1
+   559                                  
+   560                                  .lk_done:
+   561 000006CE 4883C438                    add rsp, 56
+   562 000006D2 415E                        pop r14
+   563 000006D4 415D                        pop r13
+   564 000006D6 415C                        pop r12
+   565 000006D8 5B                          pop rbx
+   566 000006D9 C3                          ret
+   567                                  
+   568                                  ; ============================================================================
+   569                                  ; SETUP_PAGING - Build identity-mapped page tables at 0x70000
+   570                                  ; Maps first 4GB with 2MB pages (same as BIOS path)
+   571                                  ; ============================================================================
+   572                                  setup_paging:
+   573 000006DA 53                          push rbx
+   574 000006DB 4154                        push r12
+   575                                  
+   576                                      ; Clear page table area (24KB: PML4 + PDPT + 4*PD)
+   577 000006DD BF00000700                  mov rdi, PAGE_TBL_ADDR
+   578 000006E2 31C0                        xor eax, eax
+   579 000006E4 B900180000                  mov ecx, (6 * 4096) / 4         ; 6 pages, clear as dwords
+   580 000006E9 F3AB                        rep stosd
+   581                                  
+   582                                      ; PML4[0] -> PDPT at 0x71000
+   583 000006EB BF00000700                  mov rdi, PAGE_TBL_ADDR           ; 0x70000
+   584 000006F0 48C70703100700              mov qword [rdi], 0x71000 | 3     ; Present + Writable
+   585                                  
+   586                                      ; PDPT[0..3] -> PD tables at 0x72000..0x75000
+   587 000006F7 BF00100700                  mov rdi, PAGE_TBL_ADDR + 0x1000  ; 0x71000 = PDPT
+   588 000006FC 48C70703200700              mov qword [rdi],    0x72000 | 3
+   589 00000703 48C7470803300700            mov qword [rdi+8],  0x73000 | 3
+   590 0000070B 48C7471003400700            mov qword [rdi+16], 0x74000 | 3
+   591 00000713 48C7471803500700            mov qword [rdi+24], 0x75000 | 3
+   592                                  
+   593                                      ; Fill 4 Page Directories: 512 entries each, 2MB pages
+   594                                      ; Entry format: physical_addr | 0x83 (Present + Writable + PageSize=2MB)
+   595 0000071B BF00200700                  mov rdi, PAGE_TBL_ADDR + 0x2000  ; 0x72000 = first PD
+   596 00000720 4831DB                      xor rbx, rbx                     ; Starting physical address = 0
+   597 00000723 41BC00080000                mov r12d, 512 * 4                ; Total entries across 4 PDs
+   598                                  
+   599                                  .pt_loop:
+   600 00000729 4889D8                      mov rax, rbx
+   601 0000072C 480D83000000                or rax, 0x83                     ; Present | Writable | PS (2MB)
+   602 00000732 488907                      mov [rdi], rax
+   603 00000735 4883C708                    add rdi, 8
+   604 00000739 4881C300002000              add rbx, 0x200000               ; Next 2MB
+   605 00000740 41FFCC                      dec r12d
+   606 00000743 75E4                        jnz .pt_loop
+   607                                  
+   608 00000745 415C                        pop r12
+   609 00000747 5B                          pop rbx
+   610 00000748 C3                          ret
+   611                                  
+   612                                  ; ============================================================================
+   613                                  ; DO_EXIT_BOOT_SERVICES
+   614                                  ; Returns: RAX = 0 on success, nonzero on failure
+   615                                  ; ============================================================================
+   616                                  do_exit_boot_services:
+   617 00000749 53                          push rbx
+   618 0000074A 4154                        push r12
+   619 0000074C 4883EC58                    sub rsp, 88                      ; 16+88=104 → 8 mod 16 (aligned for calls)
+   620                                  
+   621                                      ; Stack layout (from RSP):
+   622                                      ;   [rsp+0..31]  = shadow space for calls
+   623                                      ;   [rsp+32]     = 5th arg slot for GetMemoryMap
+   624                                      ;   [rsp+48]     = mmap_size (local)
+   625                                      ;   [rsp+56]     = map_key (local)
+   626                                      ;   [rsp+64]     = desc_size (local)
+   627                                      ;   [rsp+72]     = desc_version (local)
+   628                                  
+   629 00000750 48C744243000400000          mov qword [rsp+48], 16384       ; mmap_size
+   630 00000759 48C744243800000000          mov qword [rsp+56], 0           ; map_key
+   631 00000762 48C744244000000000          mov qword [rsp+64], 0           ; desc_size
+   632 0000076B 48C744244800000000          mov qword [rsp+72], 0           ; desc_version
+   633                                  
+   634                                      ; AllocatePool(EfiLoaderData=2, 16384, &buffer)
+   635 00000774 488B0DCD030000              mov rcx, [v_bs]
+   636 0000077B 488B4140                    mov rax, [rcx + BS_ALLOCPOOL]
+   637 0000077F B902000000                  mov ecx, 2                       ; EfiLoaderData
+   638 00000784 BA00400000                  mov rdx, 16384                   ; size
+   639 00000789 4C8D051C040000              lea r8, [v_mmap_buf]             ; &buffer
+   640 00000790 FFD0                        call rax
+   641 00000792 4885C0                      test rax, rax
+   642 00000795 7562                        jnz .eb_fail
+   643                                  
+   644                                      ; GetMemoryMap(&mmap_size, buffer, &map_key, &desc_size, &desc_ver)
+   645                                  .eb_retry:
+   646 00000797 48C744243000400000          mov qword [rsp+48], 16384       ; Reset size
+   647 000007A0 488B0DA1030000              mov rcx, [v_bs]
+   648 000007A7 488B4138                    mov rax, [rcx + BS_GETMEMMAP]
+   649 000007AB 488D4C2430                  lea rcx, [rsp+48]               ; &mmap_size
+   650 000007B0 488B15F5030000              mov rdx, [v_mmap_buf]           ; buffer
+   651 000007B7 4C8D442438                  lea r8, [rsp+56]                ; &map_key
+   652 000007BC 4C8D4C2440                  lea r9, [rsp+64]                ; &desc_size
+   653 000007C1 488D5C2448                  lea rbx, [rsp+72]
+   654 000007C6 48895C2420                  mov [rsp+32], rbx               ; 5th arg: &desc_version
+   655 000007CB FFD0                        call rax
+   656 000007CD 4885C0                      test rax, rax
+   657 000007D0 7527                        jnz .eb_fail
+   658                                  
+   659                                      ; ExitBootServices(ImageHandle, MapKey)
+   660 000007D2 488B0D6F030000              mov rcx, [v_bs]
+   661 000007D9 488B81E8000000              mov rax, [rcx + BS_EXITBOOT]
+   662 000007E0 488B0D51030000              mov rcx, [v_handle]
+   663 000007E7 488B542438                  mov rdx, [rsp+56]               ; map_key
+   664 000007EC FFD0                        call rax
+   665 000007EE 4885C0                      test rax, rax
+   666 000007F1 7402                        jz .eb_ok
+   667                                  
+   668                                      ; Retry once (memory map may have changed)
+   669 000007F3 EBA2                        jmp .eb_retry
+   670                                  
+   671                                  .eb_ok:
+   672 000007F5 31C0                        xor eax, eax
+   673 000007F7 EB05                        jmp .eb_done
+   674                                  
+   675                                  .eb_fail:
+   676 000007F9 B801000000                  mov eax, 1
+   677                                  
+   678                                  .eb_done:
+   679 000007FE 4883C458                    add rsp, 88
+   680 00000802 415C                        pop r12
+   681 00000804 5B                          pop rbx
+   682 00000805 C3                          ret
+   683                                  
+   684                                  ; ============================================================================
+   685                                  ; 64-BIT GDT (matches kernel expectation: code=0x08, data=0x10)
+   686                                  ; ============================================================================
+   687 00000806 90<rep Ah>              align 16
+   688                                  gdt64:
+   689 00000810 0000000000000000            dq 0                             ; Null descriptor
+   690                                  
+   691                                  gdt64_code:
+   692 00000818 0000                        dw 0x0000                        ; Limit (ignored in 64-bit)
+   693 0000081A 0000                        dw 0x0000                        ; Base
+   694 0000081C 00                          db 0x00                          ; Base
+   695 0000081D 9A                          db 10011010b                     ; Present, Ring0, Code, Exec/Read
+   696 0000081E 20                          db 00100000b                     ; L=1 (64-bit), D=0
+   697 0000081F 00                          db 0x00                          ; Base
+   698                                  
+   699                                  gdt64_data:
+   700 00000820 0000                        dw 0x0000
+   701 00000822 0000                        dw 0x0000
+   702 00000824 00                          db 0x00
+   703 00000825 92                          db 10010010b                     ; Present, Ring0, Data, Read/Write
+   704 00000826 00                          db 00000000b
+   705 00000827 00                          db 0x00
+   706                                  
+   707                                  gdt64_end:
+   708                                  
+   709                                  gdt64_ptr:
+   710 00000828 1700                        dw gdt64_end - gdt64 - 1
+   711 0000082A [1008000000000000]          dq gdt64
+   712                                  
+   713                                  ; ============================================================================
+   714                                  ; PROTOCOL GUIDs
+   715                                  ; ============================================================================
+   716 00000832 90<rep 2h>              align 4
+   717                                  gop_guid:
+   718 00000834 DEA94290                    dd 0x9042a9de
+   719 00000838 DC23384A                    dw 0x23dc, 0x4a38
+   720 0000083C 96FB7ADED080516A            db 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a
+   721                                  
+   722                                  sfs_guid:
+   723                                      ; EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID
+   724                                      ; 964e5b22-6459-11d2-8e39-00a0c969723b
+   725 00000844 225B4E96                    dd 0x964e5b22
+   726 00000848 5964D211                    dw 0x6459, 0x11d2
+   727 0000084C 8E3900A0C969723B            db 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b
+   728                                  
+   729                                  lip_guid:
+   730                                      ; EFI_LOADED_IMAGE_PROTOCOL_GUID
+   731                                      ; 5b1b31a1-9562-11d2-8e3f-00a0c969723b
+   732 00000854 A1311B5B                    dd 0x5b1b31a1
+   733 00000858 6295D211                    dw 0x9562, 0x11d2
+   734 0000085C 8E3F00A0C969723B            db 0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b
+   735                                  
+   736                                  ; ============================================================================
+   737                                  ; UCS-2 STRINGS
+   738                                  ; ============================================================================
+   739                                  align 2
+   740                                  str_banner:   u `NexusOS v3.0 UEFI Loader\r\n`
+   740                              <1> str_banner: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 00000864 4E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000866 6500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000868 7800                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000086A 7500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000086C 7300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000086E 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000870 5300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000872 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000874 7600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000876 3300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000878 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000087A 3000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000087C 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000087E 5500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000880 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000882 4600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000884 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000886 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000888 4C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000088A 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000088C 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000088E 6400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000890 6500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000892 7200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000894 0D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000896 0A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 00000898 0000                <1>  dw 0
+   741                                  str_gop:      u `  [1/4] GOP Init...`
+   741                              <1> str_gop: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 0000089A 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000089C 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000089E 5B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008A0 3100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008A2 2F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008A4 3400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008A6 5D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008A8 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008AA 4700                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008AC 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008AE 5000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008B0 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008B2 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008B4 6E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008B6 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008B8 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008BA 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008BC 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008BE 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 000008C0 0000                <1>  dw 0
+   742                                  str_kernel:   u `  [2/4] Loading KERNEL.BIN...`
+   742                              <1> str_kernel: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 000008C2 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008C4 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008C6 5B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008C8 3200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008CA 2F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008CC 3400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008CE 5D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008D0 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008D2 4C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008D4 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008D6 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008D8 6400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008DA 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008DC 6E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008DE 6700                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008E0 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008E2 4B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008E4 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008E6 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008E8 4E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008EA 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008EC 4C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008EE 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008F0 4200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008F2 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008F4 4E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008F6 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008F8 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000008FA 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 000008FC 0000                <1>  dw 0
+   743                                  str_paging:   u `  [3/4] Page tables...`
+   743                              <1> str_paging: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 000008FE 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000900 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000902 5B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000904 3300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000906 2F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000908 3400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000090A 5D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000090C 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000090E 5000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000910 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000912 6700                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000914 6500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000916 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000918 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000091A 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000091C 6200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000091E 6C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000920 6500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000922 7300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000924 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000926 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000928 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 0000092A 0000                <1>  dw 0
+   744                                  str_exit:     u `  [4/4] ExitBootServices...`
+   744                              <1> str_exit: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 0000092C 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000092E 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000930 5B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000932 3400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000934 2F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000936 3400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000938 5D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000093A 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000093C 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000093E 7800                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000940 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000942 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000944 4200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000946 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000948 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000094A 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000094C 5300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000094E 6500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000950 7200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000952 7600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000954 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000956 6300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000958 6500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000095A 7300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000095C 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000095E 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000960 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 00000962 0000                <1>  dw 0
+   745                                  str_ok:       u ` OK\r\n`
+   745                              <1> str_ok: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 00000964 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000966 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000968 4B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000096A 0D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000096C 0A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 0000096E 0000                <1>  dw 0
+   746                                  str_fail_gop: u ` FAIL\r\nERROR: Cannot initialize GOP graphics.\r\n`
+   746                              <1> str_fail_gop: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 00000970 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000972 4600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000974 4100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000976 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000978 4C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000097A 0D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000097C 0A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000097E 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000980 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000982 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000984 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000986 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000988 3A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000098A 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000098C 4300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000098E 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000990 6E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000992 6E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000994 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000996 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000998 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000099A 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000099C 6E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 0000099E 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009A0 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009A2 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009A4 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009A6 6C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009A8 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009AA 7A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009AC 6500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009AE 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009B0 4700                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009B2 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009B4 5000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009B6 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009B8 6700                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009BA 7200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009BC 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009BE 7000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009C0 6800                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009C2 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009C4 6300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009C6 7300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009C8 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009CA 0D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009CC 0A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 000009CE 0000                <1>  dw 0
+   747                                  str_fail_kernel: u ` FAIL\r\nERROR: Cannot load KERNEL.BIN from EFI partition.\r\n`
+   747                              <1> str_fail_kernel: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 000009D0 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009D2 4600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009D4 4100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009D6 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009D8 4C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009DA 0D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009DC 0A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009DE 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009E0 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009E2 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009E4 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009E6 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009E8 3A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009EA 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009EC 4300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009EE 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009F0 6E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009F2 6E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009F4 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009F6 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009F8 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009FA 6C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009FC 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 000009FE 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A00 6400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A02 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A04 4B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A06 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A08 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A0A 4E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A0C 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A0E 4C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A10 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A12 4200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A14 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A16 4E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A18 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A1A 6600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A1C 7200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A1E 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A20 6D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A22 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A24 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A26 4600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A28 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A2A 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A2C 7000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A2E 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A30 7200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A32 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A34 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A36 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A38 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A3A 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A3C 6E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A3E 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A40 0D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A42 0A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 00000A44 0000                <1>  dw 0
+   748                                  str_fail_exit:   u ` FAIL\r\nERROR: ExitBootServices failed.\r\n`
+   748                              <1> str_fail_exit: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A46 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A48 4600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A4A 4100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A4C 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A4E 4C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A50 0D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A52 0A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A54 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A56 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A58 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A5A 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A5C 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A5E 3A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A60 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A62 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A64 7800                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A66 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A68 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A6A 4200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A6C 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A6E 6F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A70 7400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A72 5300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A74 6500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A76 7200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A78 7600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A7A 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A7C 6300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A7E 6500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A80 7300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A82 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A84 6600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A86 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A88 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A8A 6C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A8C 6500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A8E 6400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A90 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A92 0D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A94 0A00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 00000A96 0000                <1>  dw 0
+   749                                  
+   750                                  str_dbg_lip:  u `[LIP fail]`
+   750                              <1> str_dbg_lip: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A98 5B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A9A 4C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A9C 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000A9E 5000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AA0 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AA2 6600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AA4 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AA6 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AA8 6C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AAA 5D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 00000AAC 0000                <1>  dw 0
+   751                                  str_dbg_sfs:  u `[SFS fail]`
+   751                              <1> str_dbg_sfs: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AAE 5B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AB0 5300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AB2 4600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AB4 5300                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AB6 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AB8 6600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000ABA 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000ABC 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000ABE 6C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AC0 5D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 00000AC2 0000                <1>  dw 0
+   752                                  str_dbg_vol:  u `[VOL fail]`
+   752                              <1> str_dbg_vol: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AC4 5B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AC6 5600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AC8 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000ACA 4C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000ACC 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000ACE 6600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AD0 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AD2 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AD4 6C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AD6 5D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 00000AD8 0000                <1>  dw 0
+   753                                  str_dbg_open: u `[OPEN fail]`
+   753                              <1> str_dbg_open: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 00000ADA 5B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000ADC 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000ADE 5000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AE0 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AE2 4E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AE4 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AE6 6600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AE8 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AEA 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AEC 6C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AEE 5D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 00000AF0 0000                <1>  dw 0
+   754                                  str_dbg_read: u `[READ fail]`
+   754                              <1> str_dbg_read: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AF2 5B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AF4 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AF6 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AF8 4100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AFA 4400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AFC 2000                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000AFE 6600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B00 6100                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B02 6900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B04 6C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B06 5D00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 00000B08 0000                <1>  dw 0
+   755                                  
+   756                                  kernel_path:  u `\\EFI\\BOOT\\KERNEL.BIN`
+   756                              <1> kernel_path: 
+    64                              <1>  %assign %%i 1
+    65                              <1>  %strlen %%len %1
+    66                              <1>  %rep %%len
+    67                              <1>  %substr %%c %1 %%i
+    68                              <1>  dw %%c
+    69                              <1>  %assign %%i %%i+1
+    70                              <1>  %endrep
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B0A 5C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B0C 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B0E 4600                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B10 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B12 5C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B14 4200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B16 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B18 4F00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B1A 5400                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B1C 5C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B1E 4B00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B20 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B22 5200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B24 4E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B26 4500                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B28 4C00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B2A 2E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B2C 4200                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B2E 4900                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    67                              <2>  %substr %%c %1 %%i
+    68 00000B30 4E00                <2>  dw %%c
+    69                              <2>  %assign %%i %%i+1
+    71 00000B32 0000                <1>  dw 0
+   757                                  
+   758                                  ; ============================================================================
+   759                                  ; DATA / BSS
+   760                                  ; ============================================================================
+   761 00000B34 90<rep 4h>              align 8
+   762 00000B38 0000000000000000        v_handle:   dq 0
+   763 00000B40 0000000000000000        v_systab:   dq 0
+   764 00000B48 0000000000000000        v_bs:       dq 0
+   765 00000B50 0000000000000000        v_conout:   dq 0
+   766                                  
+   767 00000B58 0000000000000000        v_gop:      dq 0
+   768 00000B60 0000000000000000        v_gopmode:  dq 0
+   769 00000B68 0000000000000000        v_fb:       dq 0
+   770 00000B70 00000000                v_scrw:     dd 0
+   771 00000B74 00000000                v_scrh:     dd 0
+   772 00000B78 00000000                v_pitch:    dd 0
+   773                                  
+   774 00000B7C 0000000000000000        v_lip:      dq 0
+   775 00000B84 0000000000000000        v_devhandle: dq 0
+   776 00000B8C 0000000000000000        v_sfs:      dq 0
+   777 00000B94 0000000000000000        v_root:     dq 0
+   778 00000B9C 0000000000000000        v_file:     dq 0
+   779 00000BA4 0000000000000000        v_ksize:    dq 0
+   780                                  
+   781 00000BAC 0000000000000000        v_mmap_buf: dq 0
+   782 00000BB4 0000000000000000        v_claim_addr: dq 0
+   783                                  
+   784                                  ; Pad to exact .text section size
+   785 00000BBC 00<rep F644h>           times (HEADER_SIZE + TEXT_RAWSIZE - ($-$$)) db 0
+   786                                  
+   787                                  ; .reloc section (minimal, required by UEFI)
+   788                                  reloc_s:
+   789 00010200 001000000C000000            dd 0x1000, 12
+   790 00010208 00000000                    dw 0, 0
+   791                                  
+   792                                  ; Pad .reloc to file size
+   793 0001020C 00<rep 1F4h>            times (HEADER_SIZE + TEXT_RAWSIZE + RELOC_FSIZE - ($-$$)) db 0

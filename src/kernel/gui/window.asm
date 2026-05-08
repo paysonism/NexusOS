@@ -7,23 +7,7 @@ section .text
 
 %include "constants.inc"
 %include "macros.inc"
-
-; Window structure layout (256 bytes per window, qword fields):
-;   0: ID          8: X           16: Y          24: Width
-;  32: Height     40: Flags       48: Title (64 bytes inline)
-; 112: draw_fn   120: key_fn     128: click_fn   136: app_data
-
-WIN_OFF_ID      equ 0
-WIN_OFF_X       equ 8
-WIN_OFF_Y       equ 16
-WIN_OFF_W       equ 24
-WIN_OFF_H       equ 32
-WIN_OFF_FLAGS   equ 40
-WIN_OFF_TITLE   equ 48
-WIN_OFF_DRAWFN  equ 112
-WIN_OFF_KEYFN   equ 120
-WIN_OFF_CLICKFN equ 128
-WIN_OFF_APPDATA equ 136
+%include "window_layout.inc"
 
 section .text
 global wm_init
@@ -52,8 +36,9 @@ extern call_app_l3
 extern ser_print_hex64
 extern process_kill_window
 extern process_create
+extern l3_slot_base
 
-wm_init:
+FN_BEGIN wm_init, 0, 0, FN_RET_VOID
     ; Zero out window pool
     mov rdi, WINDOW_POOL_ADDR
     mov rcx, MAX_WINDOWS * WINDOW_STRUCT_SIZE
@@ -62,15 +47,18 @@ wm_init:
     mov qword [wm_window_count], 0
     mov qword [wm_drag_window_id], -1
     mov qword [wm_focused_window], -1
+    FN_END wm_init
     ret
 
 ; Create window (simple): RDI=title, RSI=x, RDX=y, RCX=w, R8=h
 ; Returns RAX = window ID (-1 on fail)
-wm_create_window:
+FN_BEGIN wm_create_window, 5, 0, FN_RET_HANDLE
     xor r9d, r9d
+    FN_END wm_create_window
     jmp wm_do_create
 
-wm_create_window_ex:
+FN_BEGIN wm_create_window_ex, 6, 0, FN_RET_HANDLE
+    FN_END wm_create_window_ex
     jmp wm_do_create
 
 wm_do_create:
@@ -86,6 +74,27 @@ wm_do_create:
     mov r14, rdx         ; y
     mov r15, rcx         ; w
     ; r8 = h, r9 = draw_fn already in regs
+
+    mov rax, r13
+    or  rax, r14
+    or  rax, r15
+    or  rax, r8
+    shr rax, 32
+    jnz .fail
+    cmp r15d, MIN_WINDOW_W
+    jb .fail
+    cmp r8d, MIN_WINDOW_H
+    jb .fail
+    mov eax, r13d
+    add eax, r15d
+    jc .fail
+    cmp eax, SCREEN_WIDTH
+    ja .fail
+    mov eax, r14d
+    add eax, r8d
+    jc .fail
+    cmp eax, SCREEN_HEIGHT
+    ja .fail
 
     cmp qword [wm_window_count], MAX_WINDOWS
     jge .fail
@@ -154,9 +163,10 @@ wm_do_create:
 
     ; Set draw callback
     mov [rbx + WIN_OFF_DRAWFN], r9
-    mov eax, ecx
-    imul rax, APP_SLOT_SIZE
-    add rax, APP_DATA_ADDR
+    push rcx
+    movzx edi, cx
+    call l3_slot_base
+    pop rcx
     mov [rbx + WIN_OFF_APPDATA], rax
 
     ; Register process
@@ -176,6 +186,7 @@ wm_do_create:
 .fail:
     mov rax, -1
 .done:
+    FN_END wm_create_window_ex
     pop r15
     pop r14
     pop r13
@@ -184,7 +195,7 @@ wm_do_create:
     ret
 
 ; Close window by ID: RDI = window ID
-wm_close_window:
+FN_BEGIN wm_close_window, 1, 0, FN_RET_VOID
     ; Use unsigned compare: jge treats rdi as signed, so a caller-supplied
     ; negative index (e.g. -1) falls through and lets the code below write
     ; WIN_OFF_FLAGS at WINDOW_POOL_ADDR + rdi*256 -- a limited kernel write.
@@ -199,18 +210,65 @@ wm_close_window:
     add rax, WINDOW_POOL_ADDR
     mov qword [rax + WIN_OFF_FLAGS], 0   ; Clear all flags (inactive)
     dec qword [wm_window_count]
-    ; If this was focused, clear focus
+    ; If this was focused, move focus to another active visible window so the
+    ; user can keep working after closing a launched document.
     cmp [wm_focused_window], rdi
     jne .close_nofocus
-    mov qword [wm_focused_window], -1
+    call wm_focus_top_active
 .close_nofocus:
     pop rbx
     pop rax
 .close_ret:
+    FN_END wm_close_window
+    ret
+
+wm_focus_top_active:
+    push rax
+    push rbx
+    push rcx
+    mov rcx, MAX_WINDOWS
+    dec rcx
+.fta_loop:
+    cmp rcx, 0
+    jl .fta_none
+    mov rax, rcx
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    test qword [rax + WIN_OFF_FLAGS], WF_ACTIVE
+    jz .fta_next
+    test qword [rax + WIN_OFF_FLAGS], WF_VISIBLE
+    jz .fta_next
+    test qword [rax + WIN_OFF_FLAGS], WF_MINIMIZED
+    jnz .fta_next
+    mov rbx, WINDOW_POOL_ADDR
+    xor eax, eax
+.fta_clear_loop:
+    cmp eax, MAX_WINDOWS
+    je .fta_set
+    and qword [rbx + WIN_OFF_FLAGS], ~WF_FOCUSED
+    add rbx, WINDOW_STRUCT_SIZE
+    inc eax
+    jmp .fta_clear_loop
+.fta_set:
+    mov rax, rcx
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    or qword [rax + WIN_OFF_FLAGS], WF_FOCUSED
+    mov [wm_focused_window], rcx
+    jmp .fta_done
+.fta_next:
+    dec rcx
+    jmp .fta_loop
+.fta_none:
+    mov qword [wm_focused_window], -1
+.fta_done:
+    pop rcx
+    pop rbx
+    pop rax
     ret
 
 ; Draw all windows (painter's algorithm)
-wm_draw_desktop:
+FN_BEGIN wm_draw_desktop, 0, 0, FN_RET_VOID
     push rbx
     push r12
 
@@ -265,12 +323,13 @@ wm_draw_desktop:
     call wm_draw_window
 
 .draw_done:
+    FN_END wm_draw_desktop
     pop r12
     pop rbx
     ret
 
 ; Draw a specific window: RDI = window ID
-wm_draw_window:
+FN_BEGIN wm_draw_window, 1, 0, FN_RET_VOID
     push rbx
     push r12
     push r13
@@ -454,6 +513,7 @@ wm_draw_window:
     call render_text
 
 .content_done:
+    FN_END wm_draw_window
     pop r15
     pop r14
     pop r13
@@ -462,15 +522,17 @@ wm_draw_window:
     ret
 
 ; Handle mouse input: RDI=mouseX, RSI=mouseY, RDX=buttons
-wm_handle_mouse_event:
+FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     push r12
     push r13
     push r14
+    push r15
     push rbx
 
     mov r12, rdi         ; mouseX
     mov r13, rsi         ; mouseY
     mov r14, rdx         ; buttons
+    xor r15d, r15d       ; handled client click
 
     ; If dragging, handle drag (hold-and-release mode)
     cmp qword [wm_drag_window_id], -1
@@ -577,6 +639,10 @@ wm_handle_mouse_event:
     mov r8, [rax + WIN_OFF_CLICKFN]
     test r8, r8
     jz .set_focus
+    test qword [wm_last_buttons], 1
+    jnz .client_click_already_down
+    mov r10, [wm_focused_window]
+    mov [wm_click_focus_before], r10
     SER 'c'
     push rdi
     mov rdi, rax
@@ -601,6 +667,19 @@ wm_handle_mouse_event:
     call call_app_l3
     SER 'n'
 .click_done:
+    ; A client click can launch or focus another window. Keep that new focus
+    ; instead of forcing focus back to the clicked window after the callback.
+    mov rax, [wm_focused_window]
+    cmp rax, [wm_click_focus_before]
+    jne .click_preserve_focus
+    mov r15d, 1
+    jmp .set_focus
+.click_preserve_focus:
+    mov eax, 1
+    jmp .mouse_ret
+
+.client_click_already_down:
+    mov r15d, 1
 
 .set_focus:
     mov rcx, WINDOW_POOL_ADDR
@@ -619,7 +698,13 @@ wm_handle_mouse_event:
     add rax, WINDOW_POOL_ADDR
     or qword [rax + WIN_OFF_FLAGS], WF_FOCUSED
     mov [wm_focused_window], rbx
+    test r15d, r15d
+    jnz .handled_mouse_ret
     jmp .mouse_done
+
+.handled_mouse_ret:
+    mov eax, 1
+    jmp .mouse_ret
 
 .desktop_click:
     mov qword [wm_focused_window], -1
@@ -689,7 +774,10 @@ wm_handle_mouse_event:
     je .mouse_ret
     mov eax, 1                  ; return 1 = drag is active, skip other handlers
 .mouse_ret:
+    FN_END wm_handle_mouse_event
+    mov [wm_last_buttons], r14
     pop rbx
+    pop r15
     pop r14
     pop r13
     pop r12
@@ -698,7 +786,7 @@ wm_handle_mouse_event:
 ; Draw drag outline (called from main loop when dragging)
 ; Uses wm_drag_preview_x/y/w/h to draw a 2px rectangle outline
 global wm_draw_drag_outline
-wm_draw_drag_outline:
+FN_BEGIN wm_draw_drag_outline, 0, 0, FN_RET_VOID
     cmp qword [wm_drag_window_id], -1
     je .outline_ret
 
@@ -755,6 +843,7 @@ wm_draw_drag_outline:
     pop r12
     pop rbx
 .outline_ret:
+    FN_END wm_draw_drag_outline
     ret
 
 wm_mark_outline_dirty:
@@ -794,7 +883,7 @@ wm_mark_outline_dirty:
     ret
 
 ; Find topmost window at (X, Y): RDI=x, RSI=y -> RAX=window ID or -1
-wm_get_window_at:
+FN_BEGIN wm_get_window_at, 2, 0, FN_RET_HANDLE
     push r12
 
     ; Check focused window first (it's drawn on top)
@@ -861,6 +950,7 @@ wm_get_window_at:
 .not_found:
     mov rax, -1
 .found:
+    FN_END wm_get_window_at
     pop r12
     ret
 
@@ -873,6 +963,7 @@ global wm_window_count
 global wm_focused_window
 wm_window_count   dq 0
 wm_focused_window dq -1
+wm_click_focus_before dq -1
 wm_drag_window_id dq -1
 wm_drag_off_x     dq 0
 wm_drag_off_y     dq 0
@@ -884,5 +975,6 @@ wm_drag_preview_x dq 0          ; outline X position
 wm_drag_preview_y dq 0          ; outline Y position
 wm_drag_preview_w dq 0          ; outline width
 wm_drag_preview_h dq 0          ; outline height
+wm_last_buttons   dq 0
 
 section .text

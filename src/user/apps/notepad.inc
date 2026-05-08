@@ -602,7 +602,8 @@ app_notepad_click:
     div ecx
     ; Clamp to line length
     mov ecx, [np_cursor_row]
-    mov edx, [np_line_len + rcx * 4]
+    lea rbx, [rel np_line_len]
+    mov edx, [rbx + rcx * 4]
     cmp eax, edx
     jle .np_col_set
     mov eax, edx
