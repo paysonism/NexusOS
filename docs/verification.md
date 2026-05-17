@@ -2,7 +2,7 @@
 
 This page is normative for structural edits.
 
-Run `test_verify_all.ps1` after any include graph, L3, syscall, GUI, filesystem,
+Run `scripts/test/test_verify_all.ps1` after any include graph, L3, syscall, GUI, filesystem,
 boot, driver, Cache32Max, or SMP change.
 
 ## Current Stages
@@ -25,8 +25,8 @@ boot, driver, Cache32Max, or SMP change.
 
 ## Serial Gates
 
-- `test_smoke_uefi.ps1` checks boot, CPU/cache/memory, GUI, and marker output.
-- `test_l3_app_markers.ps1` launches Notepad through serial, sends text input,
+- `scripts/test/test_smoke_uefi.ps1` checks boot, CPU/cache/memory, GUI, and marker output.
+- `scripts/test/test_l3_app_markers.ps1` launches Notepad through serial, sends text input,
   and requires app launch, success return, and L3 callback markers.
-- `test_cache32_boot.ps1` checks the strict 32MB BIOS profile.
-- `test_smp_boot.ps1` validates SMP marker counters from the Cache32Max log.
+- `scripts/test/test_cache32_boot.ps1` checks the strict 32MB BIOS profile.
+- `scripts/test/test_smp_boot.ps1` validates SMP marker counters from the Cache32Max log.

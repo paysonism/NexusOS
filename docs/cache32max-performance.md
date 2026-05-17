@@ -8,8 +8,8 @@ frequency, memory layout, and SMP status.
 ## Build and Run
 
 ```powershell
-.\build_uefi.ps1 -PerfProfile Cache32Max
-.\run_uefi.ps1 -PerfProfile Cache32Max
+.\scripts\build\build_uefi.ps1 -PerfProfile Cache32Max
+.\scripts\run\run_uefi.ps1 -PerfProfile Cache32Max
 ```
 
 The profile passes `NEXUS_CACHE32_MAX` to NASM and runs QEMU with:

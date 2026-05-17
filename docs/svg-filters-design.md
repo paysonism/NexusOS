@@ -242,7 +242,7 @@ extended accordingly:
   compile while recursive functions keep small frames.
 
 Each stage compiles and boots on its own. Never check in a stage that
-doesn't pass `build_uefi.ps1` and `test_verify_all.ps1`.
+doesn't pass `scripts/build/build_uefi.ps1` and `scripts/test/test_verify_all.ps1`.
 
 ---
 

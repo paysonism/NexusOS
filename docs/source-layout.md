@@ -66,6 +66,23 @@ Small assembly templates for new user callbacks and app experiments.
 Security regression probes and PoCs that should stay isolated from normal app
 code.
 
+## Script layout
+
+`scripts/build`
+Build entrypoints for BIOS, UEFI, and NexusHL-generated app output.
+
+`scripts/run`
+QEMU launch entrypoints for BIOS and UEFI profiles.
+
+`scripts/test`
+Verification and smoke-test entrypoints.
+
+`tools/build`
+Build internals used by the script entrypoints.
+
+`tools/debug`
+Ad hoc debugging helpers, serial capture tools, and one-off inspection scripts.
+
 ## Build entrypoint
 
 `src/kernel/kernel_build.asm`
@@ -75,11 +92,11 @@ built into `KERNEL.BIN`.
 ## Safe edit workflow
 
 1. Make a small move or code change.
-2. Run `powershell -ExecutionPolicy Bypass -File .\test_verify_all.ps1`
+2. Run `powershell -ExecutionPolicy Bypass -File .\scripts\test\test_verify_all.ps1`
 3. Check `build/smoke_uefi_serial.log` if the UEFI smoke gate fails.
 4. Only stack the next structural change after the verification pass.
 
-`test_source_guards.ps1` is part of the verification chain and protects the
+`scripts/test/test_source_guards.ps1` is part of the verification chain and protects the
 current syscall/window/Explorer regressions plus the split app layout markers.
 
 ## Current rule of thumb

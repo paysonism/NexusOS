@@ -14,7 +14,7 @@ $required = @(
     'src/include/window_layout.inc',
     'src/kernel/gui/window.asm',
     'src/kernel/fs/fat16.asm',
-    'test_verify_all.ps1'
+    'scripts/test/test_verify_all.ps1'
 )
 
 $text = Get-Content -Path $Ownership -Raw
