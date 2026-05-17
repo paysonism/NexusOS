@@ -1,5 +1,103 @@
 [
   {
+    "name": "app_hl_explorer_display_flags",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_display_set_flags",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "flags",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_display_set_mode",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "width",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "height",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "bpp",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_cursor_init",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_desktop_bg",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_desktop_set_bg",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "theme",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_display_native_width",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_display_native_height",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_display_current_width",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_display_current_height",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
     "name": "app_hl_explorer_ui_win_x",
     "argc": 1,
     "kindmask": 0,
@@ -410,6 +508,393 @@
     ]
   },
   {
+    "name": "app_hl_explorer_ui_button",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "label",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "bg",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_button_hit",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_section_title",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_caption",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_checkbox",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "checked",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "label",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_row_x",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "index",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_status_bar",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "label",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_modal_overlay",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "label",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "text",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "cursor",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "text_x",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_context_menu",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "count",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_context_menu_item",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "index",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "label",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "fg",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_ui_context_menu_hit",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "count",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_filename_to_83",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "src",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dst",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_format_bytes_size",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "value",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dst",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_fs_is_dir",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "entry",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
     "name": "app_hl_explorer_selected_entry",
     "argc": 0,
     "kindmask": 0,
@@ -438,7 +923,7 @@
     "args": []
   },
   {
-    "name": "app_hl_explorer_clear_text",
+    "name": "app_hl_explorer_clear_buf",
     "argc": 2,
     "kindmask": 0,
     "retkind": "FN_RET_SCALAR",
@@ -456,6 +941,13 @@
     ]
   },
   {
+    "name": "app_hl_explorer_dismiss_overlays",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
     "name": "app_hl_explorer_start_rename",
     "argc": 0,
     "kindmask": 0,
@@ -471,6 +963,116 @@
   },
   {
     "name": "app_hl_explorer_enter_selected",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_properties_drawfn_addr",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_open_properties",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_show_context_menu",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_explorer_draw_path_bar",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_draw_header",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_draw_row",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "i",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ent",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_draw_rows",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_draw_context_menu",
     "argc": 1,
     "kindmask": 0,
     "retkind": "FN_RET_SCALAR",
@@ -483,8 +1085,8 @@
     ]
   },
   {
-    "name": "app_hl_explorer_draw_overlay",
-    "argc": 6,
+    "name": "app_hl_explorer_draw_done_message",
+    "argc": 2,
     "kindmask": 0,
     "retkind": "FN_RET_SCALAR",
     "args": [
@@ -495,27 +1097,7 @@
       },
       {
         "index": 1,
-        "name": "label",
-        "kind": "FN_KIND_SCALAR"
-      },
-      {
-        "index": 2,
-        "name": "buf",
-        "kind": "FN_KIND_SCALAR"
-      },
-      {
-        "index": 3,
-        "name": "cursor",
-        "kind": "FN_KIND_SCALAR"
-      },
-      {
-        "index": 4,
-        "name": "color",
-        "kind": "FN_KIND_SCALAR"
-      },
-      {
-        "index": 5,
-        "name": "xoff",
+        "name": "w",
         "kind": "FN_KIND_SCALAR"
       }
     ]
@@ -529,6 +1111,24 @@
       {
         "index": 0,
         "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_handle_ctx_click",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cy",
         "kind": "FN_KIND_SCALAR"
       }
     ]
@@ -586,6 +1186,60 @@
   },
   {
     "name": "app_hl_explorer_key",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "k",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_properties_draw",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_properties_click",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_explorer_properties_key",
     "argc": 2,
     "kindmask": 0,
     "retkind": "FN_RET_SCALAR",

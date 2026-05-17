@@ -21,31 +21,35 @@ Primary source: `C:\Users\user\Documents\new\src\include\constants.inc`
 | Address | Meaning | Owner |
 |---|---|---|
 | `0x100000` | Kernel load address | bootloaders + `src/kernel/core/entry.asm` |
-| `0x200000` | Kernel stack top and IDT base region | `src/kernel/core/entry.asm`, `src/kernel/core/idt.asm`, `src/kernel/core/tss.asm` |
-| `0x210000` | Kernel data / heap start | shared kernel region |
-| `0x300000` | Physical-page bitmap | `src/kernel/core/memory.asm` |
+| `0xC00000` | Kernel stack top | `src/kernel/core/entry.asm` |
+| `0xC10000` | IDT base region | `src/kernel/core/idt.asm`, `src/kernel/core/tss.asm` |
+| `0xC20000` | Kernel data / heap start | shared kernel region |
+| `0xE00000` | Physical-page bitmap | `src/kernel/core/memory.asm` |
 
 ## Graphics and Windowing
 
 | Address | Meaning | Owner |
 |---|---|---|
-| `0x400000` | Display backbuffer | `src/kernel/drivers/display.asm`, `src/kernel/gui/render.asm` |
-| `0x700000` | Cursor background-save area | `src/kernel/gui/cursor.asm` |
-| `0x710000` | Window pool base | `src/kernel/gui/window.asm` |
-| `0x720000` | Event-buffer region | shared GUI/input region |
-| `0xA00000` | Saved backbuffer / drag/restore region | `src/kernel/gui/render.asm` |
+| `0x1000000` | Display backbuffer | `src/kernel/drivers/display.asm`, `src/kernel/gui/render.asm` |
+| `0x2400000` | Cursor background-save area | `src/kernel/gui/cursor.asm` |
+| `0x2410000` | Window pool base | `src/kernel/gui/window.asm` |
+| `0x2420000` | Event-buffer region | shared GUI/input region |
+| `0x3000000` | Liquid-metal wallpaper cache | `src/kernel/gui/window.asm` |
+| `0x3900000` | Glass-ribbons wallpaper cache | `src/kernel/gui/window.asm` |
+| `0x4200000` | Frosted-bloom wallpaper cache | `src/kernel/gui/window.asm` |
+| `0x4C00000` | Saved backbuffer / drag/restore region | `src/kernel/gui/render.asm` |
 
 In the `Cache32Max` profile, the GUI composition region is treated as the
-L3/LLC arena from `0x400000` to `0x1000000`. XHCI and FAT16 cold buffers are
+L3/LLC arena from `0x1000000` to `0x1700000`. XHCI and FAT16 cold buffers are
 moved outside this range.
 
 ## Ring-3 App Arenas and Runtime
 
 | Address | Meaning | Owner |
 |---|---|---|
-| `0x1000000` | App slot arena base | `src/kernel/proc/usermode.asm`, `src/kernel/gui/window.asm` |
-| `0x1000000 + slot * 0x100000` | Per-slot app arena | `src/kernel/proc/usermode.asm` |
-| `0x1800000` | Kernel-only syscall-stack region | `src/kernel/proc/usermode.asm`, `src/kernel/proc/syscall.asm` |
+| `0x2600000` | App slot arena base | `src/kernel/proc/usermode.asm`, `src/kernel/gui/window.asm` |
+| `0x2600000 + slot * 0x100000` | Per-slot app arena | `src/kernel/proc/usermode.asm` |
+| `0x2F00000` | Kernel-only syscall-stack region | `src/kernel/proc/usermode.asm`, `src/kernel/proc/syscall.asm` |
 
 ### App slot rules
 

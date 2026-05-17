@@ -11,7 +11,7 @@ import os, re, sys, json
 KEYWORDS = {
     "use","app","fn","let","if","else","while","for","return",
     "str","i8","i16","i32","i64","u8","u16","u32","u64","ptr","void","bool",
-    "true","false","asm","syscall","extern","const","struct","break","continue"
+    "true","false","asm","syscall","extern","const","struct","state","break","continue"
 }
 
 TOK_RE = re.compile(r"""
@@ -45,7 +45,28 @@ def lex(src, path):
             if g=="id" and v in KEYWORDS:
                 out.append(Tok(v,v,line,col))
             elif g=="str":
-                out.append(Tok("str",v[1:-1],line,col))
+                # Process common escape sequences inside string literals.
+                # NASM's own double-quoted strings don't process escapes, so
+                # this is the only place a NexusHL author can spell a quote,
+                # a backslash, or a control character.
+                raw=v[1:-1]
+                buf=[]; j=0
+                while j<len(raw):
+                    ch=raw[j]
+                    if ch=='\\' and j+1<len(raw):
+                        nx=raw[j+1]
+                        if nx=='n': buf.append('\n')
+                        elif nx=='t': buf.append('\t')
+                        elif nx=='r': buf.append('\r')
+                        elif nx=='0': buf.append('\x00')
+                        elif nx=='\\': buf.append('\\')
+                        elif nx=='"': buf.append('"')
+                        elif nx=="'": buf.append("'")
+                        else: buf.append(nx)
+                        j+=2
+                    else:
+                        buf.append(ch); j+=1
+                out.append(Tok("str","".join(buf),line,col))
             elif g=="hex":
                 out.append(Tok("num",int(v,16),line,col))
             elif g=="num":
@@ -102,11 +123,28 @@ def parse(toks,path):
             p.eat(); nm=p.eat("id").v; p.eat("="); val=p.eat("str").v; p.match(";")
             decls.append(node("strdef",name=nm,val=val))
         elif t.v=="const":
-            p.eat(); nm=p.eat("id").v; p.eat("="); v=p.eat("num").v; p.match(";")
+            p.eat(); nm=p.eat("id").v; p.eat("=")
+            neg=False
+            if p.peek().k=="-": p.eat(); neg=True
+            v=p.eat("num").v
+            if neg: v = -v
+            p.match(";")
             decls.append(node("const",name=nm,val=v))
         elif t.v=="extern":
             p.eat(); nm=p.eat("id").v; p.match(";")
             decls.append(node("extern",name=nm))
+        elif t.v=="state":
+            p.eat(); p.eat("{")
+            fields=[]
+            while not p.match("}"):
+                nm=p.eat("id").v
+                if p.match(":") or p.match("="):
+                    sz=p.eat("num").v
+                else:
+                    p.err("state field needs ': <byte_count>'")
+                p.match(";")
+                fields.append((nm,sz))
+            decls.append(node("state",fields=fields))
         elif t.v=="fn":
             decls.append(parse_fn(p))
         else:
@@ -248,12 +286,20 @@ def parse_primary(p):
 ARG_REGS=["rdi","rsi","rdx","r10","r8","r9"]           # syscall ABI
 CALL_REGS=["rdi","rsi","rdx","rcx","r8","r9"]          # System V AMD64 (regular calls)
 
+def rbpoff(o):
+    # Format a signed rbp displacement: negative locals -> "-N", positive
+    # (stack-passed params 7+) -> "+N".  o == 0 collapses to "".
+    if o<0: return str(o)
+    if o>0: return "+"+str(o)
+    return ""
+
 class CG:
     def __init__(s,app_prefix):
         s.text=[]; s.rodata=[]; s.data=[]
         s.lbl=0
         s.prefix=app_prefix
         s.str_lbls={}
+        s.state_defs={}
         s.consts={}
         s.externs=set()
         s.loops=[]  # (brk_lbl, cont_lbl)
@@ -265,10 +311,172 @@ class CG:
         if val in s.str_lbls: return s.str_lbls[val]
         n=len(s.str_lbls); lbl=f"{s.prefix}_str{n}"
         s.str_lbls[val]=lbl
-        esc=val.encode("utf-8").decode("latin-1","replace")
-        safe=esc.replace('\\','\\\\').replace('"','\\"')
-        s.rodata.append(f'{lbl}: db "{safe}", 0')
+        s.rodata.append(f"{lbl}: " + _emit_db_bytes(val))
         return lbl
+
+def _emit_db_bytes(val):
+    # NASM double-quoted strings do NOT process escapes (no \n, no \\), and
+    # putting an embedded " requires switching to a single-quoted form. To
+    # be robust to any content — including backslashes (paths) and quotes —
+    # emit the string as a list of byte values plus a NUL terminator. The
+    # output is identical in size but immune to NASM quoting quirks.
+    raw = val.encode("utf-8")
+    if not raw:
+        return "db 0"
+    parts = ", ".join(str(b) for b in raw)
+    return f"db {parts}, 0"
+
+# -------------------- peephole optimizer --------------------
+# The codegen above is a naive stack machine: every expression result lands in
+# rax and is push/pop-shuffled into ABI registers. That makes hot inner loops
+# (e.g. the SVG rasterizer's per-pixel fixed-point math) waste a huge fraction
+# of their cycles on push/pop. This pass losslessly rewrites a few mechanical
+# patterns to direct register moves. Semantics are preserved: every rewrite is
+# a straight-line substitution within a basic block, and we bail out on any
+# line that isn't a known pure data-move instruction.
+#
+# Patterns:
+#   A) (mov rax, OP_i ; push rax){N} (pop REG_j){N}
+#        -> mov REG_pop_order, OP_i ...
+#      Used for N-arg call/syscall arg marshalling.
+#   B) push rax ; pop REG     -> mov REG, rax
+#      Catches any leftover single-arg case not covered by A.
+#   C) mov rax, OP ; mov rcx, rax ; pop rax
+#        -> mov rcx, OP ; pop rax
+#      Catches binary-op RHS evaluation where rax is about to be overwritten.
+
+_PEEP_LOAD_RAX = re.compile(r"^\s*mov\s+rax,\s*(.+?)\s*$")
+_PEEP_PUSH_RAX = re.compile(r"^\s*push\s+rax\s*$")
+_PEEP_POP_REG  = re.compile(r"^\s*pop\s+([a-z][a-z0-9]+)\s*$")
+_PEEP_MOV_R_RAX = re.compile(r"^\s*mov\s+([a-z][a-z0-9]+),\s*rax\s*$")
+_REG_WORD = re.compile(r"\b([a-z][a-z0-9]+)\b")
+# Operands considered safe to relocate: they read no registers other than
+# rbp/rip-relative or are pure immediates. We detect by checking the operand
+# does not mention any general-purpose reg name that could be clobbered by
+# the move target. Conservative: only allow rbp, rsp, rip in operands.
+_ALLOWED_OPERAND_REGS = {"rbp","rsp","rip"}
+
+def _operand_safe_for_target(op, target_reg):
+    # Reject if operand references the target register (would change meaning).
+    if re.search(r"\b" + re.escape(target_reg) + r"\b", op):
+        return False
+    # Reject if operand references any register not in the allowlist (could be
+    # clobbered by an earlier move in the rewritten sequence).
+    for m in _REG_WORD.finditer(op):
+        w = m.group(1)
+        # skip pure decimal numbers (already filtered by \b[a-z]) and known-safe
+        if w in _ALLOWED_OPERAND_REGS: continue
+        if w in ("byte","word","dword","qword","ptr","rel"): continue
+        # any other identifier that looks like a register? Be conservative:
+        # ban rax/rbx/rcx/rdx/rsi/rdi/r8..r15 — these can be clobbered.
+        if w == "rax" or w == "rbx" or w == "rcx" or w == "rdx" \
+           or w == "rsi" or w == "rdi" or (w.startswith("r") and w[1:].isdigit()):
+            return False
+    return True
+
+def _peephole(lines):
+    # Pass A: collapse N-arg push/pop staging into direct moves.
+    out = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        # Detect run of (mov rax, OP ; push rax) pairs.
+        ops = []
+        j = i
+        while j + 1 < n:
+            m1 = _PEEP_LOAD_RAX.match(lines[j])
+            if not m1: break
+            if not _PEEP_PUSH_RAX.match(lines[j+1]): break
+            ops.append(m1.group(1))
+            j += 2
+        if ops:
+            # Count trailing pops (must equal len(ops), all distinct, none rax).
+            pops = []
+            k = j
+            while k < n:
+                m2 = _PEEP_POP_REG.match(lines[k])
+                if not m2: break
+                pops.append(m2.group(1))
+                k += 1
+            if (len(pops) == len(ops)
+                and len(set(pops)) == len(pops)
+                and "rax" not in pops):
+                # pops are LIFO: pops[m] receives ops[N-1-m].
+                N = len(ops)
+                regs = pops
+                # Verify each chosen src is safe given the target register
+                # AND every later target's register isn't referenced by an
+                # earlier-emitted src (we emit pops in order; src for pops[0]
+                # gets emitted first, so it must not reference pops[1..]'s
+                # regs since those moves happen later — but later moves can't
+                # clobber an already-emitted src, only the destination reg.
+                # So just check: src must not reference its own destination.
+                safe = True
+                for m, popreg in enumerate(pops):
+                    src = ops[N - 1 - m]
+                    if not _operand_safe_for_target(src, popreg):
+                        safe = False; break
+                if safe:
+                    # Additional check: src must not reference a destination
+                    # that will be written before this move (i.e., any pops[<m]).
+                    # Emit order: pops[0], pops[1], ... pops[N-1].
+                    written = set()
+                    for m, popreg in enumerate(pops):
+                        src = ops[N - 1 - m]
+                        for w in written:
+                            if re.search(r"\b" + re.escape(w) + r"\b", src):
+                                safe = False; break
+                        if not safe: break
+                        written.add(popreg)
+                if safe:
+                    for m, popreg in enumerate(pops):
+                        src = ops[N - 1 - m]
+                        out.append(f"    mov {popreg}, {src}")
+                    i = k
+                    continue
+        out.append(lines[i])
+        i += 1
+
+    # Pass B: any remaining adjacent push rax / pop REG.
+    lines = out
+    out = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if (i + 1 < n
+            and _PEEP_PUSH_RAX.match(lines[i])
+            and _PEEP_POP_REG.match(lines[i+1])):
+            reg = _PEEP_POP_REG.match(lines[i+1]).group(1)
+            if reg != "rax":
+                out.append(f"    mov {reg}, rax")
+            i += 2
+            continue
+        out.append(lines[i])
+        i += 1
+
+    # Pass C: mov rax, OP / mov rcx, rax / pop rax  -> mov rcx, OP / pop rax
+    # (and same for any target reg, not just rcx). The trailing pop rax shows
+    # the rax load was only a staging step.
+    lines = out
+    out = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if i + 2 < n:
+            m1 = _PEEP_LOAD_RAX.match(lines[i])
+            m2 = _PEEP_MOV_R_RAX.match(lines[i+1])
+            m3 = _PEEP_POP_REG.match(lines[i+2])
+            if m1 and m2 and m3 and m3.group(1) == "rax" and m2.group(1) != "rax":
+                op = m1.group(1)
+                tgt = m2.group(1)
+                if _operand_safe_for_target(op, tgt):
+                    out.append(f"    mov {tgt}, {op}")
+                    out.append(lines[i+2])
+                    i += 3
+                    continue
+        out.append(lines[i])
+        i += 1
+    return out
 
 def compile_unit(decls,app_prefix,embed=False):
     global LAST_SIGS
@@ -283,13 +491,19 @@ def compile_unit(decls,app_prefix,embed=False):
         elif d["k"]=="strdef":
             lbl=f"{app_prefix}_{d['name']}"
             cg.str_lbls[d["val"]]=lbl
-            safe=d["val"].replace('\\','\\\\').replace('"','\\"')
-            cg.rodata.append(f'{lbl}: db "{safe}", 0')
+            cg.rodata.append(f"{lbl}: " + _emit_db_bytes(d["val"]))
             str_defs[d["name"]]=lbl
         elif d["k"]=="const":
             cg.consts[d["name"]]=d["val"]
         elif d["k"]=="extern":
             cg.externs.add(d["name"])
+        elif d["k"]=="state":
+            for nm,sz in d["fields"]:
+                if sz <= 0:
+                    raise SyntaxError(f"state {nm}: size must be positive")
+                lbl=f"{app_prefix}_{nm}"
+                cg.state_defs[nm]=lbl
+                cg.data.append(f"{lbl}: times {sz} db 0")
     cg.str_defs=str_defs
     # collect local fn names (so calls resolve to prefixed symbols)
     cg.local_fns={d["name"] for d in decls if d["k"]=="fn"}
@@ -310,7 +524,7 @@ def compile_unit(decls,app_prefix,embed=False):
         out.append(f"extern {e}")
     if not embed:
         out.append("section .text")
-    out.extend(cg.text)
+    out.extend(_peephole(cg.text))
     # Strings: emit as inert bytes in current section. In standalone mode put
     # them in .rodata; in embed mode keep them in .text (safe — no code falls
     # through into them since every fn ends with `ret`).
@@ -330,10 +544,14 @@ def gen_fn(cg,fn,prefix):
     params=fn["params"]
     # scope: var -> rbp offset
     scope={}
+    # Params 0..5 arrive in CALL_REGS and are spilled to negative rbp slots.
+    # Params 6+ arrive on the caller's stack (System V): after `push rbp`,
+    # arg6 sits at [rbp+16], arg7 at [rbp+24], ...  They are read in place.
     for i,pn in enumerate(params):
-        if i>=len(CALL_REGS):
-            raise SyntaxError(f"fn {fn['name']}: too many params")
-        scope[pn]=-8*(i+1)
+        if i<len(CALL_REGS):
+            scope[pn]=-8*(i+1)
+        else:
+            scope[pn]=16+8*(i-len(CALL_REGS))
     kindmask=0
     cg.sigs.append({
         "name": name,
@@ -345,19 +563,37 @@ def gen_fn(cg,fn,prefix):
     cg.emit(f"FN_BEGIN {name}, {len(params)}, {kindmask}, FN_RET_SCALAR")
     for i,pn in enumerate(params):
         cg.emit(f"FN_ARG {i}, {pn}, FN_KIND_SCALAR")
-    # prologue: 512 bytes of locals max (64 i64 slots)
-    local_size=512
+    # Frame size = one 8-byte slot per `let` in the body (scopes are not
+    # reclaimed) plus the register-param spill area, rounded up to 16 bytes.
+    # Sizing per-function keeps recursive functions' frames small while
+    # letting wide functions declare as many locals as they need.
+    def count_lets(stmts):
+        n=0
+        for s in stmts:
+            k=s.get("k")
+            if k=="let": n+=1
+            if k=="if":
+                n+=count_lets(s.get("then",[]))
+                n+=count_lets(s.get("els",[]) or [])
+            if k=="while":
+                n+=count_lets(s.get("body",[]))
+        return n
+    reg_param_count=min(len(params),len(CALL_REGS))
+    n_locals=count_lets(fn["body"])
+    local_size=8*(reg_param_count+n_locals)+64
+    local_size=(local_size+15)&~15
     cg.emit("    push rbp")
     cg.emit("    mov rbp, rsp")
     cg.emit(f"    sub rsp, {local_size}")
-    # save params to stack
+    # save register params to their negative slots (stack params stay put)
     for i,pn in enumerate(params):
-        cg.emit(f"    mov [rbp{scope[pn]}], {CALL_REGS[i]}")
+        if i<len(CALL_REGS):
+            cg.emit(f"    mov [rbp{rbpoff(scope[pn])}], {CALL_REGS[i]}")
     # callee-saved (we use rbx, r12 in body possibly)
     cg.emit("    push rbx")
     cg.emit("    push r12")
     # body
-    next_off=[-8*(len(params)+1)]  # start after params
+    next_off=[-8*(reg_param_count+1)]  # locals start below the reg-param slots
     st=FnState(cg,scope,next_off,local_size)
     st.epilogue=f".fn_end_{cg.lbl}_{name}"
     for stmt in fn["body"]:
@@ -386,7 +622,7 @@ def gen_stmt(st,s):
     if k=="let":
         off=st.new_local(s["name"])
         gen_expr(st,s["expr"])  # into rax
-        cg.emit(f"    mov [rbp{off}], rax")
+        cg.emit(f"    mov [rbp{rbpoff(off)}], rax")
     elif k=="assign":
         lhs=s["lhs"]
         if lhs["k"]!="ident":
@@ -395,7 +631,7 @@ def gen_stmt(st,s):
             raise SyntaxError(f"unknown var {lhs['name']}")
         gen_expr(st,s["rhs"])
         off=st.scope[lhs["name"]]
-        cg.emit(f"    mov [rbp{off}], rax")
+        cg.emit(f"    mov [rbp{rbpoff(off)}], rax")
     elif k=="exprstmt":
         gen_expr(st,s["expr"])
     elif k=="return":
@@ -447,17 +683,23 @@ def gen_expr(st,e):
     elif k=="ident":
         n=e["name"]
         if n in st.scope:
-            cg.emit(f"    mov rax, [rbp{st.scope[n]}]")
+            cg.emit(f"    mov rax, [rbp{rbpoff(st.scope[n])}]")
         elif n in cg.consts:
             cg.emit(f"    mov rax, {cg.consts[n]}")
         elif n in cg.str_defs:
             cg.emit(f"    lea rax, [rel {cg.str_defs[n]}]")
+        elif n in cg.state_defs:
+            cg.emit(f"    lea rax, [rel {cg.state_defs[n]}]")
         else:
             raise SyntaxError(f"unknown identifier {n}")
     elif k=="addr":
         n=e["name"]
-        if n in cg.str_defs:
+        if n in st.scope:
+            cg.emit(f"    lea rax, [rbp{rbpoff(st.scope[n])}]")
+        elif n in cg.str_defs:
             cg.emit(f"    lea rax, [rel {cg.str_defs[n]}]")
+        elif n in cg.state_defs:
+            cg.emit(f"    lea rax, [rel {cg.state_defs[n]}]")
         elif n in cg.externs:
             cg.emit(f"    lea rax, [rel {n}]")
         else:
@@ -470,9 +712,36 @@ def gen_expr(st,e):
         gen_expr(st,e["expr"])
         cg.emit("    test rax, rax"); cg.emit("    sete al"); cg.emit("    movzx rax, al")
     elif k=="bin":
+        op=e["op"]
+        # Strength-reduce `/` and `%` by a compile-time power-of-two constant.
+        # idiv is ~20-90 cycles; the shift idiom below is ~3 and preserves the
+        # signed (truncate-toward-zero) semantics NexusHL `/` guarantees.
+        if op in ("/","%"):
+            cv=None
+            r=e["rhs"]
+            if r["k"]=="int":
+                cv=r["val"]
+            elif r["k"]=="ident" and r["name"] in cg.consts:
+                cvv=cg.consts[r["name"]]
+                if isinstance(cvv,int): cv=cvv
+            if isinstance(cv,int) and cv>0 and (cv&(cv-1))==0:
+                kbit=cv.bit_length()-1
+                gen_expr(st,e["lhs"])
+                if kbit==0:
+                    if op=="%": cg.emit("    xor rax, rax")
+                else:
+                    cg.emit("    mov rcx, rax")
+                    cg.emit("    sar rcx, 63")
+                    cg.emit(f"    shr rcx, {64-kbit}")
+                    cg.emit("    add rax, rcx")
+                    if op=="/":
+                        cg.emit(f"    sar rax, {kbit}")
+                    else:
+                        cg.emit(f"    and rax, {cv-1}")
+                        cg.emit("    sub rax, rcx")
+                return
         gen_expr(st,e["lhs"]); cg.emit("    push rax")
         gen_expr(st,e["rhs"]); cg.emit("    mov rcx, rax"); cg.emit("    pop rax")
-        op=e["op"]
         if op=="+": cg.emit("    add rax, rcx")
         elif op=="-": cg.emit("    sub rax, rcx")
         elif op=="*": cg.emit("    imul rax, rcx")
@@ -522,7 +791,7 @@ def gen_expr(st,e):
             if name=="lb":
                 gen_expr(st,args[0]); cg.emit("    movzx rax, byte [rax]")
             elif name=="lw":
-                gen_expr(st,args[0]); cg.emit("    mov eax, [rax]")
+                gen_expr(st,args[0]); cg.emit("    movsxd rax, dword [rax]")
             elif name=="lq":
                 gen_expr(st,args[0]); cg.emit("    mov rax, [rax]")
             elif name in ("sb","sw","sq"):
@@ -533,18 +802,26 @@ def gen_expr(st,e):
                 else: cg.emit("    mov [rax], rcx")
                 cg.emit("    xor rax, rax")
             return
-        if len(args)>6: raise SyntaxError("call has max 6 args")
         if name in getattr(cg,"fn_argc",{}) and len(args)!=cg.fn_argc[name]:
             raise SyntaxError(f"{name} expects {cg.fn_argc[name]} args, got {len(args)}")
-        for a in args:
+        reg_args=args[:len(CALL_REGS)]
+        stack_args=args[len(CALL_REGS):]
+        # System V: push stack args 7+ right-to-left so arg6 lands at [rsp].
+        for a in reversed(stack_args):
             gen_expr(st,a); cg.emit("    push rax")
-        for reg in reversed(CALL_REGS[:len(args)]):
+        # Evaluate register args, stage on the stack, then pop into regs so
+        # earlier args' evaluation can't clobber a register already loaded.
+        for a in reg_args:
+            gen_expr(st,a); cg.emit("    push rax")
+        for reg in reversed(CALL_REGS[:len(reg_args)]):
             cg.emit(f"    pop {reg}")
         if name in getattr(cg,"local_fns",set()):
             cg.emit(f"    FN_CALL {cg.prefix}_{name}, {len(args)}")
         else:
             cg.externs.add(name)
             cg.emit(f"    FN_CALL {name}, {len(args)}")
+        if stack_args:
+            cg.emit(f"    add rsp, {8*len(stack_args)}")
     else:
         raise SyntaxError(f"bad expr {k}")
 

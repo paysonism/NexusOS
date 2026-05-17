@@ -25,8 +25,15 @@ global desktop_icons
 
 extern render_rect
 extern render_text
+extern nx_icon_blit
 extern app_launch
 extern tb_start_menu_open
+extern nx_icon_about_48
+extern nx_icon_explorer_48
+extern nx_icon_notepad_48
+extern nx_icon_paint_48
+extern nx_icon_settings_48
+extern nx_icon_terminal_48
 
 ; ============================================================================
 ; Draw all desktop icons from the icon table
@@ -56,123 +63,29 @@ desktop_draw_icons:
     js .draw_next
     cmp eax, 6
     jge .draw_next
-    imul eax, eax, 20        ; 20 bytes per entry: 4 color + 8 label_ptr + 4 detail_color + 4 pad
+    imul eax, eax, 16        ; 16 bytes per entry: label_ptr + icon_ptr
     add rbx, rax
 
-    ; Draw icon background
-    mov rdi, ICON_X
-    mov rsi, r14
-    mov rdx, ICON_SIZE
-    mov rcx, ICON_SIZE
-    mov r8d, [rbx]            ; icon color
-    call render_rect
-
-    ; Draw icon detail based on app type
-    cmp r13d, 2
-    je .detail_explorer
-    cmp r13d, 3
-    je .detail_terminal
-    cmp r13d, 4
-    je .detail_notepad
-    cmp r13d, 5
-    je .detail_settings
-    cmp r13d, 6
-    je .detail_paint
-    jmp .draw_label
-
-.detail_explorer:
-    ; Folder tab
-    mov rdi, ICON_X
-    mov rsi, r14
-    mov rdx, 20
-    mov rcx, 8
-    mov r8d, 0x00AA8822
-    call render_rect
-    jmp .draw_label
-
-.detail_terminal:
-    ; Green prompt ">_"
-    mov rdi, ICON_X + 8
-    lea esi, [r14d + 16]
-    mov rdx, szPromptIcon
-    mov ecx, 0x0054FC54   ; VGA lightgreen
-    mov r8d, 0x00000000   ; VGA black bg
-    call render_text
-    jmp .draw_label
-
-.detail_notepad:
-    ; Lines on notepad
-    mov rdi, ICON_X + 8
-    lea esi, [r14d + 12]
-    mov rdx, 32
-    mov rcx, 2
-    mov r8d, 0x00CCCCCC
-    call render_rect
-    mov rdi, ICON_X + 8
-    lea esi, [r14d + 20]
-    mov rdx, 28
-    mov rcx, 2
-    mov r8d, 0x00CCCCCC
-    call render_rect
-    mov rdi, ICON_X + 8
-    lea esi, [r14d + 28]
-    mov rdx, 32
-    mov rcx, 2
-    mov r8d, 0x00CCCCCC
-    call render_rect
-    jmp .draw_label
-
-.detail_settings:
-    ; Gear-like crosshair
-    mov rdi, ICON_X + 20
-    lea esi, [r14d + 8]
-    mov rdx, 8
-    mov rcx, 32
-    mov r8d, 0x00AAAAAA
-    call render_rect
-    mov rdi, ICON_X + 8
-    lea esi, [r14d + 20]
-    mov rdx, 32
-    mov rcx, 8
-    mov r8d, 0x00AAAAAA
-    call render_rect
-    jmp .draw_label
-
-.detail_paint:
-    ; Color swatch
-    mov rdi, ICON_X + 8
-    lea esi, [r14d + 8]
-    mov rdx, 14
-    mov rcx, 14
-    mov r8d, 0x00FF0000
-    call render_rect
-    mov rdi, ICON_X + 26
-    lea esi, [r14d + 8]
-    mov rdx, 14
-    mov rcx, 14
-    mov r8d, 0x000000FF
-    call render_rect
-    mov rdi, ICON_X + 8
-    lea esi, [r14d + 26]
-    mov rdx, 14
-    mov rcx, 14
-    mov r8d, 0x0000FF00
-    call render_rect
-    mov rdi, ICON_X + 26
-    lea esi, [r14d + 26]
-    mov rdx, 14
-    mov rcx, 14
-    mov r8d, 0x00FFFF00
-    call render_rect
-    jmp .draw_label
+    ; Draw design-system 48px icon.
+    mov rdi, [rbx + 8]
+    mov rsi, ICON_X
+    mov rdx, r14
+    call nx_icon_blit
 
 .draw_label:
-    ; Draw label below icon
+    ; Draw label below icon with a small shadow so it remains readable over
+    ; both dark and light SVG wallpapers.
     mov rdi, ICON_X
     lea esi, [r14d + ICON_SIZE + 4]
-    mov rdx, [rbx + 4]       ; label string pointer
-    mov ecx, COLOR_TEXT_WHITE
+    mov rdx, [rbx]           ; label string pointer
+    mov ecx, COLOR_BLACK
     mov r8d, -1               ; transparent bg
+    call render_text
+    mov edi, ICON_X - 1
+    lea esi, [r14d + ICON_SIZE + 3]
+    mov rdx, [rbx]
+    mov ecx, COLOR_WHITE
+    mov r8d, -1
     call render_text
 
 .draw_next:
@@ -326,39 +239,27 @@ section .data
 desktop_icons:
     db 2, 3, 4, 0, 0, 0, 0, 0
 
-; Icon info table: indexed by (app_id - 2), 20 bytes each
-; Format: dd color, dq label_ptr, dd 0 (pad)
+; Icon info table: indexed by (app_id - 2), 16 bytes each
+; Format: dq label_ptr, dq icon48_ptr
 icon_table:
-    ; App 2: File Explorer - VGA brown/yellow
-    dd 0x00A85400
+    ; App 2: File Explorer
     dq szMyPC
-    dd 0
-    dd 0
-    ; App 3: Terminal - VGA black
-    dd 0x00000000
+    dq nx_icon_explorer_48
+    ; App 3: Terminal
     dq szTerminal
-    dd 0
-    dd 0
-    ; App 4: Notepad - VGA white
-    dd 0x00FCFCFC
+    dq nx_icon_terminal_48
+    ; App 4: Notepad
     dq szNotepad
-    dd 0
-    dd 0
-    ; App 5: Settings - VGA darkgray
-    dd 0x00545454
+    dq nx_icon_notepad_48
+    ; App 5: Settings
     dq szSettings
-    dd 0
-    dd 0
-    ; App 6: Paint - VGA red
-    dd 0x00A80000
+    dq nx_icon_settings_48
+    ; App 6: Paint
     dq szPaint
-    dd 0
-    dd 0
+    dq nx_icon_paint_48
     ; App 7: About
-    dd 0x00335577
     dq szAbout
-    dd 0
-    dd 0
+    dq nx_icon_about_48
 
 szMyPC       db "My PC", 0
 szTerminal   db "Terminal", 0
@@ -366,6 +267,5 @@ szNotepad    db "Notepad", 0
 szSettings   db "Settings", 0
 szPaint      db "Paint", 0
 szAbout      db "About", 0
-szPromptIcon db ">_", 0
 
 section .text

@@ -51,6 +51,15 @@ if (Test-Path $CoverageTool) {
     if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED signature coverage' -ForegroundColor Red; exit 1 }
 }
 
+# 0b. Embed SVG wallpaper sources into wallpaper.nxh so the native NexusHL
+# renderer (svg_render) has the current SVG strings. Run on every build so
+# edits to src/resources/wallpapers/*.svg are picked up automatically.
+$WallpaperTool = Join-Path $PSScriptRoot 'tools\gen_wallpaper_strings.py'
+if (Test-Path $WallpaperTool) {
+    & python $WallpaperTool
+    if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED wallpaper string gen' -ForegroundColor Red; exit 1 }
+}
+
 # 1. Assemble UEFI Loader -> BOOTX64.EFI
 Write-Host '[1/2] Assembling UEFI Loader...' -ForegroundColor Yellow
 $ErrorActionPreference = 'Continue'
@@ -245,8 +254,18 @@ $entryIdx++
 # Copy FAT1 to FAT2
 [Array]::Copy($imgBytes, $fat1Off, $imgBytes, $fat2Off, $fatSizeSects * $bytesPerSect)
 
-[System.IO.File]::WriteAllBytes($dataImgPath, $imgBytes)
-Write-Host "  OK - data.img ($totalClusters clusters, $($entryIdx - 1) files)" -ForegroundColor Green
+try {
+    [System.IO.File]::WriteAllBytes($dataImgPath, $imgBytes)
+    Write-Host "  OK - data.img ($totalClusters clusters, $($entryIdx - 1) files)" -ForegroundColor Green
+} catch [System.IO.IOException] {
+    # data.img is a data disk, not a build output -- a stale lock (open VM,
+    # image viewer) must not fail the whole build. Reuse the existing image.
+    if (Test-Path $dataImgPath) {
+        Write-Host "  WARN - data.img locked by another process; keeping existing image" -ForegroundColor Yellow
+    } else {
+        throw
+    }
+}
 
 Write-Host ''
 Write-Host '  BUILD SUCCESSFUL' -ForegroundColor Green

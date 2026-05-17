@@ -39,9 +39,10 @@ working set.
 For `NEXUS_CACHE32_MAX`:
 
 - Hot kernel state remains below 4 MB.
-- GUI LLC arena is `0x400000..0x1000000`.
-- App arenas are based at `0x1000000`.
-- Kernel syscall stacks are based at `0x1800000`.
+- GUI LLC arena is `0x1000000..0x1700000`.
+- XHCI cold DMA buffers are based at `0x1700000`.
+- App arenas are based at `0x1800000`.
+- Kernel syscall stacks are based at `0x2100000`.
 - XHCI cold DMA buffers move to `0x1900000..0x19F0000`.
 - FAT16 cold buffers move to `0x1A00000..0x1A31000`.
 - Strict RAM cap constant is `0x2000000` bytes.

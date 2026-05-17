@@ -148,6 +148,7 @@ app_launch:
     mov dword [explorer_sel], 0
     mov dword [explorer_dir], 0
     mov byte [ctx_menu_visible], 0
+    mov byte [exp_ctx_visible], 0
     mov byte [exp_rename_active], 0
     mov byte [exp_newfolder_active], 0
     mov byte [exp_newfolder_done_msg], 0
@@ -316,7 +317,7 @@ app_launch:
     mov rdx, 180
     mov rcx, 380
     mov r8, 280
-    mov r9, app_settings_draw
+    mov r9, app_hl_settings_draw
     SER '{'
     sub rsp, 8
     call wm_create_window_ex
@@ -330,8 +331,8 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
-    mov r10, app_settings_click
-    xor r11d, r11d
+    mov r10, app_hl_settings_click
+    mov r11, app_hl_settings_key
     call app_set_window_handlers
     SER 's'
     jmp .done
@@ -938,6 +939,8 @@ app_find_entry_83:
 
 global kernel_open_file_in_notepad
 kernel_open_file_in_notepad:
+    SER 'O'
+    SER 'F'
     push rbx
     push r12
     push r13
@@ -1055,9 +1058,49 @@ kernel_open_file_in_notepad:
     mov dword [np_line_len], 0
 
 .kop_sync:
-    ; Push the freshly-populated blob globals into the new notepad's L3 slot.
+    ; Copy the kernel-side notepad globals into the L3 slot. We cannot use
+    ; l3_copy_app_blob_to_slot here: it copies from app_blob_base_v (the
+    ; UEFI-loaded user blob), which still holds the *original* zeroed values
+    ; for notepad_buf — overwriting the freshly-read file content seeded by
+    ; app_seed_notepad_slot.
+    push rdi
+    push rsi
+    push rcx
+    push rbx
+
     mov edi, r13d
-    call l3_copy_app_blob_to_slot
+    call l3_slot_base
+    mov rbx, rax                     ; rbx = slot base
+
+    ; notepad_buf
+    lea rdi, [rbx + notepad_buf - app_blob_start]
+    lea rsi, [notepad_buf]
+    mov ecx, NP_BUF_SIZE
+    cld
+    rep movsb
+
+    ; np_line_len[]
+    lea rdi, [rbx + np_line_len - app_blob_start]
+    lea rsi, [np_line_len]
+    mov ecx, NP_MAX_LINES * 4
+    rep movsb
+
+    ; Scalars
+    mov eax, [np_num_lines]
+    mov [rbx + np_num_lines - app_blob_start], eax
+    mov eax, [np_cursor_row]
+    mov [rbx + np_cursor_row - app_blob_start], eax
+    mov eax, [np_cursor_col]
+    mov [rbx + np_cursor_col - app_blob_start], eax
+    mov eax, [np_scroll_top]
+    mov [rbx + np_scroll_top - app_blob_start], eax
+    mov rax, [np_open_entry]
+    mov [rbx + np_open_entry - app_blob_start], rax
+
+    pop rbx
+    pop rcx
+    pop rsi
+    pop rdi
 
     mov rax, r13
     pop r13

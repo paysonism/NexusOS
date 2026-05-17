@@ -20,6 +20,7 @@ global smp_target_cores
 global smp_core_states
 extern madt_enabled_cpu_count
 extern madt_lapic_ids
+extern smp_worker_loop          ; proc/workqueue.asm - AP job-processing loop
 
 ; --- Initialize Local APIC ---
 FN_BEGIN apic_init, 0, 0, FN_RET_SCALAR
@@ -260,15 +261,25 @@ ap_lm64:
     mov ss, ax
     mov rsp, [abs SMP_TRAMPOLINE_ADDR + ap_boot_stack_ptr - ap_tramp_start]
     mov rdi, [abs SMP_TRAMPOLINE_ADDR + ap_boot_state_ptr - ap_tramp_start]
-    inc qword [rdi + 16]
+    ; Enable SSE on this AP so offloaded compute jobs (e.g. SVG rasterisation,
+    ; which is often vectorised) do not #UD: CR0.EM=0, CR0.MP=1, CR4.OSFXSR=1.
+    mov rax, cr0
+    and eax, ~4                 ; clear EM (bit 2)
+    or eax, 2                   ; set MP (bit 1)
+    mov cr0, rax
+    mov rax, cr4
+    or eax, 0x200               ; set OSFXSR (bit 9)
+    mov cr4, rax
+    inc qword [rdi + 16]        ; first liveness beat - smp_wait_alive waits on this
     mov rax, smp_ap_started_count
     lock inc dword [rax]
-    mov dword [rdi + 0], 2
-    mov dword [rdi + 0], 3
-.park:
-    inc qword [rdi + 16]
-    hlt
-    jmp .park
+    mov dword [rdi + 0], 3      ; state = PARKED/available (counted by smp_count_states)
+    ; Hand this AP to the SMP work queue. smp_worker_loop never returns: the
+    ; core now pulls compute jobs from the queue instead of sitting in HLT.
+    ; The address is an absolute imm64, so the jump is correct even though
+    ; this code executes from the relocated trampoline copy.
+    mov rax, smp_worker_loop
+    jmp rax
 align 8
 ap_gdt:
     dq 0

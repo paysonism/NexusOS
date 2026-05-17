@@ -30,6 +30,14 @@ Invoke-Step 'Source guards' {
     powershell -ExecutionPolicy Bypass -File (Join-Path $Root 'test_source_guards.ps1')
 }
 
+Invoke-Step 'XML/SVG contracts' {
+    powershell -ExecutionPolicy Bypass -File (Join-Path $Root 'tools\check_xml_svg_contracts.ps1')
+}
+
+Invoke-Step 'NexusHL XML/SVG fixtures' {
+    powershell -ExecutionPolicy Bypass -File (Join-Path $Root 'test_nxh_fixtures.ps1')
+}
+
 Invoke-Step 'Generated source map' {
     powershell -ExecutionPolicy Bypass -File (Join-Path $Root 'tools\generate_source_map.ps1')
 }

@@ -1,0 +1,330 @@
+# NexusHL Settings app. Display section now shows the current logical
+# desktop size, surfaces a "Use Native" choice for the monitor's actual
+# resolution (queried via SYS_DISPLAY_NATIVE), and exposes the Stretch
+# flag alongside VSync and Show FPS. Layout flows top-to-bottom with
+# spacing constants from gui.nxh so rows never collide.
+
+use gui
+use svg
+
+app "Settings" { stack = 4096; }
+
+const C_PANEL      = 0x00F5F6FA
+const C_BUTTON     = 0x00D8DDE3
+const C_BUTTON_ON  = 0x002A6FFF
+const C_TEXT       = 0x002A2F3A
+const C_MUTED      = 0x005C6673
+
+# Widget metrics.
+const RES_W           = 88            # preset resolution button width
+const BG_W            = 96            # theme button width
+const NATIVE_BTN_W    = 110           # "Use Native" button width
+const TOGGLE_COL_W    = 130           # checkbox + label column
+
+# Layout cursor constants. Derived from gui.nxh defaults
+# (UI_PAD=12, UI_TITLE_H=22, UI_FONT_H=12, UI_LABEL_GAP=6,
+#  UI_BUTTON_H=16, UI_ROW_GAP=6, UI_ROW_H=22, UI_SECTION_GAP=20).
+# Inlined as literals because nxhc `const` only accepts numeric literals.
+const X0              = 12
+const Y_TITLE_DISP    = 12            # "Display"
+const Y_CURRENT_LINE  = 34            # "Current: WxH   Native: WxH"
+const Y_NATIVE_BTN    = 52            # [ Use Native ]
+const Y_CAP_RES       = 78            # "Resolution"
+const Y_RES           = 96            # preset buttons
+const Y_TOGGLES       = 118           # vsync / fps / stretch row
+const Y_TITLE_MEM     = 144           # "Memory"
+const Y_RAM           = 164
+const Y_TITLE_BG      = 188           # "Appearance"
+const Y_CAP_BG        = 204
+const Y_BG            = 220
+
+state {
+    settings_flags: 4;
+    settings_last_mode_result: 4;
+    settings_bg_cache: 4;
+    # Scratch buffers used to format "WxH" strings for current/native
+    # resolution captions. 24 bytes covers any width<99999 + 'x' + height.
+    current_res_buf: 24;
+    native_res_buf:  24;
+    current_label_buf: 24;
+    native_label_buf:  24;
+}
+
+str title_display  = "Display";
+str title_memory   = "Memory";
+str title_bg_sec   = "Appearance";
+str label_res      = "Preset resolutions";
+str label_vsync    = "VSync";
+str label_fps      = "Show FPS";
+str label_stretch  = "Stretch to fill";
+str label_ram      = "Total RAM: 512 MB";
+str label_bg       = "Desktop background";
+str btn_native     = "Use Native";
+str res_800        = "800x600";
+str res_1024       = "1024x768";
+str res_1280       = "1280x720";
+str bg_metal       = "Metal";
+str bg_ribbons     = "Ribbons";
+str bg_bloom       = "Bloom";
+str mode_ok        = "Mode switch ready";
+str mode_failed    = "Mode switch failed";
+str prefix_current = "Current: ";
+str prefix_native  = "  Native: ";
+
+# Append `n` as a decimal ASCII into `buf`, return ptr just past the last
+# digit. Writes the digits LSB-first then reverses the slice in place,
+# which avoids needing a temp stack buffer.
+fn put_uint(buf, n) {
+    if n == 0 {
+        sb(buf, 48);
+        return buf + 1;
+    }
+    let p = buf;
+    while n > 0 {
+        sb(p, 48 + (n % 10));
+        p = p + 1;
+        n = n / 10;
+    }
+    # Reverse [buf .. p).
+    let i = buf;
+    let j = p - 1;
+    while i < j {
+        let a = lb(i);
+        let b = lb(j);
+        sb(i, b);
+        sb(j, a);
+        i = i + 1;
+        j = j - 1;
+    }
+    return p;
+}
+
+# Copy a NUL-terminated string into `dst`, returning ptr past the
+# terminator-replacement spot (i.e. dst + length, no NUL written).
+fn copy_cstr(dst, src) {
+    let p = dst;
+    let s = src;
+    let c = lb(s);
+    while c != 0 {
+        sb(p, c);
+        p = p + 1;
+        s = s + 1;
+        c = lb(s);
+    }
+    return p;
+}
+
+# Format "WxH" with NUL terminator into buf.
+fn fmt_res(buf, w, h) {
+    let p = put_uint(buf, w);
+    sb(p, 120);                        # 'x'
+    p = p + 1;
+    p = put_uint(p, h);
+    sb(p, 0);
+}
+
+# Format "<prefix>WxH" into buf, NUL-terminated. Used for the inline
+# "Current: 1024x768  Native: 1280x720" caption.
+fn fmt_labeled_res(buf, prefix, w, h) {
+    let p = copy_cstr(buf, prefix);
+    p = put_uint(p, w);
+    sb(p, 120);                        # 'x'
+    p = p + 1;
+    p = put_uint(p, h);
+    sb(p, 0);
+}
+
+fn set_mode(width, height) {
+    let rc = display_set_mode(width, height, 32);
+    sw(&settings_last_mode_result, rc);
+    if rc == 0 {
+        cursor_init();
+    }
+}
+
+fn sync_flags() {
+    let flags = display_flags();
+    if flags >= 0 {
+        sw(&settings_flags, flags);
+    }
+    return lw(&settings_flags);
+}
+
+fn sync_bg() {
+    let bg = svg_desktop_background();
+    if bg >= 0 {
+        sw(&settings_bg_cache, bg);
+    }
+    return lw(&settings_bg_cache);
+}
+
+fn theme_button(win, x, y, id, label) {
+    let fill = C_BUTTON;
+    if sync_bg() == id {
+        fill = C_BUTTON_ON;
+    }
+    ui_rect_at(win, x, y, BG_W, UI_BUTTON_H, fill);
+    if sync_bg() == id {
+        ui_text_at(win, x + 5, y + 2, label, UI_COL_TEXT_INVERT, fill);
+    } else {
+        ui_text_at(win, x + 5, y + 2, label, C_TEXT, fill);
+    }
+}
+
+fn draw(win) {
+    let flags = sync_flags();
+    let cur_w = display_current_width();
+    let cur_h = display_current_height();
+    let nat_w = display_native_width();
+    let nat_h = display_native_height();
+
+    fmt_labeled_res(&current_label_buf, &prefix_current, cur_w, cur_h);
+    fmt_labeled_res(&native_label_buf,  &prefix_native,  nat_w, nat_h);
+
+    ui_fill_client_below(win, 0, C_PANEL);
+
+    # --- Display ---------------------------------------------------------
+    ui_section_title(win, Y_TITLE_DISP, &title_display);
+
+    # Single-line "Current: WxH  Native: WxH"
+    ui_text_at(win, X0, Y_CURRENT_LINE,
+               &current_label_buf, C_TEXT, C_PANEL);
+    # Place native caption to the right of the current one. With max 9
+    # chars (e.g. "Current: 1920x1200") at 8 px per glyph, 9*8 = 72 px is
+    # tight; we use 96 px to leave breathing room.
+    ui_text_at(win, X0 + 96, Y_CURRENT_LINE,
+               &native_label_buf, C_MUTED, C_PANEL);
+
+    # "Use Native" — switch to the monitor's detected native size.
+    let native_fill = C_BUTTON;
+    if cur_w == nat_w {
+        if cur_h == nat_h {
+            native_fill = C_BUTTON_ON;
+        }
+    }
+    ui_rect_at(win, X0, Y_NATIVE_BTN, NATIVE_BTN_W, UI_BUTTON_H, native_fill);
+    if native_fill == C_BUTTON_ON {
+        ui_text_at(win, X0 + 6, Y_NATIVE_BTN + 2,
+                   &btn_native, UI_COL_TEXT_INVERT, native_fill);
+    } else {
+        ui_text_at(win, X0 + 6, Y_NATIVE_BTN + 2,
+                   &btn_native, C_TEXT, native_fill);
+    }
+
+    # Preset resolution buttons.
+    ui_caption(win, X0, Y_CAP_RES, &label_res);
+    ui_button(win, ui_row_x(X0, RES_W, 0), Y_RES, RES_W, &res_800,  C_BUTTON);
+    ui_button(win, ui_row_x(X0, RES_W, 1), Y_RES, RES_W, &res_1024, C_BUTTON);
+    ui_button(win, ui_row_x(X0, RES_W, 2), Y_RES, RES_W, &res_1280, C_BUTTON);
+
+    # Toggles. Three columns: vsync, fps, stretch.
+    ui_checkbox(win, X0,                       Y_TOGGLES,
+                flags & DISPLAY_FLAG_VSYNC,   &label_vsync);
+    ui_checkbox(win, X0 + TOGGLE_COL_W,        Y_TOGGLES,
+                flags & DISPLAY_FLAG_FPS,     &label_fps);
+    ui_checkbox(win, X0 + TOGGLE_COL_W * 2,    Y_TOGGLES,
+                flags & DISPLAY_FLAG_STRETCH, &label_stretch);
+
+    # --- Memory ----------------------------------------------------------
+    ui_section_title(win, Y_TITLE_MEM, &title_memory);
+    ui_text_at(win, X0, Y_RAM, &label_ram, C_TEXT, C_PANEL);
+
+    # --- Appearance ------------------------------------------------------
+    ui_section_title(win, Y_TITLE_BG, &title_bg_sec);
+    ui_caption(win, X0, Y_CAP_BG, &label_bg);
+    theme_button(win, ui_row_x(X0, BG_W, 0), Y_BG, SVG_BG_LIQUID_METAL, &bg_metal);
+    theme_button(win, ui_row_x(X0, BG_W, 1), Y_BG, SVG_BG_GLASS_RIBBONS, &bg_ribbons);
+    theme_button(win, ui_row_x(X0, BG_W, 2), Y_BG, SVG_BG_FROSTED_BLOOM, &bg_bloom);
+
+    if lw(&settings_last_mode_result) < 0 {
+        ui_status_bar(win, &mode_failed, UI_COL_ERROR);
+    } else {
+        ui_status_bar(win, &mode_ok, UI_COL_SURFACE_2);
+    }
+}
+
+fn click(win, x, y) {
+    # Use-Native button
+    if y >= Y_NATIVE_BTN {
+        if y < Y_NATIVE_BTN + UI_BUTTON_H {
+            if ui_button_hit(x, y, X0, Y_NATIVE_BTN, NATIVE_BTN_W) != 0 {
+                set_mode(display_native_width(), display_native_height());
+                return;
+            }
+        }
+    }
+
+    # Preset resolution row
+    if y >= Y_RES {
+        if y < Y_RES + UI_BUTTON_H {
+            if ui_button_hit(x, y, ui_row_x(X0, RES_W, 0), Y_RES, RES_W) != 0 {
+                set_mode(800, 600);
+                return;
+            }
+            if ui_button_hit(x, y, ui_row_x(X0, RES_W, 1), Y_RES, RES_W) != 0 {
+                set_mode(1024, 768);
+                return;
+            }
+            if ui_button_hit(x, y, ui_row_x(X0, RES_W, 2), Y_RES, RES_W) != 0 {
+                set_mode(1280, 720);
+                return;
+            }
+        }
+    }
+
+    # Toggle row (three checkboxes)
+    if y >= Y_TOGGLES {
+        if y < Y_TOGGLES + UI_CHECK_SIZE {
+            let flags = sync_flags();
+            if x >= X0 {
+                if x < X0 + UI_CHECK_SIZE {
+                    flags = flags ^ DISPLAY_FLAG_VSYNC;
+                    display_set_flags(flags);
+                    sw(&settings_flags, flags);
+                    return;
+                }
+            }
+            if x >= X0 + TOGGLE_COL_W {
+                if x < X0 + TOGGLE_COL_W + UI_CHECK_SIZE {
+                    flags = flags ^ DISPLAY_FLAG_FPS;
+                    display_set_flags(flags);
+                    sw(&settings_flags, flags);
+                    return;
+                }
+            }
+            if x >= X0 + TOGGLE_COL_W * 2 {
+                if x < X0 + TOGGLE_COL_W * 2 + UI_CHECK_SIZE {
+                    flags = flags ^ DISPLAY_FLAG_STRETCH;
+                    display_set_flags(flags);
+                    sw(&settings_flags, flags);
+                    return;
+                }
+            }
+        }
+    }
+
+    # Appearance row
+    if y >= Y_BG {
+        if y < Y_BG + UI_BUTTON_H {
+            if ui_button_hit(x, y, ui_row_x(X0, BG_W, 0), Y_BG, BG_W) != 0 {
+                svg_set_desktop_background(SVG_BG_LIQUID_METAL);
+                sw(&settings_bg_cache, SVG_BG_LIQUID_METAL);
+                return;
+            }
+            if ui_button_hit(x, y, ui_row_x(X0, BG_W, 1), Y_BG, BG_W) != 0 {
+                svg_set_desktop_background(SVG_BG_GLASS_RIBBONS);
+                sw(&settings_bg_cache, SVG_BG_GLASS_RIBBONS);
+                return;
+            }
+            if ui_button_hit(x, y, ui_row_x(X0, BG_W, 2), Y_BG, BG_W) != 0 {
+                svg_set_desktop_background(SVG_BG_FROSTED_BLOOM);
+                sw(&settings_bg_cache, SVG_BG_FROSTED_BLOOM);
+                return;
+            }
+        }
+    }
+}
+
+fn key(win, k) {
+    return;
+}

@@ -6,7 +6,11 @@
 %define STAGE2_BUILD
 bits 16
 org 0x7E00
-%include "src/include/boot_memory.inc"
+%include "src/include/constants.inc"
+
+KERNEL_CHUNK_SEG     equ 0x1000
+KERNEL_CHUNK_ADDR    equ 0x10000
+KERNEL_CHUNK_SECTORS equ 256        ; 128KB bounce buffer below 1MB
 
 stage2_start:
     dw 0x4E58               ; 'NX' magic number (verified by MBR)
@@ -318,9 +322,9 @@ probe_memory:
     ret
 
 ; --- Load kernel from disk sectors 64+ to 0x100000 ---
-; Strategy: Load all sectors to temp buffer at 0x10000-0x2FFFF (128KB below 1MB)
-; then use Unreal Mode to copy the whole thing to 0x100000 in one go.
-; This avoids the problem of BIOS INT 13h destroying unreal mode segment limits.
+; Strategy: read in bounded chunks below 1MB, then use unreal mode to copy
+; each chunk to its final address above 1MB. INT 13h calls can disturb unreal
+; segment limits, so every high-memory copy re-enters unreal mode first.
 load_kernel:
     ; Get Drive Geometry for CHS fallback
     mov ah, 0x08
@@ -339,17 +343,27 @@ load_kernel:
     mov word [drv_heads], 16
 
 .start_load:
-    ; Phase 1: Read all kernel sectors to temp buffer below 1MB
-    ; Temp buffer: 0x1000:0x0000 = phys 0x10000
-    ; Max 256 sectors = 128KB. Buffer extends to 0x30000.
-    mov dword [kern_lba], 64         ; Starting LBA sector
-    mov word [kern_remaining], 256   ; Sectors remaining (128KB)
-    mov word [kern_buf_seg], 0x1000  ; Current segment for loading
-    mov word [kern_buf_off], 0x0000  ; Current offset
+    mov dword [kern_lba], KERNEL_START_SECTOR
+    mov word [kern_remaining], KERNEL_SECTORS
+    mov dword [kern_dest], KERNEL_LOAD_ADDR
+
+.chunk_loop:
+    cmp word [kern_remaining], 0
+    je .load_done
+
+    mov ax, [kern_remaining]
+    cmp ax, KERNEL_CHUNK_SECTORS
+    jbe .chunk_count_ok
+    mov ax, KERNEL_CHUNK_SECTORS
+.chunk_count_ok:
+    mov [kern_chunk_remaining], ax
+    mov [kern_chunk_total], ax
+    mov word [kern_buf_seg], KERNEL_CHUNK_SEG
+    mov word [kern_buf_off], 0x0000
 
 .read_loop:
-    cmp word [kern_remaining], 0
-    je .read_done
+    cmp word [kern_chunk_remaining], 0
+    je .chunk_read_done
 
     ; Try LBA first - update DAP fields first, then set registers
     mov word [kern_dap + 2], 1          ; 1 sector
@@ -382,32 +396,21 @@ load_kernel:
     mov [kern_buf_off], ax
 
     inc dword [kern_lba]
+    dec word [kern_chunk_remaining]
     dec word [kern_remaining]
     jmp .read_loop
 
-.read_done:
-    ; Verify temp buffer has data (check first 4 bytes at 0x1000:0x0000 = phys 0x10000)
-    push es
-    mov ax, 0x1000
-    mov es, ax
-    mov eax, [es:0]
-    pop es
-    test eax, eax
-    jnz .tmp_ok
-    mov al, 'T'          ; 'T' = temp buffer is empty!
-    call serial_putc
-    jmp .copy_skip
-.tmp_ok:
+.chunk_read_done:
     mov al, 'B'          ; 'B' = buffer has data
     call serial_putc
 
-    ; Phase 2: Enter Unreal Mode and copy from temp buffer to 0x100000
+    ; Phase 2: Enter Unreal Mode and copy this chunk above 1MB.
     call enter_unreal
 
-    ; Copy 256 * 512 = 131072 bytes from 0x10000 to 0x100000
-    mov esi, 0x10000         ; Source (physical)
-    mov edi, 0x100000        ; Destination (physical)
-    mov ecx, (256 * 512) / 4 ; Dword count = 32768
+    mov esi, KERNEL_CHUNK_ADDR
+    mov edi, [kern_dest]
+    movzx ecx, word [kern_chunk_total]
+    shl ecx, 7               ; sectors * 512 / 4
 .copy_loop:
     a32 mov eax, [ds:esi]
     a32 mov [ds:edi], eax
@@ -416,18 +419,14 @@ load_kernel:
     dec ecx
     jnz .copy_loop
 
-    ; Verify copy worked
-    mov edi, 0x100000
-    a32 mov eax, [ds:edi]
-    test eax, eax
-    jnz .copy_ok
-    mov al, 'X'          ; 'X' = copy failed
-    call serial_putc
-    jmp .copy_skip
-.copy_ok:
     mov al, 'C'          ; 'C' = copy succeeded
     call serial_putc
-.copy_skip:
+    movzx eax, word [kern_chunk_total]
+    shl eax, 9
+    add [kern_dest], eax
+    jmp .chunk_loop
+
+.load_done:
     ret
 
 .load_fail:
@@ -501,7 +500,10 @@ enter_unreal:
 
 ; --- Kernel load data ---
 kern_lba:       dd 0
+kern_dest:      dd 0
 kern_remaining: dw 0
+kern_chunk_remaining: dw 0
+kern_chunk_total: dw 0
 kern_buf_seg:   dw 0x1000
 kern_buf_off:   dw 0x0000
 drv_spt:        dw 63

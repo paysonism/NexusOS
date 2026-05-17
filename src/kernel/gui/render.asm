@@ -16,6 +16,8 @@ extern draw_hline
 extern draw_vline
 extern display_clear
 extern bb_addr
+extern scr_height
+extern scr_pitch_q
 
 ; Export to GUI
 global render_init
@@ -136,14 +138,20 @@ render_save_backbuffer:
     push rdi
     push rsi
     push rcx
+    push rdx
     push rax
 
     mov rdi, BACK_BUFFER_SAVE_ADDR
     mov rsi, [bb_addr]
-    mov ecx, FRAMEBUFFER_SIZE  ; 3MB in bytes
+    mov rax, [scr_pitch_q]
+    mov edx, [scr_height]
+    imul rax, rdx              ; active framebuffer bytes
+    mov rdx, rax
 
     ; SSE2 copy: 128 bytes per iteration (8x movdqa load, 8x movdqa store)
-    shr ecx, 7                ; / 128
+    mov rcx, rdx
+    shr rcx, 7                ; / 128
+    jz .save_tail
 .save_loop:
     movdqa xmm0, [rsi]
     movdqa xmm1, [rsi + 16]
@@ -166,13 +174,14 @@ render_save_backbuffer:
     dec ecx
     jnz .save_loop
 
-    ; Handle remainder (FRAMEBUFFER_SIZE % 128)
-    mov ecx, FRAMEBUFFER_SIZE
-    and ecx, 127
-    shr ecx, 3
-    rep movsq
+    ; Handle remainder (active bytes % 128)
+.save_tail:
+    mov rcx, rdx
+    and rcx, 127
+    rep movsb
 
     pop rax
+    pop rdx
     pop rcx
     pop rsi
     pop rdi
@@ -184,14 +193,20 @@ render_restore_backbuffer:
     push rdi
     push rsi
     push rcx
+    push rdx
     push rax
 
     mov rdi, [bb_addr]
     mov rsi, BACK_BUFFER_SAVE_ADDR
-    mov ecx, FRAMEBUFFER_SIZE
+    mov rax, [scr_pitch_q]
+    mov edx, [scr_height]
+    imul rax, rdx              ; active framebuffer bytes
+    mov rdx, rax
 
     ; SSE2 copy: 128 bytes per iteration
-    shr ecx, 7                ; / 128
+    mov rcx, rdx
+    shr rcx, 7                ; / 128
+    jz .restore_tail
 .restore_loop:
     movdqa xmm0, [rsi]
     movdqa xmm1, [rsi + 16]
@@ -215,12 +230,13 @@ render_restore_backbuffer:
     jnz .restore_loop
 
     ; Remainder
-    mov ecx, FRAMEBUFFER_SIZE
-    and ecx, 127
-    shr ecx, 3
-    rep movsq
+.restore_tail:
+    mov rcx, rdx
+    and rcx, 127
+    rep movsb
 
     pop rax
+    pop rdx
     pop rcx
     pop rsi
     pop rdi

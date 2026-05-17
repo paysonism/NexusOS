@@ -1,0 +1,6 @@
+<!-- top comment -->
+<doc>
+  <!-- inner comment -->
+  <code><![CDATA[if (a < b && c > d) { x = "&"; }]]></code>
+  <num>&#65;&#x42;&#67;</num>
+</doc>

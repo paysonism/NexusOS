@@ -1,0 +1,3 @@
+<svg:path svg:fill="red">
+  <svg:child />
+</svg:path>

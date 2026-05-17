@@ -8,7 +8,7 @@ bits 64
 %include "macros.inc"
 
 MAX_PROCESSES   equ 8
-PROCESS_POOL    equ 0x220000     ; 8 * 512 bytes = 4KB
+PROCESS_POOL    equ 0xC30000     ; 8 * 512 bytes = 4KB
 
 GDT64_CODE_SEG    equ 0x08
 GDT64_DATA_SEG    equ 0x10

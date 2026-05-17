@@ -3,123 +3,136 @@
 ## Large Files Over 700 Lines
 - `src\boot\boot.asm` - 2153 lines
 - `src\kernel\drivers\xhci.asm` - 1920 lines
+- `src\kernel\drivers\display.asm` - 1654 lines
+- `src\kernel\lib\xml.asm` - 1489 lines
 - `src\kernel\fs\fat16.asm` - 1353 lines
 - `src\kernel\drivers\usb_hid.asm` - 1351 lines
+- `src\kernel\proc\syscall.asm` - 1273 lines
 - `src\kernel\drivers\i2c_hid.asm` - 1153 lines
 - `src\kernel\drivers\hid_parser.asm` - 1129 lines
-- `src\boot\uefi_loader.asm` - 1072 lines
-- `src\user\apps\launch.inc` - 1021 lines
+- `src\boot\uefi_loader.asm` - 1063 lines
+- `src\user\apps\launch.inc` - 1059 lines
 - `src\user\apps\notepad.inc` - 1009 lines
-- `src\user\apps\explorer.inc` - 1004 lines
-- `src\kernel\drivers\display.asm` - 950 lines
-- `src\kernel\proc\syscall.asm` - 911 lines
-- `src\kernel\gui\window.asm` - 892 lines
+- `src\kernel\gui\window.asm` - 1003 lines
+- `src\resources\design-system\font_24x48.inc` - 976 lines
+- `src\kernel\core\main.asm` - 865 lines
+- `src\kernel\gui\taskbar.asm` - 855 lines
 - `src\kernel\drivers\mouse.asm` - 845 lines
-- `src\kernel\gui\taskbar.asm` - 806 lines
-- `src\kernel\core\main.asm` - 726 lines
 
 ## Public Label Counts
 - `src\kernel\drivers\xhci.asm` - 25
+- `src\kernel\gui\window.asm` - 19
 - `src\kernel\drivers\hid_parser.asm` - 18
-- `src\kernel\gui\window.asm` - 18
+- `src\kernel\lib\xml.asm` - 17
+- `src\kernel\gui\resources.asm` - 13
 - `src\kernel\drivers\mouse.asm` - 11
 - `src\kernel\gui\render.asm` - 10
 - `src\kernel\lib\string.asm` - 9
 - `src\kernel\core\trace.asm` - 9
+- `src\kernel\drivers\display.asm` - 8
+- `src\user\apps\shell.inc` - 7
+- `src\resources\design-system\parser_example.asm` - 7
 - `src\kernel\proc\usermode.asm` - 7
-- `src\kernel\drivers\keyboard.asm` - 6
 - `src\kernel\gui\desktop.asm` - 6
-- `src\kernel\lib\math.asm` - 5
+- `src\kernel\drivers\keyboard.asm` - 6
 - `src\kernel\drivers\spi.asm` - 5
-- `src\kernel\gui\cursor.asm` - 5
-- `src\kernel\core\pic.asm` - 5
-- `src\kernel\arch\apic.asm` - 5
-- `src\user\apps\launch.inc` - 5
-- `src\user\apps\common.inc` - 5
-- `src\kernel\core\perfdiag.asm` - 5
 - `src\kernel\arch\aml_parser.asm` - 5
+- `src\user\apps\common.inc` - 5
+- `src\kernel\arch\apic.asm` - 5
+- `src\kernel\lib\math.asm` - 5
+- `src\kernel\core\pic.asm` - 5
+- `src\user\apps\launch.inc` - 5
+- `src\kernel\core\perfdiag.asm` - 5
+- `src\kernel\gui\cursor.asm` - 5
+- `src\kernel\gui\taskbar.asm` - 4
 - `src\kernel\arch\ioapic.asm` - 4
+- `src\kernel\drivers\ata.asm` - 4
+- `src\kernel\core\main.asm` - 4
+- `src\kernel\drivers\battery.asm` - 4
 - `src\kernel\drivers\i2c_hid.asm` - 4
 - `src\kernel\arch\madt.asm` - 4
-- `src\kernel\gui\taskbar.asm` - 4
-- `src\kernel\drivers\ata.asm` - 4
-- `src\kernel\drivers\battery.asm` - 4
+- `src\user\apps.asm` - 3
+- `src\kernel\gui\wallpapers.asm` - 3
+- `src\kernel\core\pit.asm` - 3
 - `src\user\templates\hello_callback.asm` - 3
-- `src\user\apps\shell.inc` - 3
 - `src\kernel\proc\process.asm` - 3
 - `src\kernel\drivers\acpi_ec.asm` - 3
-- `src\user\apps.asm` - 3
-- `src\kernel\drivers\display.asm` - 3
-- `src\kernel\core\pit.asm` - 3
-- `src\kernel\drivers\spi_hid.asm` - 2
-- `src\kernel\core\tss.asm` - 2
-- `src\kernel\core\main.asm` - 2
 - `src\user\apps\terminal.inc` - 2
-- `src\include\trace.inc` - 2
+- `src\kernel\drivers\spi_hid.asm` - 2
 - `src\kernel\drivers\pci.asm` - 2
-- `src\kernel\drivers\usb_hid.asm` - 2
 - `src\kernel\drivers\acpi_pci.asm` - 2
-- `src\kernel\arch\acpi.asm` - 1
+- `src\include\trace.inc` - 2
+- `src\kernel\drivers\usb_hid.asm` - 2
+- `src\kernel\core\tss.asm` - 2
 - `src\kernel\arch\rsdp.asm` - 1
-- `src\boot\gdt.asm` - 1
-- `src\kernel\drivers\usb.asm` - 1
-- `src\user\poc\exploit_poc_syscall9.asm` - 1
 - `src\kernel\core\entry.asm` - 1
+- `src\kernel\core\idt.asm` - 1
+- `src\user\poc\exploit_poc_syscall9.asm` - 1
+- `src\boot\gdt.asm` - 1
+- `src\kernel\arch\acpi.asm` - 1
+- `src\kernel\lib\xml_selftest.inc` - 1
+- `src\kernel\drivers\usb.asm` - 1
+- `src\kernel\lib\font.asm` - 1
+- `src\kernel\proc\syscall.asm` - 1
+- `src\user\apps\about.inc` - 1
 - `src\kernel\core\memory.asm` - 1
 - `src\kernel\fs\fat16.asm` - 1
-- `src\kernel\lib\font.asm` - 1
-- `src\user\apps\about.inc` - 1
-- `src\kernel\core\idt.asm` - 1
-- `src\kernel\proc\syscall.asm` - 1
 
 ## Fixed Address Counts
 - `src\boot\boot.asm` - 82
-- `src\include\constants.inc` - 75
-- `src\user\apps\explorer.inc` - 40
+- `src\include\constants.inc` - 60
 - `src\user\apps\notepad.inc` - 40
-- `src\boot\uefi_loader.asm` - 38
+- `src\boot\uefi_loader.asm` - 37
 - `src\boot\stage2.asm` - 27
 - `src\user\apps\paint.inc` - 24
 - `src\kernel\drivers\usb_hid.asm` - 24
-- `src\kernel\gui\taskbar.asm` - 22
 - `src\boot\paging.asm` - 22
-- `src\kernel\gui\desktop.asm` - 18
-- `src\include\boot_memory.inc` - 17
-- `src\user\apps\settings.inc` - 17
+- `src\include\boot_memory.inc` - 20
 - `src\kernel\drivers\i2c_hid.asm` - 16
+- `src\kernel\gui\taskbar.asm` - 15
+- `src\kernel\core\main.asm` - 12
 - `src\kernel\fs\fat16.asm` - 11
-- `src\kernel\drivers\spi.asm` - 10
+- `src\kernel\drivers\display.asm` - 11
 - `src\kernel\arch\apic.asm` - 10
+- `src\resources\design-system\parser_example.asm` - 10
+- `src\kernel\drivers\spi.asm` - 10
 - `src\kernel\proc\syscall.asm` - 9
 - `src\user\apps\state.inc` - 9
 - `src\kernel\drivers\usb.asm` - 8
-- `src\user\apps\about.inc` - 8
 - `src\user\apps\shell.inc` - 8
+- `src\user\apps\about.inc` - 8
 - `src\user\apps\terminal.inc` - 7
-- `src\kernel\core\main.asm` - 5
 - `src\user\apps\launch.inc` - 4
-- `src\kernel\core\isr.asm` - 4
-- `src\kernel\drivers\mouse.asm` - 4
 - `src\kernel\drivers\xhci.asm` - 4
 - `src\kernel\core\perfdiag.asm` - 4
+- `src\kernel\drivers\mouse.asm` - 4
+- `src\kernel\core\isr.asm` - 4
 - `src\user\apps\security_probe.inc` - 3
 - `src\user\lib\nexus_window.inc` - 3
-- `src\kernel\core\entry.asm` - 2
-- `src\user\apps.asm` - 2
-- `src\kernel\arch\rsdp.asm` - 2
 - `src\user\poc\exploit_poc_syscall9.asm` - 2
-- `src\kernel\gui\cursor.asm` - 2
+- `src\user\apps.asm` - 2
 - `src\kernel\proc\process.asm` - 2
+- `src\kernel\core\entry.asm` - 2
+- `src\kernel\arch\rsdp.asm` - 2
 - `src\kernel\drivers\hid_parser.asm` - 2
+- `src\kernel\gui\cursor.asm` - 2
 - `src\kernel\drivers\pci.asm` - 2
-- `src\kernel\core\tss.asm` - 1
-- `src\kernel\lib\string.asm` - 1
-- `src\user\templates\hello_callback.asm` - 1
+- `src\kernel\gui\resources.asm` - 2
 - `src\boot\gdt.asm` - 1
+- `src\kernel\arch\ioapic.asm` - 1
+- `src\user\templates\hello_callback.asm` - 1
+- `src\boot\vesa.asm` - 1
+- `src\kernel\core\tss.asm` - 1
+- `src\resources\design-system\font_24x48.inc` - 1
+- `src\resources\design-system\font_8x16.inc` - 1
+- `src\resources\design-system\font_16x32.inc` - 1
 - `src\kernel\proc\usermode.asm` - 1
 - `src\kernel\kernel_build.asm` - 1
-- `src\boot\vesa.asm` - 1
-- `src\kernel\arch\ioapic.asm` - 1
+- `src\kernel\gui\window.asm` - 1
+- `src\kernel\lib\xml.asm` - 1
+- `src\kernel\lib\string.asm` - 1
+- `src\resources\design-system\palette_dark.inc` - 1
+- `src\resources\design-system\palette_light.inc` - 1
 
 ## TODO/STUB/FIXME Counts
 - `src\include\macros.inc` - 3

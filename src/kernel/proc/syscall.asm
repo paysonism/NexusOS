@@ -58,6 +58,13 @@ extern kernel_open_file_in_notepad
 extern kernel_open_app_command
 extern display_set_mode
 extern cursor_init
+extern vsync_enabled
+extern fps_show
+extern display_stretch
+extern fb_native_width
+extern fb_native_height
+extern desktop_bg_theme
+extern wallpaper_cache_valid
 extern render_rect
 extern render_text
 extern scr_width
@@ -72,6 +79,28 @@ extern app_blob_end_v
 extern l3_app_arena_base_v
 extern l3_app_arena_size_v
 extern trace_syscall
+extern xml_parse
+extern xml_root
+extern xml_tag
+extern xml_tag_name
+extern xml_first_child
+extern xml_next_sibling
+extern xml_parent
+extern xml_attr
+extern xml_text
+extern xml_free
+extern xml_last_error
+extern xml_node_count
+extern xml_text_runs
+extern xml_text_run
+extern xml_namespace
+extern xml_node_namespace
+extern xml_entity_value
+extern draw_line
+extern fill_circle
+extern fill_triangle
+extern blend_pixel
+extern blend_span
 
 L3_RT_ENTRY          equ 0
 L3_RT_ARG0           equ 8
@@ -225,6 +254,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 %endif
 
     inc qword [syscall_count]
+%ifdef ENABLE_USER_DEBUG_SYSCALL
     push rax
     SER 's'
     mov rdi, rax
@@ -250,6 +280,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     pop rdi
     pop rcx
     pop rax
+%endif
 
 .dispatch:
     cmp rax, syscall_table_count
@@ -638,8 +669,6 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jmp .done
 
 .sc_display_set_mode:
-    test r15d, r15d
-    jnz .sc_display_set_mode_reject
     ; rdi=width, rsi=height, rdx=bpp. Keep ring-3 geometry inside the
     ; fixed boot back-buffer before the display driver touches global state.
     mov rax, rdi
@@ -667,19 +696,100 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jmp .done
 
 .sc_cursor_init:
-    test r15d, r15d
-    jnz .sc_cursor_init_reject
     call cursor_init
     xor eax, eax
     mov [rsp + ALL_RAX], rax
-    jmp .done
-.sc_cursor_init_reject:
-    mov qword [rsp + ALL_RAX], -1
     jmp .done
 
 .sc_ticks:
     mov rax, [tick_count]
     mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_display_flags:
+    ; Pack display state into a bit field:
+    ;   bit 0 = vsync, bit 1 = fps overlay, bit 2 = stretch.
+    ; New bits go in the high range; bit 0/1 are stable for old callers.
+    xor eax, eax
+    cmp byte [vsync_enabled], 0
+    je .sc_display_flags_fps
+    or eax, 1
+.sc_display_flags_fps:
+    cmp byte [fps_show], 0
+    je .sc_display_flags_stretch
+    or eax, 2
+.sc_display_flags_stretch:
+    cmp byte [display_stretch], 0
+    je .sc_display_flags_done
+    or eax, 4
+.sc_display_flags_done:
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_display_set_flags:
+    mov rax, rdi
+    shr rax, 32
+    jnz .sc_display_set_flags_reject
+    mov eax, edi
+    and eax, 1
+    mov [vsync_enabled], al
+    mov eax, edi
+    shr eax, 1
+    and eax, 1
+    mov [fps_show], al
+    mov eax, edi
+    shr eax, 2
+    and eax, 1
+    mov [display_stretch], al
+    xor eax, eax
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_display_set_flags_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+; SYS_DISPLAY_NATIVE — return the monitor's native (boot-time) framebuffer
+; size as a packed qword: width in bits [31:0], height in bits [63:32].
+; Apps use this to surface a "Use native resolution" choice that survives
+; mode changes (scr_width/scr_height can drift away from the native size
+; once display_set_mode runs).
+.sc_display_native:
+    mov eax, [fb_native_width]
+    mov ecx, [fb_native_height]
+    shl rcx, 32
+    or rax, rcx
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+; SYS_DISPLAY_SIZE — return the *current* logical desktop size packed the
+; same way as SYS_DISPLAY_NATIVE. This drifts whenever display_set_mode
+; succeeds, so apps that want to show "current resolution" read this on
+; every draw rather than caching it.
+.sc_display_size:
+    mov eax, [scr_width]
+    mov ecx, [scr_height]
+    shl rcx, 32
+    or rax, rcx
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_desktop_bg:
+    movzx eax, byte [desktop_bg_theme]
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_desktop_set_bg:
+    mov rax, rdi
+    shr rax, 32
+    jnz .sc_desktop_set_bg_reject
+    cmp edi, 2
+    ja .sc_desktop_set_bg_reject
+    mov [desktop_bg_theme], dil
+    xor eax, eax
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_desktop_set_bg_reject:
+    mov qword [rsp + ALL_RAX], -1
     jmp .done
 
 .sc_fs_delete:
@@ -736,6 +846,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     test eax, eax
     jz .sc_open_file_np_reject
     mov rdi, [rsp + ALL_RDI]
+    call sc_dir_entry_handle_to_kernel
     call kernel_open_file_in_notepad
     mov [rsp + ALL_RAX], rax
     jmp .done
@@ -754,6 +865,322 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jmp .done
 .sc_app_open_reject:
     mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_xml_parse:
+    ; rdi=buf, rsi=len. sc_validate_user_io_range takes (rdi=ptr, rsi=len).
+    call sc_validate_user_io_range
+    test eax, eax
+    jz .sc_xml_reject
+    mov rdi, [rsp + ALL_RDI]
+    mov rsi, [rsp + ALL_RSI]
+    call xml_parse
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_xml_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_xml_root:
+    call xml_root
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_tag:
+    call xml_tag
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_tag_name:
+    ; rdi=node, rsi=out, rdx=max
+    push rdi
+    push rdx
+    mov rdi, rsi
+    mov rsi, rdx
+    call sc_validate_user_io_range
+    pop rdx
+    pop rdi
+    test eax, eax
+    jz .sc_xml_reject
+    mov rsi, [rsp + ALL_RSI]
+    mov rdx, [rsp + ALL_RDX]
+    call xml_tag_name
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_first_child:
+    call xml_first_child
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_next_sibling:
+    call xml_next_sibling
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_parent:
+    call xml_parent
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_attr:
+    ; rdi=node, rsi=name, rdx=nlen, r10=out, r8=omax
+    ; validate name range
+    mov rdi, rsi
+    mov rsi, rdx
+    call sc_validate_user_io_range
+    test eax, eax
+    jz .sc_xml_reject
+    ; validate out range
+    mov rdi, [rsp + ALL_R10]
+    mov rsi, [rsp + ALL_R8]
+    call sc_validate_user_io_range
+    test eax, eax
+    jz .sc_xml_reject
+    ; reload original args and call xml_attr(node, name, nlen, out, omax)
+    mov rdi, [rsp + ALL_RDI]
+    mov rsi, [rsp + ALL_RSI]
+    mov rdx, [rsp + ALL_RDX]
+    mov rcx, [rsp + ALL_R10]
+    mov r8,  [rsp + ALL_R8]
+    call xml_attr
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_text:
+    ; rdi=node, rsi=out, rdx=max
+    push rdi
+    push rdx
+    mov rdi, rsi
+    mov rsi, rdx
+    call sc_validate_user_io_range
+    pop rdx
+    pop rdi
+    test eax, eax
+    jz .sc_xml_reject
+    mov rsi, [rsp + ALL_RSI]
+    mov rdx, [rsp + ALL_RDX]
+    call xml_text
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_free:
+    call xml_free
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_last_error:
+    ; Return packed diagnostic: bits[31:0] = error code,
+    ; bits[63:32] = byte offset truncated to 32 bits.
+    call xml_last_error
+    shl rdx, 32
+    mov eax, eax
+    or rax, rdx
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_node_count:
+    call xml_node_count
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_text_runs:
+    ; rdi = node
+    mov rdi, [rsp + ALL_RDI]
+    call xml_text_runs
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_text_run:
+    ; rdi = node, rsi = run index, rdx = out, r10 = max
+    mov rdi, [rsp + ALL_RDX]
+    mov rsi, [rsp + ALL_R10]
+    call sc_validate_user_io_range
+    test eax, eax
+    jz .sc_xml_reject
+    mov rdi, [rsp + ALL_RDI]
+    mov esi, [rsp + ALL_RSI]
+    mov rcx, [rsp + ALL_RDX]
+    mov r8,  [rsp + ALL_R10]
+    call xml_text_run
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_namespace:
+    ; rdi = node, rsi = prefix, rdx = prefix len, r10 = out, r8 = max
+    cmp qword [rsp + ALL_RDX], 0
+    je .sc_xml_namespace_out
+    mov rdi, [rsp + ALL_RSI]
+    mov rsi, [rsp + ALL_RDX]
+    call sc_validate_user_io_range
+    test eax, eax
+    jz .sc_xml_reject
+.sc_xml_namespace_out:
+    mov rdi, [rsp + ALL_R10]
+    mov rsi, [rsp + ALL_R8]
+    call sc_validate_user_io_range
+    test eax, eax
+    jz .sc_xml_reject
+    mov rdi, [rsp + ALL_RDI]
+    mov rsi, [rsp + ALL_RSI]
+    mov rdx, [rsp + ALL_RDX]
+    mov rcx, [rsp + ALL_R10]
+    mov r8,  [rsp + ALL_R8]
+    call xml_namespace
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_node_namespace:
+    ; rdi = node, rsi = out, rdx = max
+    mov rdi, [rsp + ALL_RSI]
+    mov rsi, [rsp + ALL_RDX]
+    call sc_validate_user_io_range
+    test eax, eax
+    jz .sc_xml_reject
+    mov rdi, [rsp + ALL_RDI]
+    mov rcx, [rsp + ALL_RSI]
+    mov r8,  [rsp + ALL_RDX]
+    call xml_node_namespace
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_xml_entity_value:
+    ; rdi = name, rsi = name len, rdx = out, r10 = max
+    mov rdi, [rsp + ALL_RDI]
+    mov rsi, [rsp + ALL_RSI]
+    call sc_validate_user_io_range
+    test eax, eax
+    jz .sc_xml_reject
+    mov rdi, [rsp + ALL_RDX]
+    mov rsi, [rsp + ALL_R10]
+    call sc_validate_user_io_range
+    test eax, eax
+    jz .sc_xml_reject
+    mov rsi, [rsp + ALL_RDI]
+    mov rdx, [rsp + ALL_RSI]
+    mov rcx, [rsp + ALL_RDX]
+    mov r8,  [rsp + ALL_R10]
+    call xml_entity_value
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_draw_line:
+    ; rdi=x0, rsi=y0, rdx=x1, r10=y1, r8=color
+    mov edi, [rsp + ALL_RDI]
+    mov esi, [rsp + ALL_RSI]
+    mov edx, [rsp + ALL_RDX]
+    mov ecx, [rsp + ALL_R10]
+    mov r8d, [rsp + ALL_R8]
+    call draw_line
+    mov qword [rsp + ALL_RAX], 0
+    jmp .done
+
+.sc_fill_circle:
+    ; rdi=cx, rsi=cy, rdx=r, r10=color
+    mov edi, [rsp + ALL_RDI]
+    mov esi, [rsp + ALL_RSI]
+    mov edx, [rsp + ALL_RDX]
+    mov ecx, [rsp + ALL_R10]
+    call fill_circle
+    mov qword [rsp + ALL_RAX], 0
+    jmp .done
+
+.sc_fill_triangle:
+    ; rdi = coords ptr (24 bytes: 6 int32), rsi = color
+    mov rdi, [rsp + ALL_RDI]
+    mov rsi, 24
+    call sc_validate_user_io_range
+    test eax, eax
+    jz .sc_fill_triangle_reject
+    mov rdi, [rsp + ALL_RDI]
+    mov esi, [rsp + ALL_RSI]
+    call fill_triangle
+    mov qword [rsp + ALL_RAX], 0
+    jmp .done
+.sc_fill_triangle_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_blend_pixel:
+    ; rdi = x, rsi = y, rdx = color
+    mov edi, [rsp + ALL_RDI]
+    mov esi, [rsp + ALL_RSI]
+    mov edx, [rsp + ALL_RDX]
+    call blend_pixel
+    mov qword [rsp + ALL_RAX], 0
+    jmp .done
+
+.sc_blend_span:
+    ; rdi = x, rsi = y, rdx = len, r10 = color
+    mov edi, [rsp + ALL_RDI]
+    mov esi, [rsp + ALL_RSI]
+    mov edx, [rsp + ALL_RDX]
+    mov ecx, [rsp + ALL_R10]
+    call blend_span
+    mov qword [rsp + ALL_RAX], 0
+    jmp .done
+
+.sc_blend_span_argb:
+    ; rdi = x, rsi = y, rdx = len (pixels), r10 = ARGB src buffer.
+    ; Batches one scanline run: replaces `len` per-pixel blend syscalls.
+    mov edx, [rsp + ALL_RDX]
+    test edx, edx
+    jle .sc_blend_span_argb_done
+    mov rdi, [rsp + ALL_R10]          ; src buffer ptr
+    mov esi, edx
+    shl esi, 2                        ; byte length = len * 4
+    call sc_validate_user_range
+    test eax, eax
+    jz .sc_blend_span_argb_done
+    mov edi, [rsp + ALL_RDI]
+    mov esi, [rsp + ALL_RSI]
+    mov edx, [rsp + ALL_RDX]
+    mov rcx, [rsp + ALL_R10]
+    call blend_span_argb
+.sc_blend_span_argb_done:
+    mov qword [rsp + ALL_RAX], 0
+    jmp .done
+
+.sc_blend_span_argb_screen:
+    ; rdi = x, rsi = y, rdx = len (pixels), r10 = ARGB src buffer.
+    ; mix-blend-mode: screen variant of sc_blend_span_argb.
+    mov edx, [rsp + ALL_RDX]
+    test edx, edx
+    jle .sc_blend_span_argb_screen_done
+    mov rdi, [rsp + ALL_R10]
+    mov esi, edx
+    shl esi, 2
+    call sc_validate_user_range
+    test eax, eax
+    jz .sc_blend_span_argb_screen_done
+    mov edi, [rsp + ALL_RDI]
+    mov esi, [rsp + ALL_RSI]
+    mov edx, [rsp + ALL_RDX]
+    mov rcx, [rsp + ALL_R10]
+    call blend_span_argb_screen
+.sc_blend_span_argb_screen_done:
+    mov qword [rsp + ALL_RAX], 0
+    jmp .done
+
+.sc_blend_span_argb_multiply:
+    ; rdi = x, rsi = y, rdx = len (pixels), r10 = ARGB src buffer.
+    ; mix-blend-mode: multiply variant of sc_blend_span_argb.
+    mov edx, [rsp + ALL_RDX]
+    test edx, edx
+    jle .sc_blend_span_argb_multiply_done
+    mov rdi, [rsp + ALL_R10]
+    mov esi, edx
+    shl esi, 2
+    call sc_validate_user_range
+    test eax, eax
+    jz .sc_blend_span_argb_multiply_done
+    mov edi, [rsp + ALL_RDI]
+    mov esi, [rsp + ALL_RSI]
+    mov edx, [rsp + ALL_RDX]
+    mov rcx, [rsp + ALL_R10]
+    call blend_span_argb_multiply
+.sc_blend_span_argb_multiply_done:
+    mov qword [rsp + ALL_RAX], 0
     jmp .done
 
 .sc_app_done:
@@ -952,6 +1379,37 @@ syscall_table:
     SYSCALL_ENTRY syscall_entry.sc_fs_mkdir,         1, SC_KIND1(FN_KIND_PTR)
     SYSCALL_ENTRY syscall_entry.sc_open_file_np,     1, SC_KIND1(FN_KIND_HANDLE)
     SYSCALL_ENTRY syscall_entry.sc_app_open,         1, SC_KIND1(FN_KIND_CSTRING)
+    SYSCALL_ENTRY syscall_entry.sc_display_flags,    0, 0
+    SYSCALL_ENTRY syscall_entry.sc_display_set_flags, 1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_desktop_bg,       0, 0
+    SYSCALL_ENTRY syscall_entry.sc_desktop_set_bg,   1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_display_native,   0, 0
+    SYSCALL_ENTRY syscall_entry.sc_display_size,     0, 0
+    SYSCALL_ENTRY syscall_entry.sc_xml_parse,        2, SC_KIND2(FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_root,         0, 0
+    SYSCALL_ENTRY syscall_entry.sc_xml_tag,          1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_tag_name,     3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_first_child,  1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_next_sibling, 1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_parent,       1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_attr,         5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_text,         3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_free,         0, 0
+    SYSCALL_ENTRY syscall_entry.sc_draw_line,        5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_fill_circle,      4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_fill_triangle,    2, SC_KIND2(FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_last_error,   0, 0
+    SYSCALL_ENTRY syscall_entry.sc_xml_node_count,   0, 0
+    SYSCALL_ENTRY syscall_entry.sc_blend_pixel,      3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_blend_span,       4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_text_runs,    1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_text_run,     4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_namespace,    5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_node_namespace, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_xml_entity_value, 4, SC_KIND4(FN_KIND_PTR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_blend_span_argb,  4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR)
+    SYSCALL_ENTRY syscall_entry.sc_blend_span_argb_screen, 4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR)
+    SYSCALL_ENTRY syscall_entry.sc_blend_span_argb_multiply, 4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR)
 syscall_table_end:
 syscall_table_count equ (syscall_table_end - syscall_table) / SYSCALL_ENTRY_SIZE
 

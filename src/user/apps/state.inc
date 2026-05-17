@@ -127,10 +127,17 @@ szAppNameSecurity db "security", 0
 szAppNameSecurityProbe db "security_probe", 0
 szAppNameRoot     db "root", 0
 
-; Context menu state
+; Context menu state (legacy explorer.inc — retained for back-compat).
 ctx_menu_visible db 0
 ctx_menu_x      dd 0
 ctx_menu_y      dd 0
+
+; Explorer context-menu state used by the NexusHL explorer.
+; exp_ctx_x / exp_ctx_y are client-area coordinates relative to the explorer
+; window's client origin (not absolute screen coords like ctx_menu_x/y).
+exp_ctx_visible db 0
+exp_ctx_x       dd 0
+exp_ctx_y       dd 0
 
 ; Rename mode state
 exp_rename_active  db 0
@@ -224,26 +231,6 @@ szL3WndTitle    db "L3TEST", 0
 szL3Tmp83       db "L3TEST  TXT"
 szL3TmpData     db "L3OK"
 
-; --- Settings strings ---
-szSetDisplay    db "Display", 0
-szSetRes        db "Resolution:", 0
-szSetBpp        db "Color Depth: 32-bit", 0
-szSetMemory     db "Memory", 0
-szSetMem512     db "Total RAM: 512 MB", 0
-szSetKernel     db "Kernel", 0
-szSetArch       db "Architecture: x86-64", 0
-szSetBoot       db "Boot Mode: BIOS (Legacy)", 0
-szSetVSync      db "VSync", 0
-szSetFPS        db "Show FPS", 0
-szRes800        db "800x600", 0
-szRes1024       db "1024x768", 0
-szRes1280       db "1280x720", 0
-szRes1920       db "1920x1080", 0
-
-extern vsync_enabled
-extern fps_show
-extern display_set_mode
-extern cursor_init
 extern scr_width
 extern scr_height
 

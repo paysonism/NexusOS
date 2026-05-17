@@ -28,6 +28,9 @@ src/user/nexushl/
   lib/
     core.nxh         # syscall numbers, window offsets, colors, keys
     gui.nxh          # immediate-mode GUI helpers and shared widget metrics
+    svg.nxh          # lightweight SVG wallpaper IDs and raster primitives
+    svg2.nxh         # static SVG2 subset renderer for apps that need it
+    xml.nxh          # XML DOM parser syscall bindings
   apps/
     hello.nxh        # smoke app, emits [nxhl] markers on every callback
     notepad.nxh      # shipped Notepad implementation
@@ -46,8 +49,22 @@ app "<Name>" { stack = <N>; }          # app metadata (reserved for future loade
 str <name> = "...";                    # static zero-terminated string in .rodata
 const <NAME> = <int>;                  # compile-time integer
 extern <symbol>;                       # declare an external NASM symbol
+state { <name>: <bytes>; }             # zeroed per-slot static storage
 fn <name>(a, b, c) { ... }             # function with up to 6 params
 ```
+
+`state` fields compile to labels inside the generated app blob:
+
+```nxh
+state {
+  selected_tab: 4;
+  scratch_name: 64;
+}
+```
+
+Use `&selected_tab` with `lb`/`lw`/`lq` and `sb`/`sw`/`sq`. The loader copies
+the app blob into each app slot before callbacks run, so these labels behave
+like slot-local statics without kernel externs or shared global storage.
 
 ### Statements
 ```
@@ -87,7 +104,7 @@ without worrying about `rdi`/`rsi`/`rdx` being clobbered.
 - Direct register names (no `mov rax, ...` unless wrapped in `asm "..."`)
 - Raw memory dereference (`[rax+8]`, etc.)
 - Pointer arithmetic
-- Hidden allocation — all storage is either top-level `str`/`const` or stack
+- Hidden allocation — mutable storage must be explicit `state` or stack locals
 - Inline asm without the explicit `asm "..."` block (and each one is a lint)
 - Undeclared identifiers
 
@@ -154,6 +171,21 @@ active app blob by `test_source_guards.ps1`.
 Use `src/user/nexushl/lib/gui.nxh` for app UI. It provides the shared
 immediate-mode drawing layer for menus, dropdowns, inputs, and blinking carets.
 The full contract is documented in `docs/nexushl-gui.md`.
+
+Use `src/user/nexushl/lib/svg.nxh` when selecting SVG-backed assets from apps
+or calling the low-level raster primitives. `svg.nxh` must stay small and must
+not import the heavier renderer. Use `src/user/nexushl/lib/svg2.nxh` only when
+an app needs to parse and rasterize a static SVG document; `svg2.nxh` can grow
+as the opt-in SVG implementation until NexusHL has better module boundaries.
+The SVG2 support matrix and maintenance rules are documented in
+`docs/nexushl-svg.md`.
+
+The Settings app is generated from `src/user/nexushl/apps/settings.nxh`. It is
+the reference app for `state {}` and for display-control syscalls
+`SYS_DISPLAY_FLAGS` / `SYS_DISPLAY_SET_FLAGS`.
+
+Use `src/user/nexushl/lib/xml.nxh` for XML DOM parsing. The support matrix and
+parser maintenance rules are documented in `docs/nexushl-xml.md`.
 
 ## Roadmap (post file-explorer port)
 

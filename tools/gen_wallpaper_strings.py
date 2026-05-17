@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Embed src/resources/wallpapers/*.svg into wallpaper.nxh as escaped strings.
+
+Updates the three (str <name> = "..."; const <NAME>_LEN = N) declarations in
+src/user/nexushl/apps/wallpaper.nxh so the native NexusHL SVG renderer has the
+current SVG source. Run after editing any wallpaper SVG.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+NXH = ROOT / "src" / "user" / "nexushl" / "apps" / "wallpaper.nxh"
+
+WALLPAPERS = (
+    ("liquid_svg", "LIQUID_SVG_LEN", "liquid-metal.svg"),
+    ("ribbons_svg", "RIBBONS_SVG_LEN", "glass-ribbons.svg"),
+    ("bloom_svg", "BLOOM_SVG_LEN", "frosted-bloom.svg"),
+)
+
+
+def escape(raw: str) -> str:
+    return raw.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def main() -> int:
+    text = NXH.read_text(encoding="utf-8")
+    for var, length_const, svg_name in WALLPAPERS:
+        raw = (ROOT / "src" / "resources" / "wallpapers" / svg_name).read_text(encoding="utf-8")
+        esc = escape(raw)
+        byte_len = len(raw.encode("utf-8"))
+        str_pat = re.compile(rf'(str\s+{var}\s*=\s*")(?:\\.|[^"\\])*(";)')
+        len_pat = re.compile(rf'(const\s+{length_const}\s*=\s*)\d+')
+        new_text, n1 = str_pat.subn(lambda m: m.group(1) + esc + m.group(2), text, count=1)
+        if n1 != 1:
+            raise SystemExit(f"failed to find str {var} declaration")
+        new_text, n2 = len_pat.subn(lambda m: m.group(1) + str(byte_len), new_text, count=1)
+        if n2 != 1:
+            raise SystemExit(f"failed to find const {length_const} declaration")
+        text = new_text
+        print(f"[wallpaper-strings] {svg_name} -> {var} ({byte_len} bytes)")
+    NXH.write_text(text, encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

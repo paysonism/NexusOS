@@ -1,5 +1,103 @@
 [
   {
+    "name": "app_hl_hello_display_flags",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_hello_display_set_flags",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "flags",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_hello_display_set_mode",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "width",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "height",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "bpp",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_hello_cursor_init",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_hello_desktop_bg",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_hello_desktop_set_bg",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "theme",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_hello_display_native_width",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_hello_display_native_height",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_hello_display_current_width",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_hello_display_current_height",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
     "name": "app_hl_hello_hello_draw",
     "argc": 1,
     "kindmask": 0,

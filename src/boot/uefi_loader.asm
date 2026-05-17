@@ -504,12 +504,16 @@ gop_init:
     test rbx, rbx
     jz .fail
 
-    ; --- Iterate modes, find best match to 1024x768 ---
+    ; --- Iterate modes, pick the largest one whose pixel count fits the
+    ;     kernel back buffer. "Largest" = greatest width*height. The cap
+    ;     comes from boot_memory.inc::BOOT_BACK_BUFFER_SIZE (bytes) so any
+    ;     future bump to the back buffer automatically widens the set of
+    ;     acceptable modes.
     mov rax, [rbx + GOP_MODE]
     mov r12d, [rax + GOPM_MAX]
     xor r13d, r13d                  ; current mode index
     mov r14d, 0xFFFFFFFF            ; best mode (none)
-    mov r15d, 0x7FFFFFFF            ; best score (lower = closer to 1024x768)
+    xor r15, r15                    ; best pixel count (rdx:rax fits in 32b for our sizes)
 
 .mode_loop:
     cmp r13d, r12d
@@ -531,33 +535,20 @@ gop_init:
     mov ecx, [rax + GOPI_HRES]
     mov edx, [rax + GOPI_VRES]
 
-    ; Exact 1024x768 - pick immediately
-    cmp ecx, 1024
-    jne .score
-    cmp edx, 768
-    jne .score
-    mov r14d, r13d
-    jmp .select
+    ; Reject modes wider than MAX_FB_WIDTH or taller than MAX_FB_HEIGHT.
+    ; Without these caps we could pick a mode whose backing scanline does
+    ; not fit BOOT_BACK_BUFFER_SIZE and crash the compositor.
+    cmp ecx, MAX_FB_WIDTH
+    ja .next_mode
+    cmp edx, MAX_FB_HEIGHT
+    ja .next_mode
 
-.score:
-    ; score = abs(w - 1024) + abs(h - 768)
-    push rdx                        ; save height
-    sub ecx, 1024
+    ; pixels = w * h. Compare to running max in r15.
     mov eax, ecx
-    cdq
-    xor eax, edx
-    sub eax, edx                    ; abs(w-1024)
-    mov ecx, eax
-    pop rdx
-    sub edx, 768
-    mov eax, edx
-    cdq
-    xor eax, edx
-    sub eax, edx                    ; abs(h-768)
-    add ecx, eax
-    cmp ecx, r15d
-    jae .next_mode
-    mov r15d, ecx
+    imul eax, edx                   ; eax = pixel count (fits in 32 bits for any sane res)
+    cmp rax, r15
+    jbe .next_mode
+    mov r15, rax
     mov r14d, r13d
 
 .next_mode:
@@ -712,14 +703,14 @@ load_kernel:
     mov rax, [rcx + BS_ALLOCPG]
     xor ecx, ecx                    ; AllocateAnyPages
     mov edx, 2                      ; EfiLoaderData
-    mov r8,  0x200                  ; 512 pages = 2 MB
+    mov r8,  0x2000                 ; 8192 pages = 32 MB
     lea r9,  [v_kernel_addr]
     call rax
     test rax, rax
     jnz .fail
 
     ; --- Step 7: Read kernel into allocated buffer ---
-    mov qword [rsp+64], 0x200000    ; max read size (in/out)
+    mov qword [rsp+64], 0x2000000   ; max read size (in/out)
     mov rbx, [v_file]
     mov rcx, rbx
     lea rdx, [rsp+64]               ; &ByteCount
@@ -862,7 +853,7 @@ setup_paging:
     %define UEFI_PAGE_LARGE        0x80
     ; W^X: kernel text lives in [KTEXT_START, KTEXT_END). All other pages NX.
     %define UEFI_KTEXT_START_PAGE  0x100     ; PTE index of 0x100000
-    %define UEFI_KTEXT_END_PAGE    0x120     ; PTE index of 0x120000 (128KB)
+    %define UEFI_KTEXT_END_PAGE    0x200     ; executable kernel text through 2 MiB
     %define UEFI_PT0_BASE          0x74000   ; 4KB page table for PD0[0]
     %define UEFI_APP_PT_BASE       0x75000   ; 4 PTs (0x75000..0x78FFF) for app arena
     push rbx
@@ -953,6 +944,14 @@ setup_paging:
     or  rdx, UEFI_PAGE_USER | UEFI_PAGE_LARGE
     jmp .pd0_write
 .pd0_nx:
+    ; Keep the loaded kernel image executable after the first 2 MiB. The
+    ; trampoline jumps into KERNEL_LOAD_ADDR and the monolithic kernel's text
+    ; spans multiple MiB once generated NexusHL apps are included.
+    cmp ebx, 1
+    jb .pd0_set_nx
+    cmp ebx, 8
+    jb .pd0_write
+.pd0_set_nx:
     bts rdx, 63                     ; kernel data region: NX
 .pd0_write:
     mov [rdi], rdx

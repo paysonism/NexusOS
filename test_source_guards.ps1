@@ -34,7 +34,8 @@ $syscallUserPath = Join-Path $Root 'src\include\syscall_user.inc'
 $displayPath = Join-Path $Root 'src\kernel\drivers\display.asm'
 $usermodePath = Join-Path $Root 'src\kernel\proc\usermode.asm'
 $windowPath = Join-Path $Root 'src\kernel\gui\window.asm'
-$appsPath = Join-Path $Root 'src\user\apps\explorer.inc'
+$corePath = Join-Path $Root 'src\kernel\core\main.asm'
+$appsPath = Join-Path $Root 'build\nxh\explorer.asm'
 $wrapperPath = Join-Path $Root 'src\user\apps.asm'
 $launchPath = Join-Path $Root 'src\user\apps\launch.inc'
 $pagingPath = Join-Path $Root 'src\boot\paging.asm'
@@ -89,6 +90,8 @@ Assert-Match $windowPath '(wm_close_window:|FN_BEGIN wm_close_window)[\s\S]*cmp 
 Assert-Match $windowPath 'wm_close_window[\s\S]*call wm_focus_top_active[\s\S]*wm_focus_top_active:' 'Closing the focused window must transfer focus to another active visible window.'
 Assert-Match $windowPath 'wm_click_focus_before[\s\S]*call call_app_l3[\s\S]*cmp rax, \[wm_click_focus_before\][\s\S]*\.click_preserve_focus' 'Window click callbacks that launch/focus another window must not be overwritten by post-callback focus restore.'
 Assert-Match $launchPath 'kernel_open_file_in_notepad:[\s\S]*WIN_OFF_X\], 560[\s\S]*WIN_OFF_Y' 'Notepad windows opened from Explorer must leave the Explorer list visible for more file opens.'
+Assert-Match $corePath 'FN_BEGIN process_mouse[\s\S]*call mouse_check_moved[\s\S]*cmp al, \[process_mouse_last_buttons\][\s\S]*mov \[process_mouse_last_buttons\], dl' 'Mouse processing must notice button-only changes so release events clear held-click state.'
+Assert-Match $corePath '\.pk_key_lclick:[\s\S]*call wm_handle_mouse_event[\s\S]*\.pk_kc_handled:[\s\S]*mov byte \[mouse_buttons\], 0[\s\S]*xor edx, edx[\s\S]*call wm_handle_mouse_event' 'Keyboard/serial left-click must send both mouse down and mouse up so later Explorer clicks are not treated as a held button.'
 
 Write-Host '[guards] Checking Explorer Enter stack fix...' -ForegroundColor Yellow
 Assert-NotMatch $appsPath 'app_explorer_key:[\s\S]*?\.exp_key_enter:[\s\S]*?push rax[\s\S]*?\.exp_key_done:' 'Explorer Enter path must not push an unmatched rax before the shared epilogue.'

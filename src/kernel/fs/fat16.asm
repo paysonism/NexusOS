@@ -23,8 +23,8 @@ extern ata_read_sectors
 extern ata_write_sectors
 extern ata_drive_sel
 
-; The FAT16 partition starts at this LBA sector on the disk image
-FAT16_PART_LBA  equ 320           ; After MBR + Stage2 + Kernel (sector 320 = byte 163840)
+; The FAT16 partition starts after the fixed BIOS kernel reservation.
+; Keep this in constants.inc so the BIOS image builder and filesystem agree.
 FAT16_FAT_CACHE_SECTORS equ 128
 FAT16_ROOT_CACHE_SECTORS equ 32
 FAT16_MAX_FAT_ENTRIES equ (FAT16_FAT_CACHE_SECTORS * 256)

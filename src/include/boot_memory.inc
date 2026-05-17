@@ -12,22 +12,46 @@ BOOT_DRIVE_ADDR     equ 0x9100
 PAGE_TABLE_ADDR     equ 0x70000
 SMP_TRAMPOLINE_ADDR equ 0x8000
 KERNEL_LOAD_ADDR    equ 0x100000
-KERNEL_STACK_TOP    equ 0x200000
-IDT_ADDR            equ 0x200000
-KERNEL_DATA_ADDR    equ 0x210000
-PAGE_BITMAP_ADDR    equ 0x300000
+KERNEL_STACK_TOP    equ 0xC00000
+IDT_ADDR            equ 0xC10000
+KERNEL_DATA_ADDR    equ 0xC20000
+PAGE_BITMAP_ADDR    equ 0xE00000
 PAGE_BITMAP_SIZE    equ 0x100000
-BACK_BUFFER_ADDR    equ 0x400000
-BOOT_BACK_BUFFER_SIZE equ (1024 * 768 * 4)
-BACK_BUFFER_SAVE_ADDR equ 0xA00000
-CURSOR_BG_ADDR      equ 0x700000
-WINDOW_POOL_ADDR    equ 0x710000
-EVENT_BUFFER_ADDR   equ 0x720000
-APP_DATA_ADDR       equ 0x1000000
-APP_SLOT_SIZE       equ 0x100000
-L3_SYSCALL_STACK_ADDR equ 0x1800000
-APPS_BLOB_ADDR      equ 0x2000000
-APPS_BLOB_MAX_SIZE  equ 0x100000
+
+; --- Framebuffer / GUI back buffer ---------------------------------------
+; The kernel renders into a back buffer that the compositor flips to the
+; physical framebuffer. The back buffer is sized for the maximum
+; *logical* desktop we support; smaller modes use only the top-left.
+;
+;   MAX_FB_WIDTH x MAX_FB_HEIGHT x 4 (bpp) must fit in BOOT_BACK_BUFFER_SIZE.
+;   Today: 1920 x 1200 x 4 = 9_216_000 bytes -> round up to 0x900000 (9 MiB).
+;
+; Any caller setting a new mode (display_set_mode syscall) is validated
+; against BOOT_BACK_BUFFER_SIZE / 4 pixels; bumping the constants below
+; automatically widens the syscall acceptance range.
+MAX_FB_WIDTH          equ 1920
+MAX_FB_HEIGHT         equ 1200
+BACK_BUFFER_ADDR      equ 0x1000000              ; 16 MiB
+BOOT_BACK_BUFFER_SIZE equ 0x900000               ; 9 MiB (>= WUXGA*4)
+WALLPAPER_CACHE_BYTES equ BOOT_BACK_BUFFER_SIZE
+WALLPAPER_CACHE0_ADDR equ 0x3000000              ; liquid metal SVG wallpaper cache
+WALLPAPER_CACHE1_ADDR equ (WALLPAPER_CACHE0_ADDR + WALLPAPER_CACHE_BYTES)
+WALLPAPER_CACHE2_ADDR equ (WALLPAPER_CACHE1_ADDR + WALLPAPER_CACHE_BYTES)
+WALLPAPER_CACHE_ADDR  equ WALLPAPER_CACHE0_ADDR  ; legacy alias for cache users
+BACK_BUFFER_SAVE_ADDR equ (WALLPAPER_CACHE2_ADDR + WALLPAPER_CACHE_BYTES + 0x100000)
+CURSOR_BG_ADDR        equ 0x2400000              ; save buffer + 10 MiB pad
+WINDOW_POOL_ADDR      equ 0x2410000
+EVENT_BUFFER_ADDR     equ 0x2420000
+
+; --- Userland app arenas ------------------------------------------------
+; APP_DATA_ADDR must be 2 MiB aligned because paging.asm derives the
+; user PDE index as (APP_DATA_ADDR / 0x200000). Each slot is 1 MiB and we
+; reserve MAX_WINDOWS (=8) slots; APPS_BLOB and L3 stacks live above.
+APP_DATA_ADDR         equ 0x2600000              ; 38 MiB, 2 MiB aligned
+APP_SLOT_SIZE         equ 0x100000
+APPS_BLOB_ADDR        equ 0x2E00000              ; APP_DATA_ADDR + 8 slots
+APPS_BLOB_MAX_SIZE    equ 0x100000
+L3_SYSCALL_STACK_ADDR equ 0x2F00000
 
 GUI_LLC_ARENA_START equ BACK_BUFFER_ADDR
 GUI_LLC_ARENA_END   equ APP_DATA_ADDR

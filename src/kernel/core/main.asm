@@ -66,6 +66,7 @@ extern render_text
 
 ; GUI
 extern wm_init
+extern wm_prewarm_wallpaper_caches
 extern render_init
 extern cursor_init
 extern wm_create_window
@@ -101,10 +102,24 @@ extern vsync_enabled
 ; Filesystem
 extern fat16_init
 
+; SVG render-comparison probe
+extern wm_draw_desktop_background
+extern desktop_bg_theme
+extern wallpaper_cache_valid
+extern wallpaper_cache_active_addr
+extern scr_width
+extern scr_height
+
 ; Apps
 extern app_launch
 extern app_show_context_menu
 extern ctx_menu_visible
+extern ctx_menu_x
+extern ctx_menu_y
+extern szCtxOpen
+extern explorer_sel
+extern fat16_get_entry
+extern kernel_open_file_in_notepad
 
 ; Start menu submenu
 extern tb_handle_rclick
@@ -158,7 +173,7 @@ FN_BEGIN debug_print, 0, 0, FN_RET_SCALAR
     push r12
     
     mov r12, rsi     ; Preserve RSI
-    
+
     ; Screen Output
     mov rax, [bb_addr]
     test rax, rax
@@ -201,12 +216,128 @@ FN_BEGIN debug_print, 0, 0, FN_RET_SCALAR
     pop rax
     ret
 
+; ============================================================================
+; Context menu (kernel-side render + click).
+; The user-mode explorer can no longer draw or handle ctx_menu_visible (the
+; NexusHL rewrite dropped that path), so the kernel renders a minimal "Open"
+; menu on right-click and routes the left-click hit straight to the file
+; opener.
+; ============================================================================
+CTX_W   equ 100
+CTX_H   equ 22
+
+global ctx_menu_draw
+ctx_menu_draw:
+    cmp byte [ctx_menu_visible], 0
+    je .cmd_done
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    ; Background
+    mov edi, [ctx_menu_x]
+    mov esi, [ctx_menu_y]
+    mov edx, CTX_W
+    mov ecx, CTX_H
+    mov r8d, 0x00F0F0F0
+    call fill_rect
+    ; Top border
+    mov edi, [ctx_menu_x]
+    mov esi, [ctx_menu_y]
+    mov edx, CTX_W
+    mov ecx, 1
+    mov r8d, 0x00999999
+    call fill_rect
+    ; Bottom border
+    mov edi, [ctx_menu_x]
+    mov esi, [ctx_menu_y]
+    add esi, CTX_H - 1
+    mov edx, CTX_W
+    mov ecx, 1
+    mov r8d, 0x00999999
+    call fill_rect
+    ; Left border
+    mov edi, [ctx_menu_x]
+    mov esi, [ctx_menu_y]
+    mov edx, 1
+    mov ecx, CTX_H
+    mov r8d, 0x00999999
+    call fill_rect
+    ; Right border
+    mov edi, [ctx_menu_x]
+    add edi, CTX_W - 1
+    mov esi, [ctx_menu_y]
+    mov edx, 1
+    mov ecx, CTX_H
+    mov r8d, 0x00999999
+    call fill_rect
+    ; "Open" label
+    mov edi, [ctx_menu_x]
+    add edi, 10
+    mov esi, [ctx_menu_y]
+    add esi, 6
+    lea rdx, [rel szCtxOpen]
+    mov ecx, 0x00222222
+    mov r8d, 0x00F0F0F0
+    call render_text
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+.cmd_done:
+    ret
+
+; Called when a left-click happens while ctx_menu_visible is set. The caller
+; already loaded the click coords into EDI/ESI and the buttons mask in EDX.
+global ctx_menu_handle_click
+ctx_menu_handle_click:
+    push rax
+    push rcx
+    push rdi
+    ; Hit-test the menu rect.
+    mov eax, [ctx_menu_x]
+    cmp edi, eax
+    jl .cmh_done
+    mov ecx, eax
+    add ecx, CTX_W
+    cmp edi, ecx
+    jge .cmh_done
+    mov eax, [ctx_menu_y]
+    cmp esi, eax
+    jl .cmh_done
+    mov ecx, eax
+    add ecx, CTX_H
+    cmp esi, ecx
+    jge .cmh_done
+    ; Inside menu -> "Open" the explorer-selected entry.
+    mov edi, [explorer_sel]
+    call fat16_get_entry
+    test rax, rax
+    jz .cmh_done
+    mov cl, [rax + 11]
+    test cl, 0x10                ; skip directories
+    jnz .cmh_done
+    mov rdi, rax
+    call kernel_open_file_in_notepad
+.cmh_done:
+    pop rdi
+    pop rcx
+    pop rax
+    ret
+
 ; --- Kernel Entry ---
 FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     extern app_blob_init
     call app_blob_init          ; read loaded APPS.BIN pointer before anyone uses it
     call display_init
     call display_flip
+
+    extern xml_self_test
+    call xml_self_test
+    extern raster_self_test
+    call raster_self_test
 
     call idt_init
     extern gdt64_init
@@ -230,9 +361,16 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     call i2c_hid_init
     call fat16_init
 
+    ; SMP work queue must be initialised BEFORE the APs are started: workers
+    ; gate on workqueue_ready, so init first guarantees they see a clean queue.
+    extern workqueue_init
+    extern workqueue_selftest
+    call workqueue_init
+
 %ifdef NEXUS_CACHE32_MAX
     call smp_ap_startup
 %endif
+    call workqueue_selftest
     sti
     call perfdiag_init
     call keyboard_init
@@ -241,6 +379,7 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     call render_init
     call cursor_init
     call wm_init
+    call wm_prewarm_wallpaper_caches
     
     mov byte [gui_initialized], 1
 
@@ -348,6 +487,8 @@ serial_dispatch_control:
     je .diag_smp
     cmp al, 't'
     je .dump_trace
+    cmp al, 'g'
+    je .svg_dump
     cmp al, 'b'
     je .diag_bench
     cmp al, 'x'
@@ -400,6 +541,22 @@ serial_dispatch_control:
 %endif
     ret
 
+; 0x01 'g' — SVG render-comparison probe. Forces the glass-ribbons SVG
+; wallpaper, re-renders it through the NexusOS svg2 rasterizer into the
+; wallpaper cache (a clean copy of the render with no icons/windows on top),
+; then streams that image, downsampled to 160x90, over COM1 so a host harness
+; can diff it against a reference renderer.
+.svg_dump:
+    SER 'G'
+    mov byte [desktop_bg_theme], 1       ; glass ribbons
+    mov byte [wallpaper_cache_valid], 0  ; force a fresh rasterize
+    sub rsp, 8
+    call wm_draw_desktop_background      ; rasterize + populate cache
+    add rsp, 8
+    call svg_dump_serial
+    mov byte [scene_dirty], 1
+    ret
+
 .close_focused:
     mov rdi, [wm_focused_window]
     cmp rdi, -1
@@ -411,6 +568,190 @@ serial_dispatch_control:
 
 .control_done:
     ret
+
+; ============================================================================
+; svg_dump_serial - stream the wallpaper-cache render over COM1.
+; Downsamples the active wallpaper cache (scr_width x scr_height, 32bpp, tightly
+; packed) to 160x90 with nearest-neighbour sampling and emits it framed as:
+;   [SVGDUMP]\n  <90 lines of 160 uppercase hex RGB triplets>  [SVGEND]\n
+; ============================================================================
+SVG_DUMP_W equ 160
+SVG_DUMP_H equ 90
+
+svg_dump_serial:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r12
+    push r13
+    push r14
+    push r15
+
+    lea rsi, [rel svg_dump_hdr]
+    call svg_dump_puts
+
+    ; "DIM <scr_width> <scr_height>\n" — lets the host render its reference at
+    ; the same source resolution so letterboxing matches before downsampling.
+    lea rsi, [rel svg_dump_dim]
+    call svg_dump_puts
+    mov eax, [scr_width]
+    call svg_dump_dec
+    mov al, ' '
+    call svg_dump_putc
+    mov eax, [scr_height]
+    call svg_dump_dec
+    mov al, 10
+    call svg_dump_putc
+
+    xor r12d, r12d                       ; oy
+.row:
+    cmp r12d, SVG_DUMP_H
+    jae .rows_done
+    mov eax, r12d                        ; sy = oy * scr_height / SVG_DUMP_H
+    mov ecx, [scr_height]
+    imul eax, ecx
+    xor edx, edx
+    mov ebx, SVG_DUMP_H
+    div ebx
+    mov ecx, [scr_width]                 ; row base = cache + sy*scr_width*4
+    imul eax, ecx
+    shl eax, 2
+    mov r13, [wallpaper_cache_active_addr]
+    add r13, rax
+
+    xor r14d, r14d                       ; ox
+.col:
+    cmp r14d, SVG_DUMP_W
+    jae .col_done
+    mov eax, r14d                        ; sx = ox * scr_width / SVG_DUMP_W
+    mov ecx, [scr_width]
+    imul eax, ecx
+    xor edx, edx
+    mov ebx, SVG_DUMP_W
+    div ebx
+    lea r15, [r13 + rax*4]
+    mov r8d, [r15]                       ; pixel (0x00RRGGBB)
+    mov eax, r8d
+    shr eax, 16
+    call svg_dump_hexbyte                ; R
+    mov eax, r8d
+    shr eax, 8
+    call svg_dump_hexbyte                ; G
+    mov eax, r8d
+    call svg_dump_hexbyte                ; B
+    inc r14d
+    jmp .col
+.col_done:
+    mov al, 10
+    call svg_dump_putc
+    inc r12d
+    jmp .row
+.rows_done:
+    lea rsi, [rel svg_dump_ftr]
+    call svg_dump_puts
+
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; al = character -> COM1
+svg_dump_putc:
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    out dx, al
+    pop rdx
+    pop rax
+    ret
+
+; rsi = NUL-terminated string -> COM1
+svg_dump_puts:
+    push rax
+    push rsi
+.puts_loop:
+    mov al, [rsi]
+    test al, al
+    jz .puts_done
+    call svg_dump_putc
+    inc rsi
+    jmp .puts_loop
+.puts_done:
+    pop rsi
+    pop rax
+    ret
+
+; eax = byte (low 8 bits) -> two uppercase hex chars
+svg_dump_hexbyte:
+    push rax
+    push rbx
+    movzx ebx, al
+    mov eax, ebx
+    shr eax, 4
+    call svg_dump_nibble
+    mov eax, ebx
+    and eax, 0x0F
+    call svg_dump_nibble
+    pop rbx
+    pop rax
+    ret
+
+; al = nibble (low 4 bits) -> one uppercase hex char
+svg_dump_nibble:
+    push rax
+    and al, 0x0F
+    cmp al, 10
+    jb .nib_digit
+    add al, 'A' - 10
+    jmp .nib_emit
+.nib_digit:
+    add al, '0'
+.nib_emit:
+    call svg_dump_putc
+    pop rax
+    ret
+
+; eax = unsigned value -> decimal digits on COM1
+svg_dump_dec:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    mov ebx, 10
+    xor ecx, ecx                         ; digit count
+.dec_div:
+    xor edx, edx
+    div ebx                              ; eax/=10, edx=digit
+    push rdx
+    inc ecx
+    test eax, eax
+    jnz .dec_div
+.dec_emit:
+    pop rax
+    add al, '0'
+    call svg_dump_putc
+    loop .dec_emit
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+svg_dump_hdr db "[SVGDUMP]", 10, 0
+svg_dump_dim db "DIM ", 0
+svg_dump_ftr db "[SVGEND]", 10, 0
 
 serial_forward_input:
     cmp al, 0
@@ -460,11 +801,27 @@ serial_forward_input:
 FN_BEGIN process_mouse, 0, 0, FN_RET_SCALAR
     call mouse_check_moved
     test al, al
-    jz .pm_done
+    jnz .pm_have_event
+    mov al, [mouse_buttons]
+    cmp al, [process_mouse_last_buttons]
+    je .pm_done
 
+.pm_have_event:
     mov edi, [mouse_x]
     mov esi, [mouse_y]
     movzx edx, byte [mouse_buttons]
+    mov [process_mouse_last_buttons], dl
+    ; If context menu is visible and left button just pressed, handle it
+    ; before anything else can swallow the click.
+    test dl, 1
+    jz .pm_no_ctx_consume
+    cmp byte [ctx_menu_visible], 0
+    je .pm_no_ctx_consume
+    call ctx_menu_handle_click
+    mov byte [ctx_menu_visible], 0
+    mov byte [scene_dirty], 1
+    ret
+.pm_no_ctx_consume:
     push rdi
     push rsi
     push rdx
@@ -641,6 +998,10 @@ FN_BEGIN process_keyboard, 0, 0, FN_RET_SCALAR
     call desktop_handle_click
 .pk_kc_handled:
     mov byte [mouse_buttons], 0
+    mov edi, [mouse_x]
+    mov esi, [mouse_y]
+    xor edx, edx
+    call wm_handle_mouse_event
     mov byte [scene_dirty], 1
     ret
 .pk_key_rclick:
@@ -673,9 +1034,9 @@ render_frame:
     cmp byte [scene_dirty], 0
     je .rf_fast_path
     call wm_draw_desktop
-    call desktop_draw_icons
     call tb_draw
     call tb_draw_submenu
+    call ctx_menu_draw
     call .rf_update_fps
     call .rf_draw_fps_text
     call render_save_backbuffer
@@ -780,3 +1141,4 @@ fps_str     times 16 db 0
 section .bss
 serial_command_armed resb 1
 ui_blink_phase resb 1
+process_mouse_last_buttons resb 1

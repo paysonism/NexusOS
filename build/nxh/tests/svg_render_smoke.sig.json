@@ -1,0 +1,7655 @@
+[
+  {
+    "name": "app_hl_test_svg_render_smoke_display_flags",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_display_set_flags",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "flags",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_display_set_mode",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "width",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "height",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "bpp",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_cursor_init",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_desktop_bg",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_desktop_set_bg",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "theme",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_display_native_width",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_display_native_height",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_display_current_width",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_display_current_height",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_desktop_background",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_set_desktop_background",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "svg_id",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_raster_line",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_raster_circle",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "r",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_raster_triangle",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "coords_ptr",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_raster_blend_pixel",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "argb",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_raster_blend_span",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "argb",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_raster_blend_buf",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_raster_blend_buf_screen",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_raster_blend_buf_multiply",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_parse",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_root",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_tag",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_tag_name",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "out",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "max",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_first_child",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_next_sibling",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_parent",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_attr",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "out",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "omax",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_text",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "out",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "max",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_free",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_last_error",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_last_error_code",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_last_error_offset",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_node_count",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_text_runs",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_text_run",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "index",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "out",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "max",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_namespace",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "prefix",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "prefix_len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "out",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "max",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_node_namespace",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "out",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "max",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_entity_value",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name_len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "out",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "max",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_tag_is",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "tag_id",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_same_tag",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "a",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "b",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_first_child_safe",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_next_sibling_safe",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xml_next_child",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "parent",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "child",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_from_i",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "i",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_to_i",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_floor_i",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_ceil_i",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_abs",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_mul",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "a",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "b",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_div",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "a",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "b",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_isqrt",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "n",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_sqrt",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_wrap_angle",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "a",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_sin",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "a",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_cos",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "a",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fx_deg_to_rad",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "deg",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_load_identity",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_init",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_push",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_pop",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_concat",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "a",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "b",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "c",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "d",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "e",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "f",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_translate",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "tx_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "ty_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_scale",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "sx_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "sy_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_rotate",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "rad_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_skew_x",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "rad_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_skew_y",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "rad_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_apply",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mat_apply_inv",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_is_ws",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "c",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_is_num_start",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "c",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_attr",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_style_attr",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_points_attr",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_path_attr",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_parse_num",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "ref_dim",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_parse_int",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_attr_len",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_attr_num",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ref_dim",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "def_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_attr_int",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_hex",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "c",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_scan_int",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "pos_ptr",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_scan_has_more",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "pos_ptr",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_skip_ws_to",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "pos_ptr",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_setup_viewbox",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "root",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_pt_x",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_pt_y",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_tx",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_ty",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_tw",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_th",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_line_width",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_line_width_fx",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_stroke_cap_mode",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_stroke_join_mode",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_stroke_miter_limit",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_stroke_dash_len",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_stroke_gap_len",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_stroked_line",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x2",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y2",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "width",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_fill_tri",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "x2",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "y2",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_tag_is",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_anim_initial",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_css_selector_matches",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "sel",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "slen",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_css_decl_color",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "prop",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "plen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_css_rule_color",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "style_len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "prop",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "plen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_css_color_in",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "parent",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "prop",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "plen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_parse_color",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_attr_color",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_attr_is_url_ref",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_match_at",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "pos",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "word",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "wlen",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_style_color",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "prop",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "plen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_style_int",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "prop",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "plen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_style_mix_blend_mode",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_style_mix_blend_screen",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_style_mix_blend_multiply",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_style_filter_blur",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_fill_color",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_stroke_color",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xf_consume_open",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "after_kw",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xf_consume_close",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xf_apply_matrix",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xf_apply_translate",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xf_apply_scale",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xf_apply_rotate",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xf_apply_skew_x",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xf_apply_skew_y",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xf_try",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "kw",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "kwlen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "handler_id",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_xf_dispatch",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_apply_transform",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_apply_gradient_transform",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_init",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pack_argb",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "rgb",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "alpha",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_set_solid_rgb",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "rgb",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "alpha",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_set_none",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_set_opacity_256",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "o",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_clear_stops",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_add_stop",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "offset_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "argb",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_set_linear",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x1_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y1_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x2_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y2_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "spread",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_set_radial",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cy_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "fx_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "fy_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "r_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "spread",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_set_pattern_solid",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "tile_w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "tile_h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "argb",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_set_pattern_tile",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "tile_w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "tile_h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_apply_spread",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "t",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_stops_eval",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "t",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_color_lerp",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "c0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "c1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "f",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_apply_opacity",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "argb",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_eval",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "px",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "py",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_set_blend",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "mode",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_get_blend",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_init_screen",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y1",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_push_buffer",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "pitch",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "ox",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "oy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_pop",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_emit_pixel",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "argb",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_emit_span_argb",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_get_pixel",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_is_active",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_activate",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_deactivate",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_push",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_pop",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_saved_test",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "dx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_intersect_saved",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_begin",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_set",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "dx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_test",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "dx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stencil_mark_from_buffer",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ox",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "oy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_poly_begin",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_poly_add",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_poly_end_subpath",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_raster_set_clip",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y1",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_raster_set_fill_rule",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "r",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_edge_push",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y1",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_build_edges",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_aet_sort_by_xs",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_aa_add_span",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cw",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "xa_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "xb_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_aa_emit_row",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cx0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "cw",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_aa_build_aet",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "scan_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "n",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_aa_accumulate",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cw",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "rule",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_poly_fill",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_begin",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_set_style",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cap",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "join",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "miter_limit",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_add",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x_fx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_end_subpath",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_compute_seg",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "seg_idx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "ax",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "ay",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "bx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "by",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "hw_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_emit_side",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "sign",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_load_vertex",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "start_idx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "seg_count",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "v",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_emit_round_cap",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ny",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "from_sign",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "to_sign",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_load_closed_vertex",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "start_idx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "seg_count",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "v",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_render_subpath",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "start_idx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "end_idx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "hw_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_render",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "width_i",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_render_fx",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "width_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_xform_to_poly",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x_i",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y_i",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_xform_to_stroke",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x_i",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y_i",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_stroke_add_dashed_fx",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "dash_i",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "gap_i",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_fill_alpha",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_stroke_alpha",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_stroke_close_loop",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_rect",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_round_rect_corner_poly",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "rx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ry",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "a0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "a1",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_round_rect_corner_stroke",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "rx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ry",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "a0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "a1",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_emit_round_rect_poly",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "rx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "ry",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_emit_round_rect_stroke",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "rx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "ry",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_emit_ellipse_poly",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "rx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ry",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_emit_ellipse_stroke",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "rx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ry",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_ellipse_xy",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "cy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "rx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "ry",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_circle",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_ellipse",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_line",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_text",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_poly",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "close_shape",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_flatten_cubic",
+    "argc": 9,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "p0x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "p0y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "p1x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "p1y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "p2x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "p2y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "p3x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 7,
+        "name": "p3y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 8,
+        "name": "depth",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_flatten_quad",
+    "argc": 7,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "p0x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "p0y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "p1x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "p1y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "p2x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "p2y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "depth",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_flatten_arc",
+    "argc": 9,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y0",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "rx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ry",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "x_axis_rot",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "large_arc",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "sweep",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 7,
+        "name": "x1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 8,
+        "name": "y1",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_atan2_fx",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_acos_fx",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "c",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_reset_pen",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_cur_x_i",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_cur_y_i",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_set_pen",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_xform",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_emit_move",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_emit_line",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_emit_cubic",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "c1x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "c1y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "c2x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "c2y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_path_cubic_abs",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "c1x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "c1y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "c2x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "c2y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_emit_quad",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "c1x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "c1y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_emit_arc",
+    "argc": 7,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "rx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "ry",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "rot_deg",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "large",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "sweep",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_path_arc_abs",
+    "argc": 7,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "rx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "ry",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "rot_deg",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "large",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "sweep",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_emit_close",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_reflect_cubic_x",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_reflect_cubic_y",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_reflect_quad_x",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_reflect_quad_y",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_scan",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_M",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_m",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_L",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_l",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_H",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_h",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_V",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_v",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_C",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_c",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_S",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_s",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_Q",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_q",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_T",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_t",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_A",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_a",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_dispatch",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cmd",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_path_run_cmd",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cmd",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_step",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "cur_cmd_ptr",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_run",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_fill_rule",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_resolve_fill_alpha",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_path",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_resolve_stroke_alpha",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_pp_stroke_polylines",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "alpha",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "width_fx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_reset",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_add_pt",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "dx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_add_user",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x_i",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y_i",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_add_user_rect",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_add_shape",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_add_points",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_add_path",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_walk",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_compute",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_width",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_bbox_height",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_arena_reset",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_arena_alloc",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "n",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_arena_argb",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_arena_mark",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_arena_restore",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "m",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_arena_clamp",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "d",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_buf_addr",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "which",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_active_addr",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_other_addr",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_begin",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_blend_pixel",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "lx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "ly",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "argb",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_read_pixel",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "lx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "ly",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_write_pixel",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "lx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "ly",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "argb",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_swap",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_blit_to_screen",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fctx_to_local",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "lx_out",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ly_out",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_box_blur_axis",
+    "argc": 7,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "src",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dst",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "r",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "count_main",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "count_cross",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "stride_main",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "stride_cross",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_blur_exp_neg",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_blur_build_kernel",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "sigma",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_blur_sample",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "src_buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "px",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "py",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "dx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "dy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_blur_apply",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "sigma",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_blur_read_buf",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_blur_sample_buf",
+    "argc": 7,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "src",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "px",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "py",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "dx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "dy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_blur_apply_buf",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "scratch",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "sigma",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_cmat_set",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "i",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "v",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_cmat_get",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "i",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_cmat_identity",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_cmat_saturate_fx",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "s",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_cmat_hue_rotate",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "deg",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_cmat_luma_to_alpha",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_cmat_parse",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_cmat_apply_buf",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_op_get",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "i",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_buf_get",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "i",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_buf_set",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "i",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "p",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_name_is",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "kw",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "kwlen",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_resolve_input",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "up_to",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_read_attr",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "attr",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "alen",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_store_result",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "idx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_parse_primitive",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "child",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "idx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_parse_blend_mode",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_parse_comp_op",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_parse",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "filter_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_estimate_pad",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_turb_rand_next",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_turb_setup_seed",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "seed",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_turb_grad_addr",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "channel",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "idx",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_turb_init",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "seed",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_turb_scurve",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "t",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_turb_lerp",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "t",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "a",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "b",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_turb_noise2",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "channel",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "vx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "vy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_turb_fractal",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "channel",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "vx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "vy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "octaves",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "fractal",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fe_over",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "src",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dst",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_input_buf",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "in_id",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "prior",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_copy",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "src",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dst",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "n",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_do_offset",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "src",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dst",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "dx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "dy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_do_flood",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "dst",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "argb",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_do_merge",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "idx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "dst",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "prior",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fe_blend_chan",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "mode",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "cs",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "cd",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_do_blend",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "src",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dst_in",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "out",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "mode",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fe_comp_factors",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "op",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "sa",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "da",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_do_composite",
+    "argc": 10,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "src",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dst_in",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "out",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "op",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "k1",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 7,
+        "name": "k2",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 8,
+        "name": "k3",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 9,
+        "name": "k4",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_do_turbulence",
+    "argc": 9,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "dst",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ox",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "oy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "oct",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "fractal",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 7,
+        "name": "bfx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 8,
+        "name": "bfy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_do_dropshadow",
+    "argc": 8,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "src",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dst",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "sigma",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "flood",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "dx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 7,
+        "name": "dy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_eval_primitive",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "idx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "prior",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_build_alpha",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_evaluate",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_fg_evaluate_and_blit",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_parse_url_ref",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "attr_len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_id_matches",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_classify",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "filter_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_resolve",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "parent",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_apply_to_current",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_node_op",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_render_css_blur",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "sigma",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_units_user_space",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "filter_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_region_attr_obb",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "filter_node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "basis",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "def_pct",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_region_attr_user",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "filter_node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ref_dim",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_render_buffered",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "op",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_u8",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "off",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_u16",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "off",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_i16",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "off",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_u32",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "off",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_tag_eq",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "off",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "a",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "b",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "c",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "d",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_table_offset",
+    "argc": 4,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "a",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "b",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "c",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "d",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_select_cmap",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_parse",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_glyph_offset",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "gid",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_advance_width",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "gid",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_cmap_glyph",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "codepoint",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_ttf_kern_pair",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "left_gid",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "right_gid",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_anchor_attr",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_resolve_anchor",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "inherited",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_resolve_size",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "inherited",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_glyph_advance_fx",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_measure_fx",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_glyph_row",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "ch",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "row",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_add_rot_pt",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "xfx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "yfx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "ox",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "oy",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "cs",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "sn",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_draw_cell",
+    "argc": 7,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "xfx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "yfx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "col",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "row",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "cell",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "cs",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 6,
+        "name": "sn",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_draw_glyph_vector",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "ch",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "xfx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "yfx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "angle",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_segment_angle",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "dx",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "dy",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_render_run",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_render_along_path",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_parse_ref",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "attr_len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_ref_matches",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_find_ref",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "parent",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_load_path_from",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_walk_run",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_text_draw_text",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "fill_color",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_clip_parse_url_ref",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "attr_len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_clip_id_matches",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_clip_inspect",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "clip_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_clip_resolve",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "parent",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_clip_matrix_is_axis_aligned",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_clip_build_stencil",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "clip_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_clip_apply_to_current",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_clip_restore",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_clip_stencil_is_on",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_parse_url_ref",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "attr_len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_id_matches",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_resolve_in",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "parent",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_lookup",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_type_of",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "mask_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_content_is_obb",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "mask_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_units_user_space",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "mask_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_region_attr_obb",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "mask_node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "basis",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "def_pct",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_region_attr_user",
+    "argc": 5,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "mask_node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "name",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "nlen",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "ref_dim",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "defv",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_render_contents",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "mask_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_mask_apply",
+    "argc": 2,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "mask_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_defs_id_matches",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "id_buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "id_len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_defs_parse_spread",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_defs_parse_stops",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "grad_node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_defs_bbox_apply_paint_context",
+    "argc": 0,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": []
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_defs_units_object_bbox",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_defs_configure_linear",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_defs_configure_radial",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_defs_configure_pattern",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_defs_resolve",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "parent",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "id_buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "id_len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_paint_try_url_ref",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "attr_len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_configure_fill_paint",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "fallback_color",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "alpha",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_configure_stroke_paint",
+    "argc": 3,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "fallback_color",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "alpha",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_node_opacity_256",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_render_dispatch",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_is_defs_subtree",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_filter_render_subtree",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_use_parse_ref",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "attr_len",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_use_id_matches",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_use_find",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "parent",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_use",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_draw_image",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_image_hex_at",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "pos",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_image_try_data_hex",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "href_len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_render_node",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "node",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_svg_render",
+    "argc": 6,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "svg_buf",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 1,
+        "name": "svg_len",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 2,
+        "name": "x",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 3,
+        "name": "y",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 4,
+        "name": "w",
+        "kind": "FN_KIND_SCALAR"
+      },
+      {
+        "index": 5,
+        "name": "h",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  },
+  {
+    "name": "app_hl_test_svg_render_smoke_smoke_draw",
+    "argc": 1,
+    "kindmask": 0,
+    "retkind": "FN_RET_SCALAR",
+    "args": [
+      {
+        "index": 0,
+        "name": "win",
+        "kind": "FN_KIND_SCALAR"
+      }
+    ]
+  }
+]

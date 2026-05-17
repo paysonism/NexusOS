@@ -6,16 +6,25 @@ bits 64
 
 %include "constants.inc"
 
-; Draw one start menu item: icon rect + label text at row %1 with icon color %2 and label %3
+; The taskbar follows the active screen mode. Y positions and the
+; right-anchored X positions live in display.asm as runtime globals,
+; recomputed by display_recompute_layout() on every mode change.
+extern scr_taskbar_y, scr_clock_x, scr_clock_y
+extern scr_start_btn_y, scr_start_menu_y
+extern scr_tb_btn_y, scr_bat_ind_x, scr_bat_ind_y
+
+; Draw one start menu item: design-system icon + label text at row %1.
+; Y positions are computed at run time so the menu floats above whatever
+; row the taskbar is currently on.
 %macro MENU_ITEM 3
-    mov rdi, START_MENU_X + 8
-    mov rsi, START_MENU_Y + 8 + MENU_ITEM_H * %1
-    mov rdx, 20
-    mov rcx, 20
-    mov r8d, %2
-    call render_rect
+    mov rdi, %2
+    mov rsi, START_MENU_X + 8
+    mov edx, [scr_start_menu_y]
+    add edx, 8 + MENU_ITEM_H * %1
+    call nx_icon_blit
     mov rdi, START_MENU_X + 36
-    mov rsi, START_MENU_Y + 10 + MENU_ITEM_H * %1
+    mov esi, [scr_start_menu_y]
+    add esi, 10 + MENU_ITEM_H * %1
     mov rdx, %3
     mov ecx, COLOR_TEXT_BLACK
     mov r8d, MENU_COLOR_BG
@@ -25,10 +34,9 @@ bits 64
 START_MENU_W    equ 200
 START_MENU_H    equ 200
 START_MENU_X    equ 4
-START_MENU_Y    equ (TASKBAR_Y - START_MENU_H)
 MENU_ITEM_H     equ 28
-MENU_COLOR_BG   equ 0x00A8A8A8   ; VGA chrome face #A8A8A8
-MENU_COLOR_HL   equ 0x00A80000   ; accent blue #0000A8 (BGRX)
+MENU_COLOR_BG   equ COLOR_SURFACE
+MENU_COLOR_HL   equ COLOR_ACCENT
 MENU_ITEM_COUNT equ 6
 
 ; Taskbar button layout
@@ -36,16 +44,14 @@ TB_BTN_START_X  equ (START_BTN_X + START_BTN_W + 8)  ; after start button
 TB_BTN_W        equ 130          ; width per app button
 TB_BTN_H        equ 28
 TB_BTN_GAP      equ 4
-TB_BTN_Y        equ (TASKBAR_Y + 4)
 TB_CLOSE_SIZE   equ 14           ; X button size inside taskbar button
 TB_CLOSE_OFF_X  equ (TB_BTN_W - TB_CLOSE_SIZE - 4) ; X button offset from button left
 
 %include "window_layout.inc"
 
-; Battery indicator layout (to the left of the clock)
+; Battery indicator layout (to the left of the clock). Width/height are
+; static; X/Y depend on the taskbar position and live in display.asm.
 BAT_IND_W       equ 88           ; total width of battery area
-BAT_IND_X       equ (CLOCK_X - BAT_IND_W - 6)
-BAT_IND_Y       equ (TASKBAR_Y + 4)
 BAT_IND_H       equ (TASKBAR_HEIGHT - 8)
 
 ; Battery state constants (must match battery.asm)
@@ -69,6 +75,7 @@ global tb_get_menu_item_at
 extern render_rect
 extern render_text
 extern render_mark_dirty
+extern nx_icon_blit
 extern draw_hline
 extern draw_vline
 extern wm_close_window
@@ -81,6 +88,14 @@ extern battery_percent
 extern uint32_to_str
 extern time_hours
 extern time_minutes
+extern nx_icon_about_16
+extern nx_icon_close_16
+extern nx_icon_explorer_16
+extern nx_icon_notepad_16
+extern nx_icon_paint_16
+extern nx_icon_settings_16
+extern nx_icon_start_16
+extern nx_icon_terminal_16
 
 ; Draw the taskbar + start menu
 FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
@@ -89,32 +104,38 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
     push r13
     push r14
 
-    ; 1. Taskbar Background
+    ; 1. Taskbar Background — spans the full current screen width
     mov rdi, 0
-    mov rsi, TASKBAR_Y
-    mov rdx, SCREEN_WIDTH
+    mov esi, [scr_taskbar_y]
+    mov edx, [scr_width]
     mov rcx, TASKBAR_HEIGHT
     mov r8d, COLOR_TASKBAR_BG
     call render_rect
 
     ; Raised bevel top edge of taskbar
     mov rdi, 0
-    mov rsi, TASKBAR_Y
-    mov rdx, SCREEN_WIDTH
+    mov esi, [scr_taskbar_y]
+    mov edx, [scr_width]
     mov rcx, COLOR_BEVEL_LT
     call draw_hline
 
     ; 2. Start Button
     mov rdi, START_BTN_X
-    mov rsi, START_BTN_Y
+    mov esi, [scr_start_btn_y]
     mov rdx, START_BTN_W
     mov rcx, START_BTN_H
     mov r8d, COLOR_START_BTN
     call render_rect
 
-    ; Start Text
-    mov rdi, START_BTN_X + 12
-    mov rsi, START_BTN_Y + 6
+    ; Start icon + text
+    mov rdi, nx_icon_start_16
+    mov rsi, START_BTN_X + 8
+    mov edx, [scr_start_btn_y]
+    add edx, 6
+    call nx_icon_blit
+    mov rdi, START_BTN_X + 28
+    mov esi, [scr_start_btn_y]
+    add esi, 7
     mov rdx, szStart
     mov ecx, COLOR_TEXT_BLACK
     mov r8d, COLOR_START_BTN
@@ -145,7 +166,7 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
     mov r8d, COLOR_CHROME_FACE   ; minimized: same face
 .tb_not_min:
     mov edi, r13d
-    mov esi, TB_BTN_Y
+    mov esi, [scr_tb_btn_y]
     mov edx, TB_BTN_W
     mov ecx, TB_BTN_H
     call render_rect
@@ -158,7 +179,8 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
     je .tb_skip_text
     mov edi, r13d
     add edi, 6                   ; padding from left
-    mov esi, TB_BTN_Y + 7
+    mov esi, [scr_tb_btn_y]
+    add esi, 7
     mov ecx, COLOR_TEXT_BLACK
     ; Background color for text depends on focus
     mov r8d, COLOR_CHROME_FACE
@@ -177,20 +199,22 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
     ; Draw X close button (small red square at right side of button)
     mov edi, r13d
     add edi, TB_CLOSE_OFF_X
-    mov esi, TB_BTN_Y + 7
+    mov esi, [scr_tb_btn_y]
+    add esi, 7
     mov edx, TB_CLOSE_SIZE
     mov ecx, TB_CLOSE_SIZE
     mov r8d, COLOR_CLOSE_BTN
     call render_rect
 
-    ; Draw "X" text on close button
+    ; Draw close icon on close button
     mov edi, r13d
-    add edi, TB_CLOSE_OFF_X + 3
-    mov esi, TB_BTN_Y + 8
-    mov rdx, szTbClose
-    mov ecx, COLOR_TEXT_BLACK
-    mov r8d, COLOR_CLOSE_BTN
-    call render_text
+    add edi, TB_CLOSE_OFF_X - 1
+    mov esi, [scr_tb_btn_y]
+    add esi, 6
+    mov rdx, rsi
+    mov rsi, rdi
+    mov rdi, nx_icon_close_16
+    call nx_icon_blit
 
     ; Advance X position for next button
     add r13d, TB_BTN_W + TB_BTN_GAP
@@ -224,8 +248,8 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
 
     pop rcx
     pop rax
-    mov rdi, CLOCK_X
-    mov rsi, CLOCK_Y
+    mov edi, [scr_clock_x]
+    mov esi, [scr_clock_y]
     mov rdx, szTime
     mov ecx, COLOR_TEXT_BLACK
     mov r8d, COLOR_TASKBAR_BG
@@ -240,7 +264,7 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
 
     ; Menu background
     mov rdi, START_MENU_X
-    mov rsi, START_MENU_Y
+    mov esi, [scr_start_menu_y]
     mov rdx, START_MENU_W
     mov rcx, START_MENU_H
     mov r8d, MENU_COLOR_BG
@@ -248,43 +272,51 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
 
     ; Menu border: raised bevel
     mov rdi, START_MENU_X
-    mov rsi, START_MENU_Y
+    mov esi, [scr_start_menu_y]
     mov rdx, START_MENU_W
     mov rcx, COLOR_BEVEL_LT
     call draw_hline
     mov rdi, START_MENU_X
-    mov rsi, START_MENU_Y
+    mov esi, [scr_start_menu_y]
     mov rdx, START_MENU_H
     mov rcx, COLOR_BEVEL_LT
     call draw_vline
     mov rdi, START_MENU_X + START_MENU_W - 1
-    mov rsi, START_MENU_Y
+    mov esi, [scr_start_menu_y]
     mov rdx, START_MENU_H
     mov rcx, COLOR_BEVEL_DK
     call draw_vline
     mov rdi, START_MENU_X
-    mov rsi, START_MENU_Y + START_MENU_H - 1
+    mov esi, [scr_start_menu_y]
+    add esi, START_MENU_H - 1
     mov rdx, START_MENU_W
     mov rcx, COLOR_BEVEL_DK
     call draw_hline
 
-    MENU_ITEM 0, 0x00CCAA44, szMenuExplorer
-    MENU_ITEM 1, 0x00222222, szMenuTerm
-    MENU_ITEM 2, 0x00FFFFFF, szMenuNotepad
-    MENU_ITEM 3, 0x00888888, szMenuSettings
-    MENU_ITEM 4, 0x00FF8800, szMenuPaint
+    MENU_ITEM 0, nx_icon_explorer_16, szMenuExplorer
+    MENU_ITEM 1, nx_icon_terminal_16, szMenuTerm
+    MENU_ITEM 2, nx_icon_notepad_16, szMenuNotepad
+    MENU_ITEM 3, nx_icon_settings_16, szMenuSettings
+    MENU_ITEM 4, nx_icon_paint_16, szMenuPaint
 
     ; --- Separator ---
     mov rdi, START_MENU_X + 8
-    mov rsi, START_MENU_Y + 8 + MENU_ITEM_H * 5
+    mov esi, [scr_start_menu_y]
+    add esi, 8 + MENU_ITEM_H * 5
     mov rdx, START_MENU_W - 16
     mov rcx, 1
     mov r8d, 0x00555588
     call render_rect
 
     ; --- Menu Item: About NexusOS ---
+    mov rdi, nx_icon_about_16
+    mov rsi, START_MENU_X + 8
+    mov edx, [scr_start_menu_y]
+    add edx, 12 + MENU_ITEM_H * 5
+    call nx_icon_blit
     mov rdi, START_MENU_X + 36
-    mov rsi, START_MENU_Y + 14 + MENU_ITEM_H * 5
+    mov esi, [scr_start_menu_y]
+    add esi, 14 + MENU_ITEM_H * 5
     mov rdx, szMenuAbout
     mov ecx, COLOR_TEXT_GRAY
     mov r8d, MENU_COLOR_BG
@@ -316,8 +348,10 @@ tb_draw_battery:
     jne .bat_start
 
     ; Unknown state: blink a red X every second or so
-    mov edi, BAT_IND_X + 4
-    mov esi, TASKBAR_Y + 11
+    mov edi, [scr_bat_ind_x]
+    add edi, 4
+    mov esi, [scr_taskbar_y]
+    add esi, 11
     mov rdx, szNoBat
     mov ecx, 0x00FF0000        ; Red text
     mov r8d, COLOR_TASKBAR_BG
@@ -326,8 +360,8 @@ tb_draw_battery:
 
 .bat_start:
     ; Clear the background area first
-    mov edi, BAT_IND_X
-    mov esi, BAT_IND_Y
+    mov edi, [scr_bat_ind_x]
+    mov esi, [scr_bat_ind_y]
     mov edx, BAT_IND_W
     mov ecx, BAT_IND_H
     mov r8d, COLOR_TASKBAR_BG
@@ -338,9 +372,10 @@ tb_draw_battery:
     je .draw_ac_only
 
     ; States 2 (discharging) and 3 (charging): draw battery icon
-    ; Battery outline: 20x12 px at (BAT_IND_X, TASKBAR_Y+10)
-    mov r12d, BAT_IND_X        ; icon X
-    mov r13d, TASKBAR_Y + 10   ; icon Y
+    ; Battery outline: 20x12 px at (scr_bat_ind_x, scr_taskbar_y+10)
+    mov r12d, [scr_bat_ind_x]   ; icon X
+    mov r13d, [scr_taskbar_y]
+    add r13d, 10               ; icon Y
 
     ; Battery body outline (white rectangle 18x12, then nub 2x4 on right)
     ; Outer border
@@ -412,18 +447,22 @@ tb_draw_battery:
     cmp al, BAT_STATE_CHARGING
     jne .bat_draw_text
 
-    ; Draw plug icon at (BAT_IND_X + BATT_ICON_W + 4, TASKBAR_Y+10)
-    mov edi, BAT_IND_X + BATT_ICON_W + 4
-    mov esi, TASKBAR_Y + 10
+    ; Draw plug icon at (scr_bat_ind_x + BATT_ICON_W + 4, scr_taskbar_y+10)
+    mov edi, [scr_bat_ind_x]
+    add edi, BATT_ICON_W + 4
+    mov esi, [scr_taskbar_y]
+    add esi, 10
     call tb_draw_plug_icon
 
     ; Text X: to the right of battery + plug icons
-    mov r12d, BAT_IND_X + BATT_ICON_W + PLUG_ICON_W + 10
+    mov r12d, [scr_bat_ind_x]
+    add r12d, BATT_ICON_W + PLUG_ICON_W + 10
     jmp .bat_draw_pct_text
 
 .bat_draw_text:
     ; Just battery: text to right of battery icon
-    mov r12d, BAT_IND_X + BATT_ICON_W + 4
+    mov r12d, [scr_bat_ind_x]
+    add r12d, BATT_ICON_W + 4
 
 .bat_draw_pct_text:
     ; Build "XX%" string
@@ -442,7 +481,8 @@ tb_draw_battery:
     mov byte [rsi + 1], 0
 
     mov edi, r12d
-    mov esi, TASKBAR_Y + 12
+    mov esi, [scr_taskbar_y]
+    add esi, 12
     lea rdx, [bat_pct_str]
     mov ecx, COLOR_TEXT_BLACK
     mov r8d, COLOR_TASKBAR_BG
@@ -451,12 +491,16 @@ tb_draw_battery:
 
 .draw_ac_only:
     ; AC only: draw plug icon + "AC" text
-    mov edi, BAT_IND_X + 4
-    mov esi, TASKBAR_Y + 11
+    mov edi, [scr_bat_ind_x]
+    add edi, 4
+    mov esi, [scr_taskbar_y]
+    add esi, 11
     call tb_draw_plug_icon
 
-    mov edi, BAT_IND_X + PLUG_ICON_W + 8
-    mov esi, TASKBAR_Y + 12
+    mov edi, [scr_bat_ind_x]
+    add edi, PLUG_ICON_W + 8
+    mov esi, [scr_taskbar_y]
+    add esi, 12
     lea rdx, [szAC]
     mov ecx, COLOR_TEXT_BLACK
     mov r8d, COLOR_TASKBAR_BG
@@ -529,14 +573,17 @@ FN_BEGIN tb_handle_click, 0, 0, FN_RET_SCALAR
     jl .close_menu
     cmp rdi, START_MENU_X + START_MENU_W
     jg .close_menu
-    cmp rsi, START_MENU_Y
+    movsxd rax, dword [scr_start_menu_y]
+    cmp rsi, rax
     jl .close_menu
-    cmp rsi, TASKBAR_Y
+    movsxd rax, dword [scr_taskbar_y]
+    cmp rsi, rax
     jge .check_taskbar
 
     ; Click inside menu - determine which item
     mov rax, rsi
-    sub rax, START_MENU_Y
+    movsxd rcx, dword [scr_start_menu_y]
+    sub rax, rcx
     sub rax, 8
     cmp rax, 0
     jl .close_menu
@@ -560,7 +607,8 @@ FN_BEGIN tb_handle_click, 0, 0, FN_RET_SCALAR
 
 .check_taskbar:
     ; Check if within taskbar Y range
-    cmp rsi, TASKBAR_Y
+    movsxd rax, dword [scr_taskbar_y]
+    cmp rsi, rax
     jl .not_handled
 
     ; Check Start Button
@@ -600,9 +648,10 @@ FN_BEGIN tb_handle_click, 0, 0, FN_RET_SCALAR
     jge .tb_click_next_active
 
     ; Click Y must be within button height
-    cmp esi, TB_BTN_Y
+    cmp esi, [scr_tb_btn_y]
     jl .tb_click_next_active
-    mov eax, TB_BTN_Y + TB_BTN_H
+    mov eax, [scr_tb_btn_y]
+    add eax, TB_BTN_H
     cmp esi, eax
     jge .tb_click_next_active
 
@@ -730,14 +779,14 @@ FN_BEGIN tb_handle_rclick, 0, 0, FN_RET_SCALAR
     jl .rc_not_handled
     cmp edi, START_MENU_X + START_MENU_W
     jg .rc_not_handled
-    cmp esi, START_MENU_Y
+    cmp esi, [scr_start_menu_y]
     jl .rc_not_handled
-    cmp esi, TASKBAR_Y
+    cmp esi, [scr_taskbar_y]
     jge .rc_not_handled
 
     ; Right-click inside menu - determine which item
     mov eax, esi
-    sub eax, START_MENU_Y
+    sub eax, [scr_start_menu_y]
     sub eax, 8
     cmp eax, 0
     jl .rc_not_handled
@@ -753,11 +802,12 @@ FN_BEGIN tb_handle_rclick, 0, 0, FN_RET_SCALAR
     add eax, 2                ; app_id = menu_index + 2
     mov byte [sm_submenu_app], al
     mov dword [sm_submenu_x], START_MENU_X + START_MENU_W + 2
-    ; Y = menu item Y position
+    ; Y = menu item Y position (scr_start_menu_y + 4 + (idx) * MENU_ITEM_H)
     mov ecx, eax
     sub ecx, 2
     imul ecx, MENU_ITEM_H
-    add ecx, START_MENU_Y + 4
+    add ecx, [scr_start_menu_y]
+    add ecx, 4
     mov [sm_submenu_y], ecx
     mov byte [sm_submenu_open], 1
     mov rax, 1

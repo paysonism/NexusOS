@@ -12,6 +12,7 @@ $SRC_DIR = Join-Path $PSScriptRoot 'src'
 $BUILD_DIR = Join-Path $PSScriptRoot 'build'
 $INCLUDE_DIR = Join-Path $PSScriptRoot 'src\include'
 $USER_LIB_DIR = Join-Path $PSScriptRoot 'src\user\lib'
+$ConstantsPath = Join-Path $INCLUDE_DIR 'constants.inc'
 $KernelDefines = @()
 if (-not $Release) {
     $KernelDefines += '-dENABLE_DEBUG_SERIAL'
@@ -50,6 +51,22 @@ if (Test-Path $CoverageTool) {
 Write-Host "Source: $SRC_DIR"
 Write-Host "Build:  $BUILD_DIR"
 
+function Get-AsmEqu {
+    param(
+        [string]$Path,
+        [string]$Name
+    )
+    $line = Select-String -Path $Path -Pattern "^\s*$Name\s+equ\s+(.+?)(?:\s*;.*)?$" | Select-Object -First 1
+    if (-not $line) { throw "Missing $Name in $Path" }
+    $expr = $line.Matches[0].Groups[1].Value.Trim()
+    if ($expr -match '^0x[0-9A-Fa-f]+$') { return [Convert]::ToInt64($expr, 16) }
+    if ($expr -match '^\d+$') { return [int64]$expr }
+    throw "Unsupported $Name expression in ${Path}: $expr"
+}
+
+$KernelStartSector = Get-AsmEqu $ConstantsPath 'KERNEL_START_SECTOR'
+$KernelSectors = Get-AsmEqu $ConstantsPath 'KERNEL_SECTORS'
+
 # 1. MBR (Stage 1)
 Write-Host "[1/3] Assembling MBR..." -ForegroundColor Yellow
 # Add src\boot to include path so nasm finds files in same dir if needed
@@ -79,7 +96,14 @@ try {
     $stage2Bytes = [System.IO.File]::ReadAllBytes($stage2Path)
     $kernelBytes = [System.IO.File]::ReadAllBytes($kernelPath)
     
-    $totalLen = $mbrBytes.Length + $stage2Bytes.Length + $kernelBytes.Length
+    $kernelOffset = [int]($KernelStartSector * 512)
+    $kernelMaxBytes = [int]($KernelSectors * 512)
+    if ($kernelBytes.Length -gt $kernelMaxBytes) {
+        throw "Kernel is $($kernelBytes.Length) bytes but BIOS loader reserves only $kernelMaxBytes bytes ($KernelSectors sectors)."
+    }
+
+    $reservedKernelEnd = $kernelOffset + $kernelMaxBytes
+    $totalLen = $reservedKernelEnd
     
     # Target size 10MB
     $targetSize = 10 * 1024 * 1024
@@ -95,14 +119,13 @@ try {
     # Copy Stage2 (512)
     [Array]::Copy($stage2Bytes, 0, $imgBytes, $mbrBytes.Length, $stage2Bytes.Length)
     
-    # Copy Kernel (512 + Stage2Len)
-    # Stage2 should be multiple of 512, padded by NASM.
-    $kernelOffset = $mbrBytes.Length + $stage2Bytes.Length
+    # Copy Kernel at the sector Stage 2 loads from. The reserved kernel area is
+    # fixed-size so the FAT partition can never overlap a large kernel.
     [Array]::Copy($kernelBytes, 0, $imgBytes, $kernelOffset, $kernelBytes.Length)
     
-    # 5. Format FAT16 partition starting at sector 320
+    # 5. Format FAT16 partition after the reserved BIOS kernel area.
     Write-Host "[5/5] Formatting FAT16 filesystem..." -ForegroundColor Yellow
-    $fatPartStart = 320 * 512   # byte offset
+    $fatPartStart = $reservedKernelEnd
     $fatPartSectors = [int](($targetSize - $fatPartStart) / 512)
 
     # FAT16 BPB parameters

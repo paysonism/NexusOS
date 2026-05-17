@@ -52,6 +52,8 @@ section .text
 %include "src/kernel/proc/process.asm"
 section .text
 %include "src/kernel/proc/syscall.asm"
+section .text
+%include "src/kernel/proc/workqueue.asm"
 
 ; --- ACPI & APIC Core ---
 section .text
@@ -103,6 +105,8 @@ section .text
 
 ; --- GUI System ---
 section .text
+%include "src/kernel/gui/resources.asm"
+section .text
 %include "src/kernel/gui/render.asm"
 section .text
 %include "src/kernel/gui/window.asm"
@@ -122,6 +126,7 @@ section .text
 %include "src/kernel/lib/string.asm"
 %include "src/kernel/lib/font.asm"
 %include "src/kernel/lib/math.asm"
+%include "src/kernel/lib/xml.asm"
 
 ; --- Generated Signature Registry ---
 %ifdef ENABLE_SIG_SECTION

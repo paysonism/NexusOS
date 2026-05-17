@@ -21,23 +21,24 @@
 
 %ifdef NEXUS_CACHE32_MAX
 CACHE32_RAM_LIMIT   equ 0x2000000    ; 32MB strict profile cap
-SYSTEM_RESERVED_END equ 0x1B00000    ; Keep allocator above fixed cold buffers
-SMP_CORE_STATE_ADDR equ 0x220000     ; Cacheline-aligned per-core records
-SMP_CORE_STACK_BASE equ 0x240000     ; AP stacks grow down from here
+SYSTEM_RESERVED_END equ 0x5600000    ; Allocator starts above wallpaper/drag caches
+SMP_CORE_STATE_ADDR equ 0xC40000     ; Cacheline-aligned per-core records
+SMP_CORE_STACK_BASE equ 0xC50000     ; AP stacks grow down from here
 SMP_MAX_CORES       equ 8
 SMP_CORE_STATE_SIZE equ 64
 SMP_CORE_STACK_SIZE equ 0x4000
 %else
-SMP_CORE_STATE_ADDR equ 0x220000
+SMP_CORE_STATE_ADDR equ 0xC40000
 SMP_MAX_CORES       equ 1
 SMP_CORE_STATE_SIZE equ 64
-SYSTEM_RESERVED_END equ 0xD00000
+SYSTEM_RESERVED_END equ 0x5600000    ; Allocator starts above wallpaper/drag caches
 %endif
 
 ; --- Stage 2 disk layout ---
 STAGE2_SECTORS      equ 63           ; Sectors 1-63
 KERNEL_START_SECTOR equ 64           ; Kernel starts at sector 64
-KERNEL_SECTORS      equ 256          ; 128KB max kernel
+KERNEL_SECTORS      equ 4096         ; 2MB max BIOS-loaded kernel
+FAT16_PART_LBA      equ (KERNEL_START_SECTOR + KERNEL_SECTORS)
 
 ; --- Screen ---
 SCREEN_WIDTH        equ 1024
@@ -50,42 +51,50 @@ FRAMEBUFFER_SIZE    equ (SCREEN_WIDTH * SCREEN_HEIGHT * 4)  ; 3145728 = ~3MB
 ; VBE info offsets live in boot_memory.inc.
 
 ; --- Colors (32-bit 0x00RRGGBB, stored as BGRX in memory) ---
-; VGA 16-color palette (NexusOS Design System, format 0x00RRGGBB)
-COLOR_VGA_BLACK     equ 0x00000000   ; #000000
-COLOR_VGA_BLUE      equ 0x000000A8   ; #0000A8
-COLOR_VGA_LGRAY     equ 0x00A8A8A8   ; #A8A8A8
-COLOR_VGA_DGRAY     equ 0x00545454   ; #545454
-COLOR_VGA_WHITE     equ 0x00FCFCFC   ; #FCFCFC
-COLOR_VGA_TEAL      equ 0x00008080   ; #008080
-COLOR_VGA_RED       equ 0x00A80000   ; #A80000
-COLOR_VGA_GREEN     equ 0x0000A800   ; #00A800
+; NexusOS design-system light palette semantic tokens.
+COLOR_BG_BASE       equ 0x00F5F6FA   ; #F5F6FA
+COLOR_SURFACE_1     equ 0x00FFFFFF   ; #FFFFFF
+COLOR_SURFACE_2     equ 0x00ECEFF4   ; #ECEFF4
+COLOR_BORDER        equ 0x00D8DDE3   ; #D8DDE3
+COLOR_BORDER_STRONG equ 0x00C4CBD3   ; #C4CBD3
+COLOR_TEXT_PRIMARY  equ 0x000F141E   ; #0F141E
+COLOR_TEXT_SECONDARY equ 0x004B5563  ; #4B5563
+COLOR_TEXT_TERTIARY equ 0x008A939F   ; #8A939F
+COLOR_ACCENT_LIGHT  equ 0x004C8BFF   ; #4C8BFF
+COLOR_ACCENT        equ 0x002A6FFF   ; #2A6FFF
+COLOR_ACCENT_DARK   equ 0x001A55D6   ; #1A55D6
+COLOR_CYAN          equ 0x0036C0E0   ; #36C0E0
+COLOR_CYAN_DARK     equ 0x001291B0   ; #1291B0
+COLOR_ERROR         equ 0x00E5474D   ; #E5474D
+COLOR_WARNING       equ 0x00F7B52C   ; #F7B52C
+COLOR_SUCCESS       equ 0x002EB56E   ; #2EB56E
 
 COLOR_BLACK         equ 0x00000000
-COLOR_WHITE         equ 0x00FCFCFC
-COLOR_DESKTOP_BG    equ 0x00008080   ; Teal #008080
-COLOR_TASKBAR_BG    equ 0x00A8A8A8   ; VGA lightgray #A8A8A8
-COLOR_TASKBAR_TOP   equ 0x00FCFCFC   ; Bevel highlight
-COLOR_CHROME_FACE   equ 0x00A8A8A8   ; #A8A8A8 3D face
-COLOR_SURFACE       equ 0x00C0C0C0   ; #C0C0C0 window surface
-COLOR_SUNKEN        equ 0x00FCFCFC   ; #FCFCFC sunken bg
-COLOR_BEVEL_LT      equ 0x00FCFCFC   ; top/left highlight #FCFCFC
-COLOR_BEVEL_DK      equ 0x00545454   ; bottom/right shadow #545454
-COLOR_BEVEL_XDK     equ 0x00000000   ; outer 1px black
-COLOR_TITLEBAR      equ 0x000000A8   ; focused titlebar #0000A8
-COLOR_TITLEBAR_UNF  equ 0x00545454   ; unfocused #545454
-COLOR_WINDOW_BG     equ 0x00C0C0C0   ; #C0C0C0
-COLOR_WINDOW_BORDER equ 0x00000000   ; outer border black
-COLOR_CLOSE_BTN     equ 0x00A8A8A8   ; face (no red)
-COLOR_CLOSE_HOVER   equ 0x00C0C0C0
-COLOR_MIN_BTN       equ 0x00A8A8A8   ; face
-COLOR_TEXT_WHITE     equ 0x00FCFCFC
-COLOR_TEXT_BLACK     equ 0x00000000
-COLOR_TEXT_GRAY      equ 0x00545454
-COLOR_TEXT_TITLE     equ 0x00FCFCFC   ; title bar text
-COLOR_HIGHLIGHT      equ 0x000000A8   ; selection = accent blue
-COLOR_CURSOR         equ 0x00FCFCFC
-COLOR_START_BTN      equ 0x00A8A8A8   ; face
-COLOR_START_HOVER    equ 0x00C0C0C0
+COLOR_WHITE         equ 0x00FFFFFF
+COLOR_DESKTOP_BG    equ COLOR_BG_BASE
+COLOR_TASKBAR_BG    equ COLOR_SURFACE_2
+COLOR_TASKBAR_TOP   equ COLOR_SURFACE_1
+COLOR_CHROME_FACE   equ COLOR_SURFACE_2
+COLOR_SURFACE       equ COLOR_SURFACE_1
+COLOR_SUNKEN        equ COLOR_SURFACE_2
+COLOR_BEVEL_LT      equ COLOR_SURFACE_1
+COLOR_BEVEL_DK      equ COLOR_BORDER_STRONG
+COLOR_BEVEL_XDK     equ COLOR_BORDER
+COLOR_TITLEBAR      equ COLOR_ACCENT
+COLOR_TITLEBAR_UNF  equ COLOR_BORDER_STRONG
+COLOR_WINDOW_BG     equ COLOR_SURFACE_1
+COLOR_WINDOW_BORDER equ COLOR_BORDER
+COLOR_CLOSE_BTN     equ COLOR_ERROR
+COLOR_CLOSE_HOVER   equ 0x00F2666C
+COLOR_MIN_BTN       equ COLOR_SURFACE_2
+COLOR_TEXT_WHITE     equ COLOR_WHITE
+COLOR_TEXT_BLACK     equ COLOR_TEXT_PRIMARY
+COLOR_TEXT_GRAY      equ COLOR_TEXT_SECONDARY
+COLOR_TEXT_TITLE     equ COLOR_WHITE
+COLOR_HIGHLIGHT      equ COLOR_ACCENT
+COLOR_CURSOR         equ COLOR_TEXT_PRIMARY
+COLOR_START_BTN      equ COLOR_SURFACE_1
+COLOR_START_HOVER    equ COLOR_SURFACE_2
 
 ; --- Window Manager ---
 MAX_WINDOWS         equ 8
@@ -100,15 +109,16 @@ MIN_WINDOW_W        equ 200
 MIN_WINDOW_H        equ 100
 
 ; --- Taskbar ---
+; Only size constants live here. Y positions and right-anchored X
+; positions depend on the current screen size and are kept in runtime
+; globals owned by display.asm (scr_taskbar_y, scr_clock_x, ...). The
+; kernel recomputes them in display_recompute_layout() whenever a mode
+; change happens, so the taskbar follows the active resolution.
 TASKBAR_HEIGHT      equ 36
-TASKBAR_Y           equ (SCREEN_HEIGHT - TASKBAR_HEIGHT)
 START_BTN_W         equ 70
 START_BTN_H         equ 28
 START_BTN_X         equ 4
-START_BTN_Y         equ (TASKBAR_Y + 4)
 CLOCK_WIDTH         equ 64
-CLOCK_X             equ (SCREEN_WIDTH - CLOCK_WIDTH - 8)
-CLOCK_Y             equ (TASKBAR_Y + 10)
 
 ; --- Keyboard ---
 KB_BUFFER_SIZE      equ 64
@@ -172,40 +182,40 @@ KEY_F12             equ 0xFC
 
 ; --- USB/XHCI Memory Layout ---
 %ifdef NEXUS_CACHE32_MAX
-XHCI_DCBAA_ADDR     equ 0x1900000    ; Cold DMA region outside GUI LLC arena
-XHCI_CMD_RING_ADDR  equ 0x1910000
-XHCI_ERST_ADDR      equ 0x1920000
-XHCI_EVT_RING_ADDR  equ 0x1930000
-XHCI_SCRATCH_ADDR   equ 0x1940000
-XHCI_DEV_CTX_ADDR   equ 0x1950000
-XHCI_INPUT_CTX_ADDR equ 0x1960000
-XHCI_CTRL_RING_ADDR equ 0x1970000
-XHCI_INT_RING_ADDR  equ 0x1980000
-XHCI_CTRL_BUF_ADDR  equ 0x1990000
-XHCI_MOUSE_BUF_ADDR equ 0x19A0000
-XHCI_DEV_CTX2_ADDR  equ 0x19B0000
-XHCI_INT_RING2_ADDR equ 0x19C0000
-XHCI_MOUSE_BUF2_ADDR equ 0x19D0000
-XHCI_CTRL_RING2_ADDR equ 0x19E0000
-XHCI_MEM_END        equ 0x19F0000
+XHCI_DCBAA_ADDR     equ 0x1700000    ; Cold DMA region outside GUI/app arenas
+XHCI_CMD_RING_ADDR  equ 0x1710000
+XHCI_ERST_ADDR      equ 0x1720000
+XHCI_EVT_RING_ADDR  equ 0x1730000
+XHCI_SCRATCH_ADDR   equ 0x1740000
+XHCI_DEV_CTX_ADDR   equ 0x1750000
+XHCI_INPUT_CTX_ADDR equ 0x1760000
+XHCI_CTRL_RING_ADDR equ 0x1770000
+XHCI_INT_RING_ADDR  equ 0x1780000
+XHCI_CTRL_BUF_ADDR  equ 0x1790000
+XHCI_MOUSE_BUF_ADDR equ 0x17A0000
+XHCI_DEV_CTX2_ADDR  equ 0x17B0000
+XHCI_INT_RING2_ADDR equ 0x17C0000
+XHCI_MOUSE_BUF2_ADDR equ 0x17D0000
+XHCI_CTRL_RING2_ADDR equ 0x17E0000
+XHCI_MEM_END        equ 0x17F0000
 %else
-XHCI_DCBAA_ADDR     equ 0x900000     ; Device Context Base Address Array
-XHCI_CMD_RING_ADDR  equ 0x910000     ; Command Ring (4096 TRBs)
-XHCI_ERST_ADDR      equ 0x920000     ; Event Ring Segment Table
-XHCI_EVT_RING_ADDR  equ 0x930000     ; Event Ring (4096 TRBs)
-XHCI_SCRATCH_ADDR   equ 0x940000     ; Scratchpad array + buffers
-XHCI_DEV_CTX_ADDR   equ 0x950000     ; Output Device Context (slot 1)
-XHCI_INPUT_CTX_ADDR equ 0x960000     ; Input Context
-XHCI_CTRL_RING_ADDR equ 0x970000     ; Control EP0 Transfer Ring
-XHCI_INT_RING_ADDR  equ 0x980000     ; Interrupt IN Transfer Ring
-XHCI_CTRL_BUF_ADDR  equ 0x990000     ; Control transfer data buffers
-XHCI_MOUSE_BUF_ADDR equ 0x9A0000     ; Mouse interrupt data buffers (slot 1)
+XHCI_DCBAA_ADDR     equ 0x1700000    ; Device Context Base Address Array
+XHCI_CMD_RING_ADDR  equ 0x1710000    ; Command Ring (4096 TRBs)
+XHCI_ERST_ADDR      equ 0x1720000    ; Event Ring Segment Table
+XHCI_EVT_RING_ADDR  equ 0x1730000    ; Event Ring (4096 TRBs)
+XHCI_SCRATCH_ADDR   equ 0x1740000    ; Scratchpad array + buffers
+XHCI_DEV_CTX_ADDR   equ 0x1750000    ; Output Device Context (slot 1)
+XHCI_INPUT_CTX_ADDR equ 0x1760000    ; Input Context
+XHCI_CTRL_RING_ADDR equ 0x1770000    ; Control EP0 Transfer Ring
+XHCI_INT_RING_ADDR  equ 0x1780000    ; Interrupt IN Transfer Ring
+XHCI_CTRL_BUF_ADDR  equ 0x1790000    ; Control transfer data buffers
+XHCI_MOUSE_BUF_ADDR equ 0x17A0000    ; Mouse interrupt data buffers (slot 1)
 ; Slot 2 device support
-XHCI_DEV_CTX2_ADDR  equ 0x9B0000     ; Output Device Context (slot 2)
-XHCI_INT_RING2_ADDR equ 0x9C0000     ; Interrupt IN Transfer Ring (slot 2)
-XHCI_MOUSE_BUF2_ADDR equ 0x9D0000   ; Mouse interrupt data buffers (slot 2)
-XHCI_CTRL_RING2_ADDR equ 0x9E0000   ; Control EP0 Transfer Ring (slot 2)
-XHCI_MEM_END        equ 0x9F0000     ; End of XHCI memory region
+XHCI_DEV_CTX2_ADDR  equ 0x17B0000    ; Output Device Context (slot 2)
+XHCI_INT_RING2_ADDR equ 0x17C0000    ; Interrupt IN Transfer Ring (slot 2)
+XHCI_MOUSE_BUF2_ADDR equ 0x17D0000   ; Mouse interrupt data buffers (slot 2)
+XHCI_CTRL_RING2_ADDR equ 0x17E0000   ; Control EP0 Transfer Ring (slot 2)
+XHCI_MEM_END        equ 0x17F0000    ; End of XHCI memory region
 %endif
 
 ; --- XHCI Capability Register Offsets (from MMIO base) ---

@@ -38,12 +38,12 @@ app_l3_done_trampoline:
     ud2
 %include "src/user/apps/common.inc"
 %include "src/user/apps/launch.inc"
-%include "src/user/apps/explorer.inc"
+; explorer.inc deleted — Explorer is now a pure-NexusHL app built by
+; build_nxh.ps1 and included via build/nxh/generated_apps.inc below.
 %include "src/user/apps/terminal.inc"
 %define DISABLE_FN_RUNTIME_TRACE
 %include "build/nxh/generated_apps.inc"
 %undef DISABLE_FN_RUNTIME_TRACE
-%include "src/user/apps/settings.inc"
 %include "src/user/apps/about.inc"
 %include "src/user/apps/shell.inc"
 %include "src/user/apps/paint.inc"

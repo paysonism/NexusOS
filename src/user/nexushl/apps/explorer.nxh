@@ -1,44 +1,84 @@
-# NexusHL File Explorer. Uses the shared GUI library and the public FS syscall
-# surface instead of drawing the file list directly in assembly.
+# NexusHL File Explorer.
+#
+# Pure NexusHL implementation. All drawing goes through gui.nxh; all
+# filesystem operations go through SYS_FS_* syscalls; the only asm externs
+# remaining are the .bss buffers (NexusHL cannot allocate storage today) and
+# the kernel-resident WM helpers exposed through syscalls.
+#
+# Window chrome (titlebar, borders) is painted entirely by the kernel window
+# manager — this app draws only the client area.
 
 use gui
+use fs
 
 app "Explorer" { stack = 8192; }
 
-const BORDER_WIDTH    = 2
-const TITLEBAR_HEIGHT = 24
-const FONT_WIDTH      = 8
-const ROW_H           = 18
-const PATH_H          = 22
-const HEADER_H        = 18
-const LIST_Y          = 42
-const STATUS_H        = 18
-const MAX_ROWS        = 20
-const ATTR_DIR        = 0x10
+# -------------------- layout constants --------------------
+const PATH_H        = 22
+const HEADER_H      = 18
+const LIST_Y        = 42      # PATH_H + HEADER_H + 2
+const ROW_H         = 18
+const MAX_ROWS      = 20
+const ATTR_DIR      = 0x10
 
-const C_PATH          = 0x00E0E0E0
-const C_HEADER        = 0x00D0D0E0
-const C_STATUS        = 0x00E8E8E8
-const C_TEXT          = 0x00333333
-const C_MUTED         = 0x00666666
-const C_DIR           = 0x00CC8800
-const C_SELECT        = 0x000000A8
-const C_PANEL         = 0x00334455
-const C_PANEL2        = 0x00443355
-const C_OK            = 0x00228B22
-const C_WHITE         = 0x00FFFFFF
-const C_BLACK         = 0x00000000
-const C_BUTTON        = 0x00A0A0A0
+# -------------------- colors --------------------
+const C_PATH        = 0x00E0E0E0
+const C_HEADER      = 0x00D0D0E0
+const C_STATUS      = 0x00E8E8E8
+const C_TEXT        = 0x00333333
+const C_MUTED       = 0x00666666
+const C_DIR         = 0x00CC8800
+const C_SELECT      = 0x000000A8
+const C_OVERLAY_RN  = 0x00334455
+const C_OVERLAY_NF  = 0x00443355
+const C_OK          = 0x00228B22
+const C_WHITE       = 0x00FFFFFF
+const C_BLACK       = 0x00000000
+const C_BUTTON      = 0x00A0A0A0
+const C_CTX_DIM     = 0x00888888
 
-const K_ENTER         = 13
-const K_BS            = 8
-const SC_ESC_RAW      = 0x01
-const SC_UP           = 0xC8
-const SC_DOWN         = 0xD0
-const SC_ENTER_RAW    = 0x1C
-const KEY_R           = 114
-const KEY_N           = 110
+# -------------------- key codes --------------------
+const K_ENTER       = 13
+const K_BS          = 8
+const SC_ESC        = 0x01
+const SC_UP         = 0xC8
+const SC_DOWN       = 0xD0
+const SC_ENTER      = 0x1C
+const KEY_R         = 114
+const KEY_N         = 110
+const KEY_M         = 109
+const KEY_DEL_ASCII = 127
+const KEY_P         = 112
 
+# -------------------- inline strings --------------------
+str szPathRoot       = "C:\\"
+str szPathSub        = "C:\\..."
+str szColName        = "Name"
+str szColSize        = "Size"
+str szDirLabel       = "<DIR>"
+str szStatusReady    = "Ready  -  Enter=open, R=rename, N=new, M=menu"
+str szBackBtn        = "[Up]"
+str szRenameLabel    = "Rename:"
+str szNewFolderLabel = "New Folder:"
+str szNewFolderDone  = "Folder Created!"
+str szCtxOpen        = "Open"
+str szCtxRename      = "Rename"
+str szCtxNewFolder   = "New Folder"
+str szCtxProperties  = "Properties"
+str szPropTitleHL    = "Properties"
+str szPropName       = "Name:"
+str szPropType       = "Type:"
+str szPropSize       = "Size:"
+str szPropLoc        = "Path:"
+str szPropTypeFile   = "File"
+str szPropTypeDir    = "Folder"
+str szPropSizeDir    = "--"
+
+# -------------------- externs --------------------
+# State buffers/flags. Defined in src/user/apps/state.inc — kept asm-side
+# because NexusHL has no .bss declaration syntax. Each is touched only by
+# this app, by launch.inc (which resets them on launch), and (for prop_entry_ptr)
+# by the kernel WM dispatcher that calls our properties draw callback.
 extern explorer_sel;
 extern exp_rename_active;
 extern exp_rename_cursor;
@@ -47,22 +87,21 @@ extern exp_newfolder_active;
 extern exp_newfolder_cursor;
 extern exp_newfolder_buf;
 extern exp_newfolder_done_msg;
+extern exp_ctx_visible;
+extern exp_ctx_x;
+extern exp_ctx_y;
 extern fat16_name_buf;
 extern fat16_size_buf;
-extern szPathRoot;
-extern szPathSub;
-extern szColName;
-extern szColSize;
-extern szDirLabel;
-extern szStatusReady;
-extern szBackBtn;
-extern szRenameLabel;
-extern szNewFolderLabel;
-extern szNewFolderDone;
-extern app_open_file;
-extern app_format_bytes_size;
-extern filename_to_83;
-extern fat16_format_name;
+extern prop_entry_ptr;
+
+# `properties_drawfn_addr` is an asm-escape helper that returns the address
+# of our own properties_draw callback. NexusHL has no `&local_fn` syntax
+# (the `&` operator only resolves to strings, consts, or externs), so we
+# resort to the documented `asm "..."` escape to load rax directly. The
+# function body has no `return`, so codegen leaves rax untouched by the
+# epilogue — what the asm sets is what the caller receives.
+
+# -------------------- small helpers --------------------
 
 fn selected_entry() {
     return syscall(SYS_FS_ENTRY, lw(&explorer_sel));
@@ -73,6 +112,8 @@ fn file_count() {
 }
 
 fn current_is_root() {
+    # The first entry of a non-root FAT16 directory listing is the "." entry,
+    # so spotting "." in slot 0 tells us we are inside a subdirectory.
     let e0 = syscall(SYS_FS_ENTRY, 0);
     if e0 == 0 { return 1; }
     if lb(e0) == 46 {
@@ -92,7 +133,7 @@ fn clamp_selection() {
     if sel >= count { sw(&explorer_sel, count - 1); }
 }
 
-fn clear_text(buf, cap) {
+fn clear_buf(buf, cap) {
     let i = 0;
     while i < cap {
         sb(buf + i, 0);
@@ -100,13 +141,20 @@ fn clear_text(buf, cap) {
     }
 }
 
+fn dismiss_overlays() {
+    sb(&exp_rename_active, 0);
+    sb(&exp_newfolder_active, 0);
+    sb(&exp_newfolder_done_msg, 0);
+    sb(&exp_ctx_visible, 0);
+}
+
 fn start_rename() {
     let ent = selected_entry();
     if ent == 0 { return; }
     sb(&exp_rename_active, 1);
     sw(&exp_rename_cursor, 0);
-    clear_text(&exp_rename_buf, 24);
-    fat16_format_name(&exp_rename_buf, ent);
+    clear_buf(&exp_rename_buf, 24);
+    syscall(SYS_FS_FORMAT_NAME, ent, &exp_rename_buf);
     let i = 0;
     while i < 23 {
         if lb(&exp_rename_buf + i) == 0 {
@@ -121,131 +169,191 @@ fn start_rename() {
 fn start_new_folder() {
     sb(&exp_newfolder_active, 1);
     sw(&exp_newfolder_cursor, 0);
-    clear_text(&exp_newfolder_buf, 24);
+    clear_buf(&exp_newfolder_buf, 24);
 }
 
-fn enter_selected(win) {
+fn enter_selected() {
     let ent = selected_entry();
     if ent == 0 { return; }
-    if (lb(ent + 11) & ATTR_DIR) != 0 {
+    if fs_is_dir(ent) == 1 {
         syscall(SYS_FS_CHDIR, lw(ent + 26));
         sw(&explorer_sel, 0);
         return;
     }
-    app_open_file(ent, win);
+    # Hand off to the kernel — it dispatches by extension (notepad for .txt,
+    # bmp viewer for .bmp, etc.). Keeps app-launch policy out of the explorer.
+    syscall(SYS_OPEN_FILE_NP, ent);
 }
 
-fn draw_overlay(win, label, buf, cursor, color, xoff) {
-    let x = ui_win_x(win);
-    let y = ui_win_y(win);
-    let w = ui_win_w(win);
-    let h = ui_win_h(win);
-    ui_rect(x + BORDER_WIDTH, y + h - BORDER_WIDTH - 40, w - BORDER_WIDTH * 2, 22, color);
-    ui_text(x + BORDER_WIDTH + 4, y + h - BORDER_WIDTH - 38, label, C_WHITE, color);
-    ui_text(x + BORDER_WIDTH + xoff, y + h - BORDER_WIDTH - 38, buf, C_WHITE, color);
-    ui_caret_blink(win, xoff + cursor * FONT_WIDTH, h - TITLEBAR_HEIGHT - BORDER_WIDTH - 38);
+fn properties_drawfn_addr() {
+    asm "lea rax, [rel app_hl_explorer_properties_draw]";
 }
 
-fn draw(win) {
-    let x = ui_win_x(win);
-    let y = ui_win_y(win);
-    let w = ui_win_w(win);
-    let h = ui_win_h(win);
+fn open_properties() {
+    let ent = selected_entry();
+    if ent == 0 { return; }
+    sq(&prop_entry_ptr, ent);
+    syscall(SYS_WM_CREATE, &szPropTitleHL, 250, 200, 240, 140,
+            properties_drawfn_addr());
+}
 
-    clamp_selection();
+fn show_context_menu() {
+    let sel = lw(&explorer_sel);
+    sw(&exp_ctx_x, 40);
+    sw(&exp_ctx_y, LIST_Y + sel * ROW_H);
+    sb(&exp_ctx_visible, 1);
+}
 
-    ui_rect_at(win, 0, 0, w - BORDER_WIDTH * 2, PATH_H, C_PATH);
+# -------------------- main draw --------------------
+
+fn draw_path_bar(win, w) {
+    ui_rect_at(win, 0, 0, w, PATH_H, C_PATH);
     if current_is_root() == 1 {
         ui_text_at(win, 4, 3, &szPathRoot, C_TEXT, C_PATH);
     } else {
         ui_text_at(win, 4, 3, &szPathSub, C_TEXT, C_PATH);
-        ui_rect_at(win, w - 64, 2, 52, 16, C_BUTTON);
-        ui_text_at(win, w - 59, 4, &szBackBtn, C_BLACK, C_BUTTON);
-    }
-
-    ui_rect_at(win, 0, PATH_H, w - BORDER_WIDTH * 2, HEADER_H, C_HEADER);
-    ui_text_at(win, 4, PATH_H + 1, &szColName, C_TEXT, C_HEADER);
-    ui_text_at(win, w - 100, PATH_H + 1, &szColSize, C_TEXT, C_HEADER);
-
-    let count = file_count();
-    let i = 0;
-    while i < count {
-        if i >= MAX_ROWS { i = count; }
-        if i < count {
-            let ent = syscall(SYS_FS_ENTRY, i);
-            if ent != 0 {
-                let row_y = LIST_Y + i * ROW_H;
-                let bg = C_WHITE;
-                let fg = C_TEXT;
-                if i == lw(&explorer_sel) {
-                    bg = C_SELECT;
-                    fg = C_WHITE;
-                    ui_rect_at(win, 0, row_y, w - BORDER_WIDTH * 2, ROW_H, C_SELECT);
-                }
-                fat16_format_name(&fat16_name_buf, ent);
-                if (lb(ent + 11) & ATTR_DIR) != 0 {
-                    fg = C_DIR;
-                    if i == lw(&explorer_sel) { fg = C_WHITE; }
-                    ui_text_at(win, 8, row_y + 1, &fat16_name_buf, fg, bg);
-                    ui_text_at(win, w - 80, row_y + 1, &szDirLabel, C_MUTED, bg);
-                } else {
-                    ui_text_at(win, 8, row_y + 1, &fat16_name_buf, fg, bg);
-                    app_format_bytes_size(lw(ent + 28), &fat16_size_buf);
-                    ui_text_at(win, w - 80, row_y + 1, &fat16_size_buf, C_MUTED, bg);
-                }
-            }
-            i = i + 1;
-        }
-    }
-
-    ui_rect_at(win, 0, h - TITLEBAR_HEIGHT - BORDER_WIDTH - STATUS_H, w - BORDER_WIDTH * 2, STATUS_H, C_STATUS);
-    ui_text_at(win, 4, h - TITLEBAR_HEIGHT - BORDER_WIDTH - STATUS_H + 1, &szStatusReady, C_MUTED, C_STATUS);
-
-    if lb(&exp_rename_active) == 1 {
-        draw_overlay(win, &szRenameLabel, &exp_rename_buf, lw(&exp_rename_cursor), C_PANEL, 64);
-    }
-    if lb(&exp_newfolder_active) == 1 {
-        draw_overlay(win, &szNewFolderLabel, &exp_newfolder_buf, lw(&exp_newfolder_cursor), C_PANEL2, 96);
-    }
-    if lb(&exp_newfolder_done_msg) == 1 {
-        let ox = x + (w - 140) / 2;
-        ui_rect(ox, y + TITLEBAR_HEIGHT + 60, 140, 30, C_OK);
-        ui_text(ox + 15, y + TITLEBAR_HEIGHT + 68, &szNewFolderDone, C_WHITE, C_OK);
+        ui_button(win, w - 56, 3, 48, &szBackBtn, C_BUTTON);
     }
 }
 
+fn draw_header(win, w) {
+    ui_rect_at(win, 0, PATH_H, w, HEADER_H, C_HEADER);
+    ui_text_at(win, 4, PATH_H + 1, &szColName, C_TEXT, C_HEADER);
+    ui_text_at(win, w - 100, PATH_H + 1, &szColSize, C_TEXT, C_HEADER);
+}
+
+fn draw_row(win, w, i, ent) {
+    let row_y = LIST_Y + i * ROW_H;
+    let bg = C_WHITE;
+    let fg = C_TEXT;
+    let is_sel = 0;
+    if i == lw(&explorer_sel) {
+        is_sel = 1;
+        bg = C_SELECT;
+        fg = C_WHITE;
+        ui_rect_at(win, 0, row_y, w, ROW_H, C_SELECT);
+    }
+    syscall(SYS_FS_FORMAT_NAME, ent, &fat16_name_buf);
+    if fs_is_dir(ent) == 1 {
+        let dirfg = C_DIR;
+        if is_sel == 1 { dirfg = C_WHITE; }
+        ui_text_at(win, 8, row_y + 1, &fat16_name_buf, dirfg, bg);
+        ui_text_at(win, w - 80, row_y + 1, &szDirLabel, C_MUTED, bg);
+    } else {
+        ui_text_at(win, 8, row_y + 1, &fat16_name_buf, fg, bg);
+        format_bytes_size(lw(ent + 28), &fat16_size_buf);
+        ui_text_at(win, w - 80, row_y + 1, &fat16_size_buf, C_MUTED, bg);
+    }
+}
+
+fn draw_rows(win, w) {
+    let count = file_count();
+    let i = 0;
+    while i < count {
+        if i >= MAX_ROWS { return; }
+        let ent = syscall(SYS_FS_ENTRY, i);
+        if ent != 0 {
+            draw_row(win, w, i, ent);
+        }
+        i = i + 1;
+    }
+}
+
+fn draw_context_menu(win) {
+    if lb(&exp_ctx_visible) == 0 { return; }
+    let cx = lw(&exp_ctx_x);
+    let cy = lw(&exp_ctx_y);
+    ui_context_menu(win, cx, cy, 4);
+    ui_context_menu_item(win, cx, cy, 0, &szCtxOpen,        C_TEXT);
+    ui_context_menu_item(win, cx, cy, 1, &szCtxRename,      C_TEXT);
+    ui_context_menu_item(win, cx, cy, 2, &szCtxNewFolder,   C_TEXT);
+    ui_context_menu_item(win, cx, cy, 3, &szCtxProperties,  C_TEXT);
+}
+
+fn draw_done_message(win, w) {
+    if lb(&exp_newfolder_done_msg) == 0 { return; }
+    let ox = (w - 140) / 2;
+    ui_rect_at(win, ox, 60, 140, 30, C_OK);
+    ui_text_at(win, ox + 15, 68, &szNewFolderDone, C_WHITE, C_OK);
+}
+
+fn draw(win) {
+    let w = ui_win_w(win) - UI_BORDER * 2;
+    clamp_selection();
+
+    draw_path_bar(win, w);
+    draw_header(win, w);
+    draw_rows(win, w);
+    ui_status_bar(win, &szStatusReady, C_STATUS);
+
+    if lb(&exp_rename_active) == 1 {
+        ui_modal_overlay(win, &szRenameLabel, &exp_rename_buf,
+                         lw(&exp_rename_cursor), C_OVERLAY_RN, 68);
+    }
+    if lb(&exp_newfolder_active) == 1 {
+        ui_modal_overlay(win, &szNewFolderLabel, &exp_newfolder_buf,
+                         lw(&exp_newfolder_cursor), C_OVERLAY_NF, 100);
+    }
+    draw_done_message(win, w);
+    draw_context_menu(win);
+}
+
+# -------------------- click handler --------------------
+
+fn handle_ctx_click(cx, cy) {
+    let mx = lw(&exp_ctx_x);
+    let my = lw(&exp_ctx_y);
+    let idx = ui_context_menu_hit(cx, cy, mx, my, 4);
+    sb(&exp_ctx_visible, 0);
+    if idx == 0 { enter_selected(); return; }
+    if idx == 1 { start_rename(); return; }
+    if idx == 2 { start_new_folder(); return; }
+    if idx == 3 { open_properties(); return; }
+}
+
 fn click(win, cx, cy) {
+    # Modal overlays consume the first click that lands anywhere.
     if lb(&exp_newfolder_done_msg) == 1 {
         sb(&exp_newfolder_done_msg, 0);
+        return;
+    }
+    if lb(&exp_ctx_visible) == 1 {
+        handle_ctx_click(cx, cy);
         return;
     }
     if lb(&exp_rename_active) == 1 { sb(&exp_rename_active, 0); return; }
     if lb(&exp_newfolder_active) == 1 { sb(&exp_newfolder_active, 0); return; }
 
-    let w = ui_win_w(win);
+    let w = ui_win_w(win) - UI_BORDER * 2;
+
+    # [Up] button (only present off-root).
     if current_is_root() == 0 {
         if cy < PATH_H {
-            if cx >= w - 64 {
+            if cx >= w - 56 {
                 syscall(SYS_FS_CHDIR, 0);
                 sw(&explorer_sel, 0);
                 return;
             }
         }
     }
+
     if cy < LIST_Y { return; }
     let idx = (cy - LIST_Y) / ROW_H;
     if idx >= file_count() { return; }
     if idx == lw(&explorer_sel) {
-        enter_selected(win);
+        enter_selected();
         return;
     }
     sw(&explorer_sel, idx);
 }
 
+# -------------------- text-input key helper --------------------
+# Returns 1 when the key was consumed (caller should stop processing),
+# 0 to fall through to the next handler.
 fn edit_key(active, cursor_ptr, buf, k) {
     let sc = k & 0xFF;
     let ch = (k >> 8) & 0xFF;
-    if sc == SC_ESC_RAW {
+    if sc == SC_ESC {
         sb(active, 0);
         return 1;
     }
@@ -267,9 +375,17 @@ fn edit_key(active, cursor_ptr, buf, k) {
     return 1;
 }
 
+# -------------------- key handler --------------------
+
 fn key(win, k) {
     let sc = k & 0xFF;
     let ch = (k >> 8) & 0xFF;
+
+    # Dismiss the context menu on ANY key.
+    if lb(&exp_ctx_visible) == 1 {
+        sb(&exp_ctx_visible, 0);
+        return;
+    }
 
     if lb(&exp_rename_active) == 1 {
         if ch == K_ENTER {
@@ -307,8 +423,59 @@ fn key(win, k) {
         if sel2 < file_count() { sw(&explorer_sel, sel2); }
         return;
     }
-    if sc == SC_ENTER_RAW { enter_selected(win); return; }
-    if ch == K_ENTER { enter_selected(win); return; }
-    if ch == KEY_R { start_rename(); return; }
-    if ch == KEY_N { start_new_folder(); return; }
+    if sc == SC_ENTER { enter_selected(); return; }
+    if ch == K_ENTER  { enter_selected(); return; }
+    if ch == KEY_R    { start_rename(); return; }
+    if ch == KEY_N    { start_new_folder(); return; }
+    if ch == KEY_M    { show_context_menu(); return; }
+    if ch == KEY_P    { open_properties(); return; }
+    if ch == KEY_DEL_ASCII {
+        let ent = selected_entry();
+        if ent == 0 { return; }
+        syscall(SYS_FS_DELETE, ent);
+        sw(&explorer_sel, 0);
+        return;
+    }
+}
+
+# -------------------- Properties window --------------------
+#
+# Spawned by `open_properties`. The window owns no state of its own; it
+# reads prop_entry_ptr each draw so the user can leave it open while
+# navigating the main explorer.
+
+fn properties_draw(win) {
+    let ent = lq(&prop_entry_ptr);
+    if ent == 0 { return; }
+
+    syscall(SYS_FS_FORMAT_NAME, ent, &fat16_name_buf);
+
+    ui_text_at(win, 8,  8,  &szPropName, C_MUTED, C_WHITE);
+    ui_text_at(win, 60, 8,  &fat16_name_buf, C_BLACK, C_WHITE);
+
+    ui_text_at(win, 8,  30, &szPropType, C_MUTED, C_WHITE);
+    if fs_is_dir(ent) == 1 {
+        ui_text_at(win, 60, 30, &szPropTypeDir, C_BLACK, C_WHITE);
+    } else {
+        ui_text_at(win, 60, 30, &szPropTypeFile, C_BLACK, C_WHITE);
+    }
+
+    ui_text_at(win, 8,  52, &szPropSize, C_MUTED, C_WHITE);
+    if fs_is_dir(ent) == 1 {
+        ui_text_at(win, 60, 52, &szPropSizeDir, C_BLACK, C_WHITE);
+    } else {
+        format_bytes_size(lw(ent + 28), &fat16_size_buf);
+        ui_text_at(win, 60, 52, &fat16_size_buf, C_BLACK, C_WHITE);
+    }
+
+    ui_text_at(win, 8,  74, &szPropLoc, C_MUTED, C_WHITE);
+    ui_text_at(win, 60, 74, &szPathRoot, C_BLACK, C_WHITE);
+}
+
+fn properties_click(win, cx, cy) {
+    # No interactive elements yet — click is a no-op.
+}
+
+fn properties_key(win, k) {
+    # No keybindings yet — key is a no-op.
 }

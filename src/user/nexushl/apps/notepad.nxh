@@ -1,6 +1,7 @@
 # NexusHL port of Notepad. Full functionality — menu, text buffer, save dialog.
 
 use gui
+use fs
 
 app "Notepad" { stack = 8192; }
 
@@ -69,8 +70,6 @@ extern np_open_entry;
 extern szCursor;
 extern render_rect;
 extern render_text;
-extern fat16_write_file;
-extern filename_to_83;
 
 # ============================================================
 # helpers
@@ -305,7 +304,16 @@ fn build_save_content() {
 
 fn do_save_to(name83) {
     let total = build_save_content();
-    fat16_write_file(name83, &np_saved_content, total);
+    # SYS_FS_WRITE creates/overwrites the 8.3 file in the current FAT16
+    # directory and (inside fat16_write_file) flushes the directory and FAT
+    # tables to the data disk. SYS_FS_SYNC_ROOT is an extra explicit flush so
+    # the bytes survive a reboot even if the write path's flush is skipped.
+    let rc = syscall(SYS_FS_WRITE, name83, &np_saved_content, total);
+    if rc != 0 {
+        sb(&np_save_done_msg, 2);
+        return;
+    }
+    syscall(SYS_FS_SYNC_ROOT);
     sb(&np_has_saved, 1);
     sb(&np_save_done_msg, 1);
 }

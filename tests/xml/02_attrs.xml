@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <rect x="10" y="20" width="80" height="60" fill="#3366cc"/>
+  <text x='50' y='55'>Hi &amp; bye &lt;3</text>
+</svg>

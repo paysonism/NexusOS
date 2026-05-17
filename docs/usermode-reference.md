@@ -229,13 +229,17 @@ Compiled active Notepad callbacks:
 
 These are installed by `src/user/apps/launch.inc`.
 
-### `src/user/apps/settings.inc`
+### `src/user/nexushl/apps/settings.nxh`
 
-`app_settings_draw`
-- Settings draw callback.
+Compiled active Settings callbacks:
 
-`app_settings_click`
-- Settings click callback.
+- `app_hl_settings_draw`
+- `app_hl_settings_click`
+- `app_hl_settings_key`
+
+These are installed by `src/user/apps/launch.inc`. The old
+`src/user/apps/settings.inc` assembly implementation is deprecated and exports
+no active callbacks.
 
 ### `src/user/apps/about.inc`
 

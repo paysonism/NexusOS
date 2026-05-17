@@ -161,6 +161,116 @@ Rejected pointer-bearing syscalls now return `-1` in `RAX`.
 - Validation: `name83_ptr` must point to an 11-byte, space-padded FAT 8.3 name
   in app-owned memory
 
+`22` `SYS_OPEN_FILE_NP`
+- Args: `RDI=entry`
+- Effect: launch Notepad and load the selected file
+- Returns: Notepad window id in `RAX`, or `-1`
+- Validation: `entry` must be an opaque FAT16 handle from `SYS_FS_ENTRY`
+
+`23` `SYS_APP_OPEN`
+- Args: `RDI=command_line_ptr`
+- Effect: launch an app from a command string such as `notepad README.TXT`
+- Returns: launched window id in `RAX`, or `-1`
+- Validation: command line must be an app-owned NUL-terminated string
+
+`24` `SYS_DISPLAY_FLAGS`
+- Args: none
+- Effect: read display option bits
+- Returns: flags in `RAX`; bit 0 is VSync, bit 1 is the FPS overlay
+- Intended use: Settings and other UI apps that need to reflect current display
+  toggles without reading kernel globals
+
+`25` `SYS_DISPLAY_SET_FLAGS`
+- Args: `RDI=flags`
+- Effect: update display option bits; bit 0 controls VSync, bit 1 controls the
+  FPS overlay
+- Returns: `0` on success, `-1` on validation failure
+- Validation: flags must fit in the low 32 bits; unknown high bits are ignored
+
+`26` `SYS_DESKTOP_BG`
+- Args: none
+- Effect: read the active desktop background theme id
+- Returns: `0` Liquid Metal, `1` Glass Ribbons, or `2` Frosted Bloom
+
+`27` `SYS_DESKTOP_SET_BG`
+- Args: `RDI=theme_id`
+- Effect: switch the whole desktop wallpaper/background renderer
+- Returns: `0` on success, `-1` on validation failure
+- Validation: theme id must be `0`, `1`, or `2`
+
+`28` `SYS_DISPLAY_NATIVE`
+- Args: none
+- Returns: native framebuffer size packed as `width | (height << 32)`
+
+`29` `SYS_DISPLAY_SIZE`
+- Args: none
+- Returns: current logical desktop size packed as `width | (height << 32)`
+
+`30` `SYS_XML_PARSE`
+- Args: `RDI=buffer`, `RSI=len`
+- Returns: `1` on parse success, `0` on parse error, `-1` on validation failure
+- Validation: XML buffer must live in app-owned readable memory
+
+`31` through `39` `SYS_XML_*`
+- `31` root, `32` tag id, `33` tag name copy, `34` first child,
+  `35` next sibling, `36` parent, `37` attribute copy, `38` text copy,
+  `39` free current document
+- Pointer outputs are validated as app-owned writable ranges
+
+`40` `SYS_DRAW_LINE`
+- Args: `RDI=x0`, `RSI=y0`, `RDX=x1`, `R10=y1`, `R8=color`
+- Effect: draw a clipped Bresenham line into the back buffer
+
+`41` `SYS_FILL_CIRCLE`
+- Args: `RDI=cx`, `RSI=cy`, `RDX=r`, `R10=color`
+- Effect: draw a clipped filled circle into the back buffer
+
+`42` `SYS_FILL_TRIANGLE`
+- Args: `RDI=coords_ptr`, `RSI=color`
+- Effect: draw a clipped filled triangle from six int32 coords
+- Validation: `coords_ptr` must point to a 24-byte app-owned buffer
+
+`43` `SYS_XML_LAST_ERROR`
+- Args: none
+- Returns: packed parse diagnostic, `error_code | (byte_offset << 32)`
+
+`44` `SYS_XML_NODE_COUNT`
+- Args: none
+- Returns: node count in the current XML document
+
+`45` `SYS_BLEND_PIXEL`
+- Args: `RDI=x`, `RSI=y`, `RDX=argb`
+- Effect: source-over blend one ARGB pixel into the back buffer
+
+`46` `SYS_BLEND_SPAN`
+- Args: `RDI=x`, `RSI=y`, `RDX=len`, `R10=argb`
+- Effect: source-over blend a horizontal ARGB span into the back buffer
+
+`47` `SYS_XML_TEXT_RUNS`
+- Args: `RDI=node`
+- Returns: mixed-content text run count, `0` for empty content, or `-1` for an
+  invalid node
+
+`48` `SYS_XML_TEXT_RUN`
+- Args: `RDI=node`, `RSI=run_index`, `RDX=out`, `R10=max`
+- Returns: bytes copied from the selected mixed-content text run, or `-1`
+- Validation: `out` must point to an app-owned writable buffer
+
+`49` `SYS_XML_NAMESPACE`
+- Args: `RDI=node`, `RSI=prefix`, `RDX=prefix_len`, `R10=out`, `R8=max`
+- Returns: namespace URI length copied from the nearest `xmlns` binding, or `-1`
+- Validation: non-empty `prefix` and `out` must be app-owned buffers
+
+`50` `SYS_XML_NODE_NAMESPACE`
+- Args: `RDI=node`, `RSI=out`, `RDX=max`
+- Returns: namespace URI length for the node's tag prefix, or `-1`
+- Validation: `out` must point to an app-owned writable buffer
+
+`51` `SYS_XML_ENTITY_VALUE`
+- Args: `RDI=name`, `RSI=name_len`, `RDX=out`, `R10=max`
+- Returns: bytes copied from a custom internal-DTD entity value, or `-1`
+- Validation: `name` and `out` must be app-owned buffers
+
 ## Current hardening notes
 
 - Syscall 9 no longer accepts out-of-range window ids and no longer installs

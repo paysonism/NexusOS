@@ -88,6 +88,11 @@ metadata changes must go through `SYS_FS_DELETE`, `SYS_FS_RENAME`, or
 `SYS_FS_MKDIR` so the kernel updates the real current-directory cache and disk
 state.
 
+NexusHL apps that need mutable private data should declare it with a top-level
+`state {}` block. Each field becomes a zeroed label inside the copied app blob,
+so `&field` points at storage private to the active app slot. This is the
+preferred replacement for app code reaching into kernel globals.
+
 Example name conversion:
 
 ```asm
@@ -100,6 +105,17 @@ SYS_FS_MKDIR name83_buf
 Current FAT16 limits still apply: names are 8.3, entry handles are valid only
 for the current directory view, and delete intentionally rejects non-empty
 directories.
+
+Display settings are exposed through syscalls, not kernel externs:
+
+| Operation | Call |
+|---|---|
+| Read display flags | `SYS_DISPLAY_FLAGS` |
+| Set display flags | `SYS_DISPLAY_SET_FLAGS flags` |
+| Change display mode | `SYS_DISPLAY_SET_MODE width, height, 32` |
+| Reinitialize cursor after a mode switch | `SYS_CURSOR_INIT` |
+| Read desktop background theme | `SYS_DESKTOP_BG` |
+| Set desktop background theme | `SYS_DESKTOP_SET_BG theme_id` |
 
 ## Recommended workflow
 

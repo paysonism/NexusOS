@@ -15,21 +15,28 @@ global wm_create_window
 global wm_create_window_ex
 global wm_draw_window
 global wm_draw_desktop
+global wm_prewarm_wallpaper_caches
 global wm_handle_mouse_event
 global wm_get_window_at
 global wm_close_window
 global wm_window_count
 global wm_focused_window
 global wm_drag_window_id
+global desktop_bg_theme
+global wallpaper_cache_valid
+global wallpaper_cache_active_addr
 
 extern render_rect
 extern render_text
 extern render_line
+extern nx_icon_blit
 extern render_get_backbuffer
 extern render_mark_dirty
 extern render_save_backbuffer
 extern draw_hline
 extern draw_vline
+extern bb_addr
+extern scr_pitch_q
 extern memcpy
 extern cursor_mode
 extern call_app_l3
@@ -37,8 +44,14 @@ extern ser_print_hex64
 extern process_kill_window
 extern process_create
 extern l3_slot_base
+extern desktop_draw_icons
+extern nx_icon_close_16
+extern app_hl_wallpaper_draw
+extern scr_width
+extern scr_height
 
 FN_BEGIN wm_init, 0, 0, FN_RET_VOID
+    push rbx
     ; Zero out window pool
     mov rdi, WINDOW_POOL_ADDR
     mov rcx, MAX_WINDOWS * WINDOW_STRUCT_SIZE
@@ -47,6 +60,29 @@ FN_BEGIN wm_init, 0, 0, FN_RET_VOID
     mov qword [wm_window_count], 0
     mov qword [wm_drag_window_id], -1
     mov qword [wm_focused_window], -1
+
+    ; Slot 0 = native NexusHL wallpaper renderer. Set it up like a regular
+    ; window so wm_draw_desktop_background can call into app_hl_wallpaper_draw
+    ; through call_app_l3 / the normal l3 ABI.
+    mov rbx, WINDOW_POOL_ADDR
+    mov qword [rbx + WIN_OFF_ID], 0
+    mov qword [rbx + WIN_OFF_X], 0
+    mov qword [rbx + WIN_OFF_Y], 0
+    mov eax, [scr_width]
+    mov [rbx + WIN_OFF_W], rax
+    mov eax, [scr_height]
+    mov [rbx + WIN_OFF_H], rax
+    ; Note: NO flags. Slot 0 is invisible to window iteration (focus, hit
+    ; testing, draw loop) -- it only exists to give call_app_l3 a stable
+    ; per-slot L3 arena for the wallpaper renderer.
+    mov qword [rbx + WIN_OFF_FLAGS], 0
+    lea rax, [rel app_hl_wallpaper_draw]
+    mov [rbx + WIN_OFF_DRAWFN], rax
+    xor edi, edi
+    call l3_slot_base
+    mov [rbx + WIN_OFF_APPDATA], rax
+
+    pop rbx
     FN_END wm_init
     ret
 
@@ -96,7 +132,9 @@ wm_do_create:
     cmp eax, SCREEN_HEIGHT
     ja .fail
 
-    cmp qword [wm_window_count], MAX_WINDOWS
+    ; Slot 0 is reserved for the native desktop wallpaper renderer's
+    ; NexusHL state. Normal windows use slots 1..MAX_WINDOWS-1.
+    cmp qword [wm_window_count], MAX_WINDOWS - 1
     jge .fail
 
     ; Unfocus all existing windows
@@ -115,8 +153,8 @@ wm_do_create:
 .unfocus_done:
 
     ; Find free slot
-    mov rbx, WINDOW_POOL_ADDR
-    xor ecx, ecx
+    mov rbx, WINDOW_POOL_ADDR + WINDOW_STRUCT_SIZE
+    mov ecx, 1
 .find_loop:
     cmp ecx, MAX_WINDOWS
     je .fail
@@ -128,10 +166,12 @@ wm_do_create:
 
 .found_slot:
     ; Zero entire slot first
+    push rcx
     mov rdi, rbx
     xor eax, eax
     mov ecx, WINDOW_STRUCT_SIZE
     rep stosb
+    pop rcx
 
     ; ecx = slot index, rbx = ptr
     mov qword [rbx + WIN_OFF_ID], rcx
@@ -273,12 +313,10 @@ FN_BEGIN wm_draw_desktop, 0, 0, FN_RET_VOID
     push r12
 
     ; 1. Desktop background
-    mov rdi, 0
-    mov rsi, 0
-    mov rdx, SCREEN_WIDTH
-    mov rcx, SCREEN_HEIGHT
-    mov r8, COLOR_DESKTOP_BG
-    call render_rect
+    call wm_draw_desktop_background
+
+    ; 1b. Desktop icons (between background and windows so apps cover them)
+    call desktop_draw_icons
 
     ; 2. Draw non-focused windows first, then focused
     ; Pass 1: non-focused
@@ -324,6 +362,235 @@ FN_BEGIN wm_draw_desktop, 0, 0, FN_RET_VOID
 
 .draw_done:
     FN_END wm_draw_desktop
+    pop r12
+    pop rbx
+    ret
+
+; Desktop background renderer. Drives the NexusHL wallpaper app
+; (app_hl_wallpaper_draw -> svg_render on the inline SVG strings) through the
+; standard l3 ABI. Each theme has its own raster cache so changing backgrounds
+; is a cache blit, not a full SVG render in the interactive frame loop.
+FN_BEGIN wm_draw_desktop_background, 0, 0, FN_RET_VOID
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+
+    movzx r12d, byte [desktop_bg_theme]
+    cmp r12d, 2
+    ja .theme_zero
+.theme_ready:
+    call wm_wallpaper_cache_addr
+    mov r15, rax
+    mov [wallpaper_cache_active_addr], r15
+
+    mov ecx, [scr_width]
+    cmp [wallpaper_cache_w], ecx
+    jne .invalidate_all
+    mov ecx, [scr_height]
+    cmp [wallpaper_cache_h], ecx
+    jne .invalidate_all
+    cmp byte [wallpaper_cache_valid_by_theme + r12], 1
+    jne .render
+    cmp byte [wallpaper_cache_valid], 1
+    jne .render
+    mov rdi, r15
+    call wm_bg_restore_cache
+    jmp .done
+
+.theme_zero:
+    xor r12d, r12d
+    mov byte [desktop_bg_theme], 0
+    jmp .theme_ready
+
+.invalidate_all:
+    mov byte [wallpaper_cache_valid], 0
+    mov byte [wallpaper_cache_valid_by_theme + 0], 0
+    mov byte [wallpaper_cache_valid_by_theme + 1], 0
+    mov byte [wallpaper_cache_valid_by_theme + 2], 0
+
+.render:
+    ; Refresh slot 0's shadow window to the current resolution before invoking
+    ; the renderer -- wallpaper.nxh reads display_current_width/height through
+    ; syscalls so this is only defense in depth.
+    mov rbx, WINDOW_POOL_ADDR
+    mov eax, [scr_width]
+    mov [rbx + WIN_OFF_W], rax
+    mov eax, [scr_height]
+    mov [rbx + WIN_OFF_H], rax
+
+    lea rdi, [rel app_hl_wallpaper_draw]
+    mov rsi, rbx                       ; arg0: window ptr (slot 0)
+    xor edx, edx                       ; arg1
+    xor ecx, ecx                       ; arg2
+    call call_app_l3
+
+    mov rdi, r15
+    call wm_bg_save_cache
+
+    mov eax, [scr_width]
+    mov [wallpaper_cache_w], eax
+    mov eax, [scr_height]
+    mov [wallpaper_cache_h], eax
+    mov byte [wallpaper_cache_valid_by_theme + r12], 1
+    mov byte [wallpaper_cache_valid], 1
+
+.done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    FN_END wm_draw_desktop_background
+    ret
+
+wm_wallpaper_cache_addr:
+    cmp r12d, 1
+    je .cache1
+    cmp r12d, 2
+    je .cache2
+    mov rax, WALLPAPER_CACHE0_ADDR
+    ret
+.cache1:
+    mov rax, WALLPAPER_CACHE1_ADDR
+    ret
+.cache2:
+    mov rax, WALLPAPER_CACHE2_ADDR
+    ret
+
+; Warm every wallpaper cache before the GUI becomes interactive. This keeps the
+; expensive SVG work out of the user-visible background-change path.
+FN_BEGIN wm_prewarm_wallpaper_caches, 0, 0, FN_RET_VOID
+    push r12
+    push r13
+    movzx r13d, byte [desktop_bg_theme]
+    mov byte [wallpaper_cache_valid], 0
+    mov byte [wallpaper_cache_valid_by_theme + 0], 0
+    mov byte [wallpaper_cache_valid_by_theme + 1], 0
+    mov byte [wallpaper_cache_valid_by_theme + 2], 0
+    xor r12d, r12d
+.prewarm_loop:
+    cmp r12d, 3
+    jae .prewarm_done
+    mov [desktop_bg_theme], r12b
+    call wm_draw_desktop_background
+    inc r12d
+    jmp .prewarm_loop
+.prewarm_done:
+    mov [desktop_bg_theme], r13b
+    call wm_draw_desktop_background
+    pop r13
+    pop r12
+    FN_END wm_prewarm_wallpaper_caches
+    ret
+
+wm_bg_save_cache:
+    push rdi
+    push rsi
+    push rcx
+    push rdx
+    push r8
+    push r9
+
+    mov rsi, [bb_addr]
+    mov r8d, [scr_height]
+    mov r9d, [scr_width]
+.save_row:
+    test r8d, r8d
+    jz .save_done
+    mov ecx, r9d
+    rep movsd
+    mov rax, [scr_pitch_q]
+    mov rdx, r9
+    shl rdx, 2
+    add rsi, rax
+    sub rsi, rdx
+    dec r8d
+    jmp .save_row
+.save_done:
+    pop r9
+    pop r8
+    pop rdx
+    pop rcx
+    pop rsi
+    pop rdi
+    ret
+
+wm_bg_restore_cache:
+    push rdi
+    push rsi
+    push rcx
+    push rdx
+    push r8
+    push r9
+
+    mov rsi, rdi
+    mov rdi, [bb_addr]
+    mov r8d, [scr_height]
+    mov r9d, [scr_width]
+.restore_row:
+    test r8d, r8d
+    jz .restore_done
+    mov ecx, r9d
+    rep movsd
+    mov rax, [scr_pitch_q]
+    mov rdx, r9
+    shl rdx, 2
+    add rdi, rax
+    sub rdi, rdx
+    dec r8d
+    jmp .restore_row
+.restore_done:
+    pop r9
+    pop r8
+    pop rdx
+    pop rcx
+    pop rsi
+    pop rdi
+    ret
+
+; Draw a soft diamond from one-pixel scanlines.
+; EDI=cx, ESI=cy, EDX=radius, R8D=color.
+wm_bg_diamond:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov r12d, edi                  ; cx
+    mov r13d, esi                  ; cy
+    mov r14d, edx                  ; radius
+    mov r15d, r8d                  ; color
+    mov ebx, edx
+    neg ebx                        ; dy = -radius
+.diamond_loop:
+    cmp ebx, r14d
+    jg .diamond_done
+    mov eax, ebx
+    test eax, eax
+    jge .abs_ok
+    neg eax
+.abs_ok:
+    mov edx, r14d
+    sub edx, eax                   ; half width
+    jle .diamond_next
+    mov edi, r12d
+    sub edi, edx                   ; x
+    mov esi, r13d
+    add esi, ebx                   ; y
+    mov ecx, 1
+    mov r8d, r15d
+    shl edx, 1                     ; width
+    call render_rect
+.diamond_next:
+    inc ebx
+    jmp .diamond_loop
+.diamond_done:
+    pop r15
+    pop r14
+    pop r13
     pop r12
     pop rbx
     ret
@@ -455,16 +722,16 @@ FN_BEGIN wm_draw_window, 1, 0, FN_RET_VOID
     mov r8d, COLOR_CLOSE_BTN
     call render_rect
 
-    ; Close X label
+    ; Close icon
     mov rdi, r12
     add rdi, r14
-    sub rdi, CLOSE_BTN_SIZE + 1
+    sub rdi, CLOSE_BTN_SIZE + 3
     mov rsi, r13
     add rsi, 5
-    mov rdx, szCloseX
-    mov ecx, COLOR_TEXT_BLACK
-    mov r8d, COLOR_CLOSE_BTN
-    call render_text
+    mov rdx, rsi
+    mov rsi, rdi
+    mov rdi, nx_icon_close_16
+    call nx_icon_blit
 
     ; --- Minimize button [-] ---
     mov rdi, r12
@@ -629,7 +896,8 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     ; Set move cursor
     mov byte [cursor_mode], 1
     
-    ; Save clean desktop state for smooth dragging
+    ; Save clean composed state for smooth dragging. This is independent from
+    ; WALLPAPER_CACHE_ADDR, which stores only the selected/blitted wallpaper.
     call render_save_backbuffer
     
     jmp .set_focus
@@ -643,6 +911,8 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     jnz .client_click_already_down
     mov r10, [wm_focused_window]
     mov [wm_click_focus_before], r10
+    push rax
+    push r8
     SER 'c'
     push rdi
     mov rdi, rax
@@ -654,6 +924,8 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     mov rdi, r13
     call ser_print_hex64
     pop rdi
+    pop r8
+    pop rax
     mov r11, r8
     SER 'm'
     mov rdx, r12
@@ -707,6 +979,19 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     jmp .mouse_ret
 
 .desktop_click:
+    ; Clear WF_FOCUSED on every window or wm_draw_desktop's two-pass
+    ; renderer will skip the previously focused window (non-focused pass
+    ; rejects WF_FOCUSED, focused pass rejects -1) and the app vanishes.
+    mov rcx, WINDOW_POOL_ADDR
+    xor edx, edx
+.dc_clear_loop:
+    cmp edx, MAX_WINDOWS
+    je .dc_clear_done
+    and qword [rcx + WIN_OFF_FLAGS], ~WF_FOCUSED
+    add rcx, WINDOW_STRUCT_SIZE
+    inc edx
+    jmp .dc_clear_loop
+.dc_clear_done:
     mov qword [wm_focused_window], -1
     jmp .mouse_done
 
@@ -976,5 +1261,13 @@ wm_drag_preview_y dq 0          ; outline Y position
 wm_drag_preview_w dq 0          ; outline width
 wm_drag_preview_h dq 0          ; outline height
 wm_last_buttons   dq 0
+desktop_bg_theme  db 0
+wallpaper_cache_valid db 0
+wallpaper_cache_valid_by_theme db 0, 0, 0
+align 8
+wallpaper_cache_active_addr dq WALLPAPER_CACHE0_ADDR
+align 4
+wallpaper_cache_w dd 0
+wallpaper_cache_h dd 0
 
 section .text

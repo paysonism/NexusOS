@@ -1,0 +1,366 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>NexusOS Format Verifier</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root {
+  --bg: #F5F6FA;
+  --surface: #FFFFFF;
+  --surface-2: #ECEFF4;
+  --border: #D8DDE3;
+  --text: #0F141E;
+  --text-2: #4B5563;
+  --text-3: #8A939F;
+  --accent: #2A6FFF;
+  --accent-light: #4C8BFF;
+  --error: #E5474D;
+  --success: #2EB56E;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 32px 40px 80px;
+  background: var(--bg);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.55;
+}
+.hero { display: flex; align-items: center; gap: 20px; margin-bottom: 32px; }
+.hero img { width: 64px; height: 64px; border-radius: 16px; }
+.hero h1 { font-size: 28px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+.hero p { margin: 0; color: var(--text-2); font-size: 14px; }
+
+h2 {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-3); margin: 32px 0 12px;
+}
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px;
+  box-shadow: 0 1px 2px rgba(15,20,30,0.04);
+}
+.row { display: flex; gap: 24px; }
+.row > .panel { flex: 1; }
+.kv {
+  display: grid; grid-template-columns: 150px 1fr; gap: 6px 16px;
+  font-family: 'JetBrains Mono', monospace; font-size: 13px;
+}
+.kv b { font-weight: 600; color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; align-self: center; font-family: 'IBM Plex Sans', sans-serif; }
+.ok { color: var(--success); font-weight: 600; }
+.err { color: var(--error); font-weight: 600; }
+
+.palette-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+.sw {
+  height: 64px; border-radius: 8px;
+  display: flex; align-items: flex-end; padding: 6px 8px;
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  border: 1px solid rgba(15,20,30,0.05);
+}
+.sw .nm { font-weight: 600; line-height: 1.1; }
+.sw .ix { font-size: 9px; opacity: 0.8; }
+
+.gradients { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 12px; }
+.gr { height: 60px; border-radius: 8px; border: 1px solid var(--border); display: flex; align-items: flex-end; padding: 6px 10px; font-size: 11px; font-weight: 500; color: white; font-family: 'JetBrains Mono', monospace; text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+
+.icons {
+  display: grid; grid-template-columns: repeat(10, 1fr); gap: 16px;
+}
+.icon { text-align: center; }
+.icon canvas { display: block; margin: 0 auto 6px; image-rendering: auto; }
+.icon .n { font-size: 11px; color: var(--text-2); font-weight: 500; }
+.icon .sz { font-size: 10px; color: var(--text-3); font-family: 'JetBrains Mono', monospace; }
+
+#fontStrip { background: var(--text); border-radius: 8px; padding: 16px; }
+#fontStrip canvas { image-rendering: pixelated; display: block; }
+#fontStrip + .kv { margin-top: 10px; }
+
+.demo { background: var(--surface-2); border-radius: 12px; padding: 24px; display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+.demo .card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px; box-shadow: 0 4px 12px rgba(15,20,30,0.06);
+  display: flex; align-items: center; gap: 14px; min-width: 260px;
+}
+.demo .card img { width: 48px; height: 48px; }
+.demo .card h3 { margin: 0 0 2px; font-size: 15px; font-weight: 600; }
+.demo .card p { margin: 0; color: var(--text-2); font-size: 13px; }
+
+.font-section { margin-top: 24px; }
+.font-section h3 { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); margin: 0 0 8px; }
+</style>
+</head><body>
+
+<div class="hero">
+  <img src="../assets/logo-mark-128.png" alt="NexusOS">
+  <div>
+    <h1>NexusOS Format Verifier</h1>
+    <p>Round-trip decoder. Loads every binary file from disk, parses per the FORMAT.md spec, and renders the result.</p>
+  </div>
+</div>
+
+<h2>1. Palettes (.npl)</h2>
+<div class="row">
+  <div class="panel" id="palLight"></div>
+  <div class="panel" id="palDark"></div>
+</div>
+
+<h2>Gradient ramps (rendered live)</h2>
+<div class="panel">
+  <div class="gradients" id="gradients"></div>
+</div>
+
+<h2>2. Icons (.nic, 32-bit BGRA)</h2>
+<div class="panel">
+  <div class="font-section"><h3>48 x 48 — dock / hero</h3></div>
+  <div class="icons" id="icons48"></div>
+  <div class="font-section" style="margin-top:24px"><h3>32 x 32 — taskbar / titlebar</h3></div>
+  <div class="icons" id="icons32"></div>
+  <div class="font-section" style="margin-top:24px"><h3>16 x 16 — menus / status</h3></div>
+  <div class="icons" id="icons16"></div>
+</div>
+
+<h2>3. Fonts (.nft)</h2>
+<div class="panel">
+  <div class="font-section">
+    <h3>font_24x48.nft — headings</h3>
+    <div id="fontStrip"><canvas id="f2448"></canvas></div>
+    <div id="meta2448" class="kv" style="margin-top:10px"></div>
+  </div>
+  <div class="font-section">
+    <h3>font_16x32.nft — primary UI</h3>
+    <div id="fontStrip2"><canvas id="f1632"></canvas></div>
+    <div id="meta1632" class="kv" style="margin-top:10px"></div>
+  </div>
+  <div class="font-section">
+    <h3>font_8x16.nft — small labels</h3>
+    <div id="fontStrip3"><canvas id="f0816"></canvas></div>
+    <div id="meta0816" class="kv" style="margin-top:10px"></div>
+  </div>
+</div>
+
+<h2>4. Mixed render — cards using palette + icons + gradients</h2>
+<div class="demo" id="demo"></div>
+
+<script>
+async function loadBuf(path) {
+  const r = await fetch(path + '?v=2');
+  if (!r.ok) throw new Error(path + ': ' + r.status);
+  return new Uint8Array(await r.arrayBuffer());
+}
+const dv = b => new DataView(b.buffer, b.byteOffset, b.byteLength);
+const magic = b => String.fromCharCode(b[0],b[1],b[2],b[3]);
+
+function parseNpl(buf) {
+  if (magic(buf) !== 'NPL1') throw new Error('bad NPL magic');
+  const v = dv(buf);
+  const count = v.getUint16(4, true);
+  const ch = buf[6];
+  const colors = [];
+  for (let i = 0; i < count; i++) {
+    const o = 8 + i*ch;
+    colors.push([buf[o], buf[o+1], buf[o+2], ch===4 ? buf[o+3] : 255]);
+  }
+  return { magic: 'NPL1', count, channels: ch, colors };
+}
+function parseNic(buf) {
+  if (magic(buf) !== 'NIC1') throw new Error('bad NIC magic');
+  const v = dv(buf);
+  const w = v.getUint16(4, true), h = v.getUint16(6, true);
+  const bpp = buf[8], flags = buf[9];
+  const ds = v.getUint32(12, true);
+  return { w, h, bpp, transparent: !!(flags & 1), data: buf.subarray(16, 16+ds) };
+}
+function parseNft(buf) {
+  if (magic(buf) !== 'NFT1') throw new Error('bad NFT magic');
+  const v = dv(buf);
+  return {
+    w: buf[4], h: buf[5],
+    firstCp: v.getUint16(6, true),
+    count: v.getUint16(8, true),
+    bpg: v.getUint16(10, true),
+    data: buf.subarray(16),
+  };
+}
+
+// renderers ---------------------------------------------------
+function drawIcon32(canvas, nic) {
+  canvas.width = nic.w; canvas.height = nic.h;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(nic.w, nic.h);
+  // .nic stores BGRA; ImageData wants RGBA
+  for (let i = 0; i < nic.w * nic.h; i++) {
+    img.data[i*4+0] = nic.data[i*4+2]; // R from byte 2
+    img.data[i*4+1] = nic.data[i*4+1]; // G
+    img.data[i*4+2] = nic.data[i*4+0]; // B from byte 0
+    img.data[i*4+3] = nic.data[i*4+3]; // A
+  }
+  ctx.putImageData(img, 0, 0);
+}
+function drawIcon4(canvas, nic, palette) {
+  canvas.width = nic.w; canvas.height = nic.h;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(nic.w, nic.h);
+  const stride = (nic.w + 1) >> 1;
+  for (let y = 0; y < nic.h; y++) {
+    for (let x = 0; x < nic.w; x++) {
+      const b = nic.data[y*stride + (x>>1)];
+      const idx = (x & 1) === 0 ? (b >> 4) : (b & 0x0F);
+      const i = (y * nic.w + x) * 4;
+      if (nic.transparent && idx === 0) { img.data[i+3] = 0; continue; }
+      const [r,g,bl] = palette.colors[idx];
+      img.data[i+0]=r; img.data[i+1]=g; img.data[i+2]=bl; img.data[i+3]=255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+function drawChar(ctx, font, ch, x, y, fg) {
+  const cp = ch.charCodeAt(0);
+  let idx = cp - font.firstCp;
+  if (idx < 0 || idx >= font.count) idx = 0;
+  const off = idx * font.bpg;
+  const bpr = Math.ceil(font.w / 8);
+  ctx.fillStyle = fg;
+  for (let r = 0; r < font.h; r++) {
+    for (let bx = 0; bx < bpr; bx++) {
+      const byte = font.data[off + r*bpr + bx];
+      for (let bit = 0; bit < 8; bit++) {
+        const px = bx*8 + bit;
+        if (px >= font.w) break;
+        if (byte & (1 << (7-bit))) ctx.fillRect(x+px, y+r, 1, 1);
+      }
+    }
+  }
+}
+
+// renders -----------------------------------------------------
+function renderPalettePanel(panel, p, label) {
+  const NAMES = ['bg-base','surface','surface-2','border','border-strong','text-primary','text-secondary','text-tertiary','accent-light','accent','accent-dark','cyan','cyan-dark','error','warning','success'];
+  let html = `<h3 style="margin:0 0 10px;font-size:14px;font-weight:600">${label}</h3>
+    <div class="kv">
+      <b>Magic</b><span><span class="ok">NPL1</span></span>
+      <b>Count</b><span>${p.count}</span>
+      <b>Channels</b><span>${p.channels} (${p.channels===3?'RGB':'RGBA'})</span>
+    </div>
+    <div class="palette-grid">`;
+  for (let i = 0; i < p.colors.length; i++) {
+    const c = p.colors[i];
+    const hex = '#' + c.slice(0,3).map(x => x.toString(16).padStart(2,'0').toUpperCase()).join('');
+    const isDark = (c[0]+c[1]+c[2]) < 380;
+    html += `<div class="sw" style="background:${hex};color:${isDark?'#fff':'#0F141E'}">
+      <div><div class="ix">${String(i).padStart(2,'0')}</div><div class="nm">${NAMES[i]||'?'}</div></div>
+    </div>`;
+  }
+  html += `</div>`;
+  panel.innerHTML = html;
+}
+
+(async () => {
+  function fail(where, e) {
+    console.error(where, e);
+    const d = document.createElement('div');
+    d.style.cssText = 'background:#E5474D;color:white;padding:8px 12px;border-radius:8px;margin:8px 0;font-family:monospace;font-size:12px';
+    d.textContent = where + ': ' + (e.message || e);
+    document.body.insertBefore(d, document.body.firstChild.nextSibling);
+  }
+  // palettes ------------------------------------------------------
+  let pLight, pDark;
+  try {
+    pLight = parseNpl(await loadBuf('palette_light.npl'));
+    pDark  = parseNpl(await loadBuf('palette_dark.npl'));
+    renderPalettePanel(document.getElementById('palLight'), pLight, 'palette_light.npl');
+    renderPalettePanel(document.getElementById('palDark'),  pDark,  'palette_dark.npl');
+  } catch (e) { fail('palettes', e); return; }
+
+  // gradients --------------------------------------------------
+  const grads = [
+    { name: 'accent', from: 8, to: 10 },
+    { name: 'cyan', from: 11, to: 12 },
+    { name: 'titlebar', from: 8, to: 9 },
+    { name: 'surface', from: 1, to: 2 },
+  ];
+  const gc = document.getElementById('gradients');
+  for (const g of grads) {
+    const f = pLight.colors[g.from], t = pLight.colors[g.to];
+    const fh = '#' + f.slice(0,3).map(x=>x.toString(16).padStart(2,'0')).join('');
+    const th = '#' + t.slice(0,3).map(x=>x.toString(16).padStart(2,'0')).join('');
+    gc.innerHTML += `<div class="gr" style="background:linear-gradient(${fh}, ${th})">${g.name}</div>`;
+  }
+
+  // icons ---------------------------------------------------------
+  const names = ['folder','file','terminal','notepad','paint','settings','about','explorer','close','start'];
+  for (const sz of [48, 32, 16]) {
+    const grid = document.getElementById('icons' + sz);
+    for (const n of names) {
+      const path = sz === 16 ? `icons/${n}.nic` : `icons/${n}-${sz}.nic`;
+      const cell = document.createElement('div');
+      cell.className = 'icon';
+      try {
+        const buf = await loadBuf(path);
+        const nic = parseNic(buf);
+        const c = document.createElement('canvas');
+        c.style.width = nic.w + 'px';
+        c.style.height = nic.h + 'px';
+        cell.appendChild(c);
+        if (nic.bpp === 32) drawIcon32(c, nic);
+        else drawIcon4(c, nic, pLight);
+        const nm = document.createElement('div'); nm.className = 'n'; nm.textContent = n;
+        const ss = document.createElement('div'); ss.className = 'sz'; ss.textContent = `${buf.length} B · ${nic.bpp}bpp`;
+        cell.appendChild(nm); cell.appendChild(ss);
+      } catch (e) {
+        cell.innerHTML = `<span class="err">${n}<br>${e.message}</span>`;
+      }
+      grid.appendChild(cell);
+    }
+  }
+
+  // fonts ---------------------------------------------------------
+  async function renderFont(file, canvasId, metaId, primary) {
+    try {
+      const buf = await loadBuf(file);
+      const f = parseNft(buf);
+      if (primary) window.__font = f;
+      document.getElementById(metaId).innerHTML = `
+        <b>Glyph WxH</b><span>${f.w}x${f.h}</span>
+        <b>Count</b><span>${f.count} (cp ${f.firstCp}..${f.firstCp+f.count-1})</span>
+        <b>Bytes/glyph</b><span>${f.bpg}</span>
+        <b>File size</b><span>${buf.length} B</span>`;
+      const fc = document.getElementById(canvasId);
+      fc.width = 32 * f.w; fc.height = 3 * f.h;
+      const ctx = fc.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = '#10121A'; ctx.fillRect(0, 0, fc.width, fc.height);
+      for (let i = 0; i < f.count; i++) {
+        const x = (i % 32) * f.w;
+        const y = Math.floor(i / 32) * f.h;
+        drawChar(ctx, f, String.fromCharCode(f.firstCp + i), x, y, '#4C8BFF');
+      }
+      const maxW = 1024;
+      const scale = Math.min(2, Math.floor(maxW / fc.width));
+      fc.style.width = (fc.width * scale) + 'px';
+      fc.style.height = (fc.height * scale) + 'px';
+    } catch (e) {
+      document.getElementById(metaId).innerHTML = `<span class="err">${e.message}</span>`;
+    }
+  }
+  await renderFont('font_24x48.nft', 'f2448', 'meta2448', false);
+  await renderFont('font_16x32.nft', 'f1632', 'meta1632', true);
+  await renderFont('font_8x16.nft',  'f0816', 'meta0816', false);
+
+  // demo cards ----------------------------------------------------
+  const demo = document.getElementById('demo');
+  const cards = [
+    { icon: 'about-48', title: 'NexusOS v3.0', sub: 'x86-64 assembly · UEFI + BIOS' },
+    { icon: 'terminal-48', title: 'Terminal', sub: 'A:\\> ready' },
+    { icon: 'folder-48', title: 'Documents', sub: '12 files · 3.2 MB' },
+    { icon: 'settings-48', title: 'Display', sub: '1024×768 · 32-bit · VSync on' },
+  ];
+  for (const card of cards) {
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.innerHTML = `<img src="../assets/icons/${card.icon}.png" width="48" height="48"><div><h3>${card.title}</h3><p>${card.sub}</p></div>`;
+    demo.appendChild(el);
+  }
+})();
+</script>
+</body></html>

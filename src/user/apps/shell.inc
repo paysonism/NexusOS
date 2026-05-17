@@ -143,6 +143,10 @@ app_properties_draw:
     ret
 
 global ctx_menu_visible
+global ctx_menu_x
+global ctx_menu_y
+global szCtxOpen
+global explorer_sel
 
 ; ============================================================================
 ; BMP VIEWER

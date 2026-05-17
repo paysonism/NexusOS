@@ -3,3 +3,5 @@
 %include "build/nxh/explorer.asm"
 %include "build/nxh/hello.asm"
 %include "build/nxh/notepad.asm"
+%include "build/nxh/settings.asm"
+%include "build/nxh/wallpaper.asm"

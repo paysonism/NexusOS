@@ -10,6 +10,7 @@ bits 64
 extern tick_count
 extern frame_count
 extern start_tick
+extern serial_putc
 
 section .text
 
@@ -48,6 +49,14 @@ FN_BEGIN display_init, 0, 0, FN_RET_SCALAR
     mov [scr_pitch_q], rax
 
 .init_ok:
+    ; Latch the native framebuffer dimensions. Apps query these via
+    ; SYS_DISPLAY_NATIVE to offer a "Use native resolution" choice that
+    ; survives mode changes.
+    mov eax, [scr_width]
+    mov [fb_native_width], eax
+    mov eax, [scr_height]
+    mov [fb_native_height], eax
+
     ; Set back buffer address
     mov rax, [abs VBE_INFO_ADDR + VBE_BACKBUF_OFF]
     test rax, rax
@@ -56,9 +65,51 @@ FN_BEGIN display_init, 0, 0, FN_RET_SCALAR
 .have_backbuf:
     mov [bb_addr], rax
 
+    call display_recompute_layout
+
     ; Clear back buffer
     xor edi, edi             ; Black (color arg in edi)
     call display_clear
+
+    ret
+
+; --- Recompute window-manager layout for the current scr_width/scr_height
+; The taskbar lives flush to the bottom edge; the clock is right-anchored
+; in the taskbar; the start menu pops up from the start button. taskbar.asm
+; previously baked these positions in as compile-time constants from
+; SCREEN_WIDTH/SCREEN_HEIGHT. We now recompute them whenever the screen
+; size changes so the taskbar follows the active mode.
+;
+; Layout constants (must match taskbar.asm — single source of truth would
+; be nicer, but they're stable and only used here for the recompute):
+;   TASKBAR_HEIGHT  = 36
+;   CLOCK_WIDTH     = 64
+;   START_MENU_H    = 200
+;   BAT_IND_W       = 88
+; auto-wrapped (FN_BEGIN emits global): global display_recompute_layout
+FN_BEGIN display_recompute_layout, 0, 0, FN_RET_SCALAR
+    mov eax, [scr_height]
+    sub eax, TASKBAR_HEIGHT       ; taskbar Y = screen bottom - taskbar height
+    mov [scr_taskbar_y], eax
+    mov ecx, eax
+    add ecx, 4                    ; +4 = start button / taskbar button Y inset
+    mov [scr_start_btn_y], ecx
+    mov [scr_tb_btn_y], ecx
+    mov [scr_bat_ind_y], ecx
+    mov ecx, eax
+    add ecx, 10                   ; +10 = clock Y inset
+    mov [scr_clock_y], ecx
+    mov ecx, eax
+    sub ecx, 200                  ; -START_MENU_H = start menu top
+    mov [scr_start_menu_y], ecx
+
+    mov eax, [scr_width]
+    sub eax, CLOCK_WIDTH
+    sub eax, 8                    ; right inset for clock
+    mov [scr_clock_x], eax
+    sub eax, 88                   ; -BAT_IND_W
+    sub eax, 6                    ; gap between battery and clock
+    mov [scr_bat_ind_x], eax
 
     ret
 
@@ -87,6 +138,631 @@ FN_BEGIN pixel_set, 0, 0, FN_RET_SCALAR
     mov [rbx + rax], edx
 
 .done:
+    pop rbx
+    pop rax
+    ret
+
+; --- Blend pixel with source-over alpha ---
+; EDI = x, ESI = y, EDX = color (0xAARRGGBB)
+; dst = src*a + dst*(255-a), per channel, 8-bit
+FN_BEGIN blend_pixel, 0, 0, FN_RET_SCALAR
+    push rax
+    push rbx
+    push rcx
+    push r8
+    push r9
+    push r10
+    cmp edi, 0
+    jl .bp_done
+    cmp edi, [scr_width]
+    jge .bp_done
+    cmp esi, 0
+    jl .bp_done
+    cmp esi, [scr_height]
+    jge .bp_done
+
+    movsxd rax, esi
+    imul rax, [scr_pitch_q]
+    movsxd rbx, edi
+    lea rax, [rax + rbx * 4]
+    mov r10, [bb_addr]
+    add r10, rax              ; r10 = &dst pixel
+
+    mov ecx, edx              ; src ARGB
+    shr ecx, 24
+    and ecx, 0xFF             ; ecx = a
+    test ecx, ecx
+    jz .bp_done               ; fully transparent
+    cmp ecx, 0xFF
+    jne .bp_blend
+    mov [r10], edx            ; opaque shortcut
+    jmp .bp_done
+
+.bp_blend:
+    mov r9d, 255
+    sub r9d, ecx              ; r9 = 255 - a
+    mov eax, [r10]            ; dst pixel
+
+    ; R channel
+    mov r8d, edx
+    shr r8d, 16
+    and r8d, 0xFF             ; src R
+    imul r8d, ecx
+    mov ebx, eax
+    shr ebx, 16
+    and ebx, 0xFF             ; dst R
+    imul ebx, r9d
+    add r8d, ebx
+    add r8d, 128
+    shr r8d, 8                ; ~ /255
+    and r8d, 0xFF
+    shl r8d, 16
+    mov ebx, r8d              ; ebx accumulates result
+
+    ; G channel
+    mov r8d, edx
+    shr r8d, 8
+    and r8d, 0xFF
+    imul r8d, ecx
+    mov eax, [r10]
+    shr eax, 8
+    and eax, 0xFF
+    imul eax, r9d
+    add r8d, eax
+    add r8d, 128
+    shr r8d, 8
+    and r8d, 0xFF
+    shl r8d, 8
+    or ebx, r8d
+
+    ; B channel
+    mov r8d, edx
+    and r8d, 0xFF
+    imul r8d, ecx
+    mov eax, [r10]
+    and eax, 0xFF
+    imul eax, r9d
+    add r8d, eax
+    add r8d, 128
+    shr r8d, 8
+    and r8d, 0xFF
+    or ebx, r8d
+
+    mov [r10], ebx
+.bp_done:
+    pop r10
+    pop r9
+    pop r8
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; --- Blend horizontal span (source-over) ---
+; EDI = x, ESI = y, EDX = len, ECX = color (0xAARRGGBB)
+FN_BEGIN blend_span, 0, 0, FN_RET_SCALAR
+    push rax
+    push rbx
+    push r12
+    push r13
+    push r14
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+
+    movsxd r12, edi
+    movsxd r13, esi
+    movsxd r14, edx           ; len
+    test r14, r14
+    jle .bs_done
+
+    ; Clip y
+    cmp r13, 0
+    jl .bs_done
+    mov eax, [scr_height]
+    cmp r13, rax
+    jge .bs_done
+
+    ; Clip left
+    cmp r12, 0
+    jge .bs_cl_right
+    add r14, r12              ; len += x (x is negative)
+    xor r12d, r12d
+.bs_cl_right:
+    cmp r14, 0
+    jle .bs_done
+    mov eax, [scr_width]
+    cmp r12, rax
+    jge .bs_done
+    mov rbx, rax
+    sub rbx, r12              ; max width from x
+    cmp r14, rbx
+    jle .bs_loop
+    mov r14, rbx
+.bs_loop:
+    test r14, r14
+    jle .bs_done
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, ecx
+    push rcx
+    call blend_pixel
+    pop rcx
+    inc r12
+    dec r14
+    jmp .bs_loop
+.bs_done:
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rax
+    ret
+
+; --- Blend horizontal span from a per-pixel ARGB buffer (source-over) ---
+; EDI = x, ESI = y, EDX = len, RCX = src buffer (len * 4 bytes, ARGB each)
+; One syscall replaces `len` calls to blend_pixel — used by the SVG raster
+; scanline filler to avoid the kernel round-trip per pixel.
+FN_BEGIN blend_span_argb, 0, 0, FN_RET_SCALAR
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    movsxd r12, edi               ; r12 = x
+    movsxd r13, esi               ; r13 = y
+    movsxd r14, edx               ; r14 = len
+    mov    r15, rcx               ; r15 = src buffer pointer
+
+    test r14, r14
+    jle .bsa_done
+
+    ; Clip y
+    cmp r13, 0
+    jl .bsa_done
+    mov eax, [scr_height]
+    cmp r13, rax
+    jge .bsa_done
+
+    ; Clip left: if x < 0, skip (-x) pixels at the start of the source buffer.
+    cmp r12, 0
+    jge .bsa_cl_right
+    mov rax, r12
+    neg rax                       ; rax = -x = pixels to skip
+    add r14, r12                  ; len += x (x is negative)
+    jle .bsa_done
+    lea r15, [r15 + rax * 4]      ; advance src past skipped pixels
+    xor r12d, r12d
+.bsa_cl_right:
+    mov eax, [scr_width]
+    cmp r12, rax
+    jge .bsa_done
+    mov rbx, rax
+    sub rbx, r12
+    cmp r14, rbx
+    jle .bsa_setup
+    mov r14, rbx                  ; clip len to remaining row width
+.bsa_setup:
+    ; dst row addr = bb_addr + y * pitch + x * 4
+    mov rax, r13
+    imul rax, [scr_pitch_q]
+    mov rdi, [bb_addr]
+    add rdi, rax
+    lea rdi, [rdi + r12 * 4]         ; rdi = dst pixel pointer
+    mov rsi, r15                     ; rsi = src pixel pointer
+    mov ecx, r14d                    ; ecx = pixel count
+
+.bsa_loop:
+    mov eax, [rsi]                ; eax = src ARGB
+    add rsi, 4
+    mov edx, eax
+    shr edx, 24
+    and edx, 0xFF                 ; edx = sa
+    jz .bsa_next                  ; fully transparent
+    cmp edx, 0xFF
+    jne .bsa_blend
+    mov [rdi], eax                ; opaque
+    jmp .bsa_next
+
+.bsa_blend:
+    ; r9d = 255 - sa
+    mov r9d, 255
+    sub r9d, edx
+    mov r8d, [rdi]                ; dst ARGB
+
+    ; R channel:  (sr*sa + dr*(255-sa) + 128) >> 8
+    mov r10d, eax
+    shr r10d, 16
+    and r10d, 0xFF
+    imul r10d, edx                ; sr*sa
+    mov r11d, r8d
+    shr r11d, 16
+    and r11d, 0xFF
+    imul r11d, r9d                ; dr*(255-sa)
+    add r10d, r11d
+    add r10d, 128
+    shr r10d, 8
+    and r10d, 0xFF
+    shl r10d, 16
+    mov ebx, r10d                 ; ebx accumulates output
+
+    ; G channel
+    mov r10d, eax
+    shr r10d, 8
+    and r10d, 0xFF
+    imul r10d, edx
+    mov r11d, r8d
+    shr r11d, 8
+    and r11d, 0xFF
+    imul r11d, r9d
+    add r10d, r11d
+    add r10d, 128
+    shr r10d, 8
+    and r10d, 0xFF
+    shl r10d, 8
+    or ebx, r10d
+
+    ; B channel
+    mov r10d, eax
+    and r10d, 0xFF
+    imul r10d, edx
+    mov r11d, r8d
+    and r11d, 0xFF
+    imul r11d, r9d
+    add r10d, r11d
+    add r10d, 128
+    shr r10d, 8
+    and r10d, 0xFF
+    or ebx, r10d
+
+    mov [rdi], ebx
+
+.bsa_next:
+    add rdi, 4
+    dec ecx
+    jnz .bsa_loop
+
+.bsa_done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; --- Blend horizontal span from ARGB buffer (screen blend mode) ---
+; EDI = x, ESI = y, EDX = len, RCX = src buffer (len * 4 bytes, ARGB each)
+; Implements CSS mix-blend-mode: screen. The back buffer is opaque, so the
+; per-channel result is:  out = sa*screen(d,s) + (255-sa)*d, where
+; screen(d,s) = s + d - s*d/255. Unlike source-over there is no opaque
+; shortcut: an opaque source still mixes with the backdrop via screen().
+FN_BEGIN blend_span_argb_screen, 0, 0, FN_RET_SCALAR
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    movsxd r12, edi               ; r12 = x
+    movsxd r13, esi               ; r13 = y
+    movsxd r14, edx               ; r14 = len
+    mov    r15, rcx               ; r15 = src buffer pointer
+
+    test r14, r14
+    jle .bss_done
+
+    cmp r13, 0
+    jl .bss_done
+    mov eax, [scr_height]
+    cmp r13, rax
+    jge .bss_done
+
+    cmp r12, 0
+    jge .bss_cl_right
+    mov rax, r12
+    neg rax
+    add r14, r12
+    jle .bss_done
+    lea r15, [r15 + rax * 4]
+    xor r12d, r12d
+.bss_cl_right:
+    mov eax, [scr_width]
+    cmp r12, rax
+    jge .bss_done
+    mov rbx, rax
+    sub rbx, r12
+    cmp r14, rbx
+    jle .bss_setup
+    mov r14, rbx
+.bss_setup:
+    mov rax, r13
+    imul rax, [scr_pitch_q]
+    mov rdi, [bb_addr]
+    add rdi, rax
+    lea rdi, [rdi + r12 * 4]         ; rdi = dst pixel pointer
+    mov rsi, r15                     ; rsi = src pixel pointer
+
+.bss_loop:
+    mov eax, [rsi]                ; eax = src ARGB
+    add rsi, 4
+    mov edx, eax
+    shr edx, 24
+    and edx, 0xFF                 ; edx = sa
+    jz .bss_next                  ; fully transparent
+    mov r9d, 255
+    sub r9d, edx                  ; r9d = 255 - sa
+    mov r8d, [rdi]                ; r8d = dst ARGB
+    xor ebx, ebx                  ; ebx accumulates output
+
+    ; R channel
+    mov r10d, eax
+    shr r10d, 16
+    and r10d, 0xFF                ; r10d = s
+    mov r11d, r8d
+    shr r11d, 16
+    and r11d, 0xFF                ; r11d = d
+    mov ecx, r10d
+    imul ecx, r11d
+    add ecx, 128
+    shr ecx, 8                    ; ecx = s*d/255
+    add r10d, r11d
+    sub r10d, ecx                 ; r10d = screen(d,s)
+    imul r10d, edx                ; screen*sa
+    mov ecx, r11d
+    imul ecx, r9d                 ; d*(255-sa)
+    add ecx, r10d
+    add ecx, 128
+    shr ecx, 8
+    and ecx, 0xFF
+    shl ecx, 16
+    or ebx, ecx
+
+    ; G channel
+    mov r10d, eax
+    shr r10d, 8
+    and r10d, 0xFF
+    mov r11d, r8d
+    shr r11d, 8
+    and r11d, 0xFF
+    mov ecx, r10d
+    imul ecx, r11d
+    add ecx, 128
+    shr ecx, 8
+    add r10d, r11d
+    sub r10d, ecx
+    imul r10d, edx
+    mov ecx, r11d
+    imul ecx, r9d
+    add ecx, r10d
+    add ecx, 128
+    shr ecx, 8
+    and ecx, 0xFF
+    shl ecx, 8
+    or ebx, ecx
+
+    ; B channel
+    mov r10d, eax
+    and r10d, 0xFF
+    mov r11d, r8d
+    and r11d, 0xFF
+    mov ecx, r10d
+    imul ecx, r11d
+    add ecx, 128
+    shr ecx, 8
+    add r10d, r11d
+    sub r10d, ecx
+    imul r10d, edx
+    mov ecx, r11d
+    imul ecx, r9d
+    add ecx, r10d
+    add ecx, 128
+    shr ecx, 8
+    and ecx, 0xFF
+    or ebx, ecx
+
+    mov [rdi], ebx
+
+.bss_next:
+    add rdi, 4
+    dec r14d
+    jnz .bss_loop
+
+.bss_done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; --- Blend horizontal span from ARGB buffer (multiply blend mode) ---
+; EDI = x, ESI = y, EDX = len, RCX = src buffer (len * 4 bytes, ARGB each)
+; CSS mix-blend-mode: multiply over an opaque back buffer:
+; out = sa*multiply(d,s) + (255-sa)*d, multiply(d,s)=d*s/255.
+FN_BEGIN blend_span_argb_multiply, 0, 0, FN_RET_SCALAR
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    movsxd r12, edi
+    movsxd r13, esi
+    movsxd r14, edx
+    mov    r15, rcx
+
+    test r14, r14
+    jle .bsm_done
+    cmp r13, 0
+    jl .bsm_done
+    mov eax, [scr_height]
+    cmp r13, rax
+    jge .bsm_done
+    cmp r12, 0
+    jge .bsm_cl_right
+    mov rax, r12
+    neg rax
+    add r14, r12
+    jle .bsm_done
+    lea r15, [r15 + rax * 4]
+    xor r12d, r12d
+.bsm_cl_right:
+    mov eax, [scr_width]
+    cmp r12, rax
+    jge .bsm_done
+    mov rbx, rax
+    sub rbx, r12
+    cmp r14, rbx
+    jle .bsm_setup
+    mov r14, rbx
+.bsm_setup:
+    mov rax, r13
+    imul rax, [scr_pitch_q]
+    mov rdi, [bb_addr]
+    add rdi, rax
+    lea rdi, [rdi + r12 * 4]
+    mov rsi, r15
+
+.bsm_loop:
+    mov eax, [rsi]
+    add rsi, 4
+    mov edx, eax
+    shr edx, 24
+    and edx, 0xFF
+    jz .bsm_next
+    mov r9d, 255
+    sub r9d, edx
+    mov r8d, [rdi]
+    xor ebx, ebx
+
+    ; R channel
+    mov r10d, eax
+    shr r10d, 16
+    and r10d, 0xFF
+    mov r11d, r8d
+    shr r11d, 16
+    and r11d, 0xFF
+    imul r10d, r11d
+    add r10d, 128
+    shr r10d, 8                    ; multiply(d,s)
+    imul r10d, edx
+    mov ecx, r11d
+    imul ecx, r9d
+    add ecx, r10d
+    add ecx, 128
+    shr ecx, 8
+    and ecx, 0xFF
+    shl ecx, 16
+    or ebx, ecx
+
+    ; G channel
+    mov r10d, eax
+    shr r10d, 8
+    and r10d, 0xFF
+    mov r11d, r8d
+    shr r11d, 8
+    and r11d, 0xFF
+    imul r10d, r11d
+    add r10d, 128
+    shr r10d, 8
+    imul r10d, edx
+    mov ecx, r11d
+    imul ecx, r9d
+    add ecx, r10d
+    add ecx, 128
+    shr ecx, 8
+    and ecx, 0xFF
+    shl ecx, 8
+    or ebx, ecx
+
+    ; B channel
+    mov r10d, eax
+    and r10d, 0xFF
+    mov r11d, r8d
+    and r11d, 0xFF
+    imul r10d, r11d
+    add r10d, 128
+    shr r10d, 8
+    imul r10d, edx
+    mov ecx, r11d
+    imul ecx, r9d
+    add ecx, r10d
+    add ecx, 128
+    shr ecx, 8
+    and ecx, 0xFF
+    or ebx, ecx
+
+    mov [rdi], ebx
+
+.bsm_next:
+    add rdi, 4
+    dec r14d
+    jnz .bsm_loop
+
+.bsm_done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
     pop rbx
     pop rax
     ret
@@ -845,6 +1521,24 @@ FN_BEGIN display_clear, 0, 0, FN_RET_SCALAR
 
 section .data
 global fb_addr, bb_addr, scr_width, scr_height, scr_pitch, scr_pitch_q
+; --- Native framebuffer (set once by boot loader, never overwritten) ----
+; Apps and Settings read these to discover the monitor's native resolution
+; via SYS_DISPLAY_NATIVE. display_set_mode changes scr_* but leaves these.
+global fb_native_width, fb_native_height
+; --- Runtime window-manager layout (recomputed on every mode change) ----
+; constants.inc used to derive TASKBAR_Y / CLOCK_X / etc. at assemble time
+; from SCREEN_WIDTH and SCREEN_HEIGHT. Now those are dynamic, so taskbar.asm
+; and friends load these globals instead of using compile-time symbols.
+global scr_taskbar_y, scr_clock_x, scr_clock_y
+global scr_start_btn_y, scr_start_menu_y
+global scr_tb_btn_y, scr_bat_ind_x, scr_bat_ind_y
+; --- Display flags (bit 0 vsync, bit 1 fps, bit 2 stretch) --------------
+; STRETCH is "plumbing for now": when set, display_set_mode will allow
+; modes that differ from the native fb size and (later) cause display_flip
+; to scale the back buffer to the fb. Today display_flip is 1:1 so the
+; effective behavior is unchanged regardless of the bit. The bit is
+; persisted across mode changes so Settings can toggle it cleanly.
+global display_stretch
 
 fb_addr:    dq 0
 bb_addr:    dq 0
@@ -852,8 +1546,19 @@ scr_width:  dd SCREEN_WIDTH
 scr_height: dd SCREEN_HEIGHT
 scr_pitch:  dd SCREEN_PITCH
 scr_pitch_q: dq SCREEN_PITCH
+fb_native_width:  dd SCREEN_WIDTH
+fb_native_height: dd SCREEN_HEIGHT
+scr_taskbar_y:    dd (SCREEN_HEIGHT - TASKBAR_HEIGHT)
+scr_clock_x:      dd (SCREEN_WIDTH - CLOCK_WIDTH - 8)
+scr_clock_y:      dd (SCREEN_HEIGHT - TASKBAR_HEIGHT + 10)
+scr_start_btn_y:  dd (SCREEN_HEIGHT - TASKBAR_HEIGHT + 4)
+scr_start_menu_y: dd (SCREEN_HEIGHT - TASKBAR_HEIGHT - 200)   ; - START_MENU_H
+scr_tb_btn_y:     dd (SCREEN_HEIGHT - TASKBAR_HEIGHT + 4)
+scr_bat_ind_x:    dd (SCREEN_WIDTH - CLOCK_WIDTH - 8 - 88 - 6) ; - (BAT_IND_W + 6)
+scr_bat_ind_y:    dd (SCREEN_HEIGHT - TASKBAR_HEIGHT + 4)
 vsync_enabled: db 0        ; Disabled by default (uses PIT fallback on AMD/UEFI)
 fps_show:      db 1
+display_stretch: db 0
 last_vsync_tick: dq 0      ; PIT tick count at last vsync
 global last_vsync_tick
 global vsync_enabled, fps_show
@@ -1059,6 +1764,9 @@ FN_BEGIN display_set_mode, 0, 0, FN_RET_SCALAR
     mov eax, edi
     mov [scr_pitch_q], rax
 
+    ; Recompute WM layout so taskbar/clock/start-menu follow the new mode
+    call display_recompute_layout
+
     ; Clear back buffer completely (using new resolution)
     xor edi, edi
     call display_clear
@@ -1072,3 +1780,522 @@ FN_BEGIN display_set_mode, 0, 0, FN_RET_SCALAR
     pop r12
     pop rbx
     ret
+
+; ============================================================================
+; SVG rasterizer primitives (used by usermode SVG renderer via syscalls).
+; All routines write to the back buffer and clip to screen bounds.
+; ============================================================================
+
+; --- Draw arbitrary line (Bresenham) ---
+; EDI = x0, ESI = y0, EDX = x1, ECX = y1, R8D = color
+FN_BEGIN draw_line, 0, 0, FN_RET_SCALAR
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+
+    movsxd r9,  edi          ; x0
+    movsxd r10, esi          ; y0
+    movsxd r11, edx          ; x1
+    movsxd r12, ecx          ; y1
+    mov    r13d, r8d         ; color
+
+    mov rax, r11
+    sub rax, r9              ; x1 - x0
+    mov rbx, 1               ; sx = +1
+    jns .ln_dx_ok
+    neg rax
+    mov rbx, -1
+.ln_dx_ok:                   ; rax = dx (>=0), rbx = sx
+
+    mov rcx, r12
+    sub rcx, r10             ; y1 - y0
+    mov rdx, 1               ; sy = +1
+    jns .ln_dy_ok
+    neg rcx
+    mov rdx, -1
+.ln_dy_ok:
+    neg rcx                  ; rcx = -|dy|  (i.e. dy <= 0)
+
+    mov r14, rax
+    add r14, rcx             ; err = dx + dy
+
+.ln_loop:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    mov edi, r9d
+    mov esi, r10d
+    mov edx, r13d
+    call pixel_set
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+
+    cmp r9, r11
+    jne .ln_step
+    cmp r10, r12
+    je .ln_done
+.ln_step:
+    lea rdi, [r14 + r14]     ; e2 = 2*err
+    cmp rdi, rcx             ; if e2 >= dy
+    jl .ln_skip_x
+    add r14, rcx
+    add r9, rbx
+.ln_skip_x:
+    cmp rdi, rax             ; if e2 <= dx
+    jg .ln_skip_y
+    add r14, rax
+    add r10, rdx
+.ln_skip_y:
+    jmp .ln_loop
+
+.ln_done:
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; --- Fill circle (scanline via SSE sqrt) ---
+; EDI = cx, ESI = cy, EDX = r, ECX = color
+FN_BEGIN fill_circle, 0, 0, FN_RET_SCALAR
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    sub rsp, 16
+    movdqu [rsp], xmm0
+
+    movsxd r9,  edi          ; cx
+    movsxd r10, esi          ; cy
+    movsxd r11, edx          ; r
+    mov    r13d, ecx         ; color
+
+    test r11, r11
+    jl .fc_done              ; negative radius is invalid/no-op
+    jnz .fc_scan
+
+    ; Degenerate circle: SVG treats r=0 as a single point for our filled
+    ; raster primitive. Clipping is still delegated to pixel_set.
+    mov edi, r9d
+    mov esi, r10d
+    mov edx, r13d
+    call pixel_set
+    jmp .fc_done
+
+.fc_scan:
+    mov r12, r11
+    neg r12                  ; r12 = y_off = -r
+.fc_row:
+    cmp r12, r11
+    jg .fc_done
+
+    ; dx_sq = r*r - y*y
+    mov rax, r11
+    imul rax, rax
+    mov rbx, r12
+    imul rbx, rbx
+    sub rax, rbx
+    js .fc_next              ; defensive
+
+    cvtsi2sd xmm0, rax
+    sqrtsd xmm0, xmm0
+    cvttsd2si rax, xmm0      ; rax = dx (floor)
+
+    mov edi, r9d
+    sub edi, eax             ; cx - dx
+    mov esi, r10d
+    add esi, r12d            ; cy + y_off
+    lea edx, [eax + eax + 1] ; 2*dx + 1
+    mov ecx, r13d
+    call draw_hline
+
+.fc_next:
+    inc r12
+    jmp .fc_row
+.fc_done:
+    movdqu xmm0, [rsp]
+    add rsp, 16
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; --- Fill triangle (flat-top/flat-bottom scanline) ---
+; EDI = pointer to 6 int32 coords [x0,y0,x1,y1,x2,y2], ESI = color
+FN_BEGIN fill_triangle, 0, 0, FN_RET_SCALAR
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov rbp, rdi             ; rbp = coords ptr
+    mov r15d, esi            ; r15d = color
+
+    ; Load v0/v1/v2 into r8..r13 (signed 64-bit)
+    movsxd r8,  dword [rbp + 0]    ; x0
+    movsxd r9,  dword [rbp + 4]    ; y0
+    movsxd r10, dword [rbp + 8]    ; x1
+    movsxd r11, dword [rbp + 12]   ; y1
+    movsxd r12, dword [rbp + 16]   ; x2
+    movsxd r13, dword [rbp + 20]   ; y2
+
+    ; Sort by Y ascending: ensure y0<=y1<=y2 by pairwise swaps
+    cmp r9, r11
+    jle .ft_s1
+    xchg r8, r10
+    xchg r9, r11
+.ft_s1:
+    cmp r11, r13
+    jle .ft_s2
+    xchg r10, r12
+    xchg r11, r13
+.ft_s2:
+    cmp r9, r11
+    jle .ft_sorted
+    xchg r8, r10
+    xchg r9, r11
+.ft_sorted:
+    ; Degenerate: collinear triangle. Draw the three edges so single-line
+    ; inputs do not expand into a stair-stepped filled wedge.
+    mov rax, r10
+    sub rax, r8              ; x1-x0
+    mov rbx, r13
+    sub rbx, r9              ; y2-y0
+    imul rax, rbx
+    mov rcx, r12
+    sub rcx, r8              ; x2-x0
+    mov rbx, r11
+    sub rbx, r9              ; y1-y0
+    imul rcx, rbx
+    sub rax, rcx
+    jnz .ft_not_collinear
+
+    mov r14, r8
+    mov edi, r8d
+    mov esi, r9d
+    mov edx, r10d
+    mov ecx, r11d
+    mov r8d, r15d
+    call draw_line
+    mov edi, r10d
+    mov esi, r11d
+    mov edx, r12d
+    mov ecx, r13d
+    mov r8d, r15d
+    call draw_line
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, r14d
+    mov ecx, r9d
+    mov r8d, r15d
+    call draw_line
+    jmp .ft_done
+
+.ft_not_collinear:
+    ; Degenerate: y0==y2 -> single horizontal line
+    cmp r9, r13
+    jne .ft_general
+
+    ; min/max of x0,x1,x2 -> hline at y0
+    mov rax, r8
+    mov rbx, r8
+    cmp r10, rax
+    jge .ft_d1
+    mov rax, r10
+.ft_d1:
+    cmp r10, rbx
+    jle .ft_d2
+    mov rbx, r10
+.ft_d2:
+    cmp r12, rax
+    jge .ft_d3
+    mov rax, r12
+.ft_d3:
+    cmp r12, rbx
+    jle .ft_d4
+    mov rbx, r12
+.ft_d4:
+    mov edi, eax
+    mov esi, r9d
+    mov edx, ebx
+    sub edx, eax
+    inc edx
+    mov ecx, r15d
+    call draw_hline
+    jmp .ft_done
+
+.ft_general:
+    ; Iterate scanline y from y0 to y2 inclusive (rcx = current y)
+    mov rcx, r9
+.ft_yloop:
+    cmp rcx, r13
+    jg .ft_done
+
+    ; Long edge xa = x0 + (x2-x0) * (y - y0) / (y2 - y0)
+    mov rax, r12
+    sub rax, r8              ; x2-x0
+    mov rbx, rcx
+    sub rbx, r9              ; y - y0
+    imul rax, rbx            ; (x2-x0)*(y-y0)
+    mov rbx, r13
+    sub rbx, r9              ; y2-y0 (>0 here since not flat)
+    cqo
+    idiv rbx                 ; rax = (x2-x0)*(y-y0) / (y2-y0)
+    add rax, r8              ; xa
+    mov r14, rax
+
+    ; Short edge xb depends on which half
+    cmp rcx, r11
+    jl .ft_upper
+    ; Lower: xb = x1 + (x2-x1)*(y-y1) / (y2-y1)
+    cmp r13, r11
+    je .ft_skip              ; flat-bottom: y2==y1, undefined; skip safely
+    mov rax, r12
+    sub rax, r10             ; x2-x1
+    mov rbx, rcx
+    sub rbx, r11             ; y-y1
+    imul rax, rbx
+    mov rbx, r13
+    sub rbx, r11             ; y2-y1
+    cqo
+    idiv rbx
+    add rax, r10             ; xb
+    jmp .ft_have_xb
+
+.ft_upper:
+    cmp r11, r9
+    je .ft_skip              ; flat-top
+    mov rax, r10
+    sub rax, r8              ; x1-x0
+    mov rbx, rcx
+    sub rbx, r9
+    imul rax, rbx
+    mov rbx, r11
+    sub rbx, r9
+    cqo
+    idiv rbx
+    add rax, r8              ; xb
+
+.ft_have_xb:
+    ; left = min(xa, xb), width = |xa-xb|+1
+    cmp rax, r14
+    jle .ft_have_lr
+    xchg rax, r14
+.ft_have_lr:                 ; rax = left, r14 = right
+    mov edi, eax
+    mov esi, ecx
+    mov edx, r14d
+    sub edx, eax
+    inc edx
+    push rcx
+    mov ecx, r15d
+    call draw_hline
+    pop rcx
+
+.ft_skip:
+    inc rcx
+    jmp .ft_yloop
+
+.ft_done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; --- Raster primitives smoke self-test ---
+; Exercises draw_line / fill_circle / fill_triangle with normal + degenerate
+; inputs. Verifies a few deterministic pixels and prints the result to COM1.
+FN_BEGIN raster_self_test, 0, 0, FN_RET_SCALAR
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+
+    xor ebx, ebx             ; failure flag
+
+    ; Line: normal
+    mov edi, 100
+    mov esi, 100
+    mov edx, 200
+    mov ecx, 150
+    mov r8d, 0x00FF0000
+    call draw_line
+    ; Line: zero-length
+    mov edi, 50
+    mov esi, 50
+    mov edx, 50
+    mov ecx, 50
+    mov r8d, 0x0000FF00
+    call draw_line
+    mov eax, 50
+    imul rax, [scr_pitch_q]
+    mov ecx, 50
+    lea rax, [rax + rcx * 4]
+    mov rdx, [bb_addr]
+    cmp dword [rdx + rax], 0x0000FF00
+    je .rst_line_ok
+    mov ebx, 1
+.rst_line_ok:
+    ; Line: off-screen (negative coords) — clipping path
+    mov edi, -50
+    mov esi, -50
+    mov edx, 300
+    mov ecx, 300
+    mov r8d, 0x000000FF
+    call draw_line
+
+    ; Circle: normal
+    mov edi, 400
+    mov esi, 300
+    mov edx, 40
+    mov ecx, 0x00FFFF00
+    call fill_circle
+    ; Circle: r=0 (single clipped pixel)
+    mov edi, 10
+    mov esi, 10
+    mov edx, 0
+    mov ecx, 0x00808080
+    call fill_circle
+    mov eax, 10
+    imul rax, [scr_pitch_q]
+    mov ecx, 10
+    lea rax, [rax + rcx * 4]
+    mov rdx, [bb_addr]
+    cmp dword [rdx + rax], 0x00808080
+    je .rst_circle0_ok
+    mov ebx, 1
+.rst_circle0_ok:
+    ; Circle: r=1
+    mov edi, 500
+    mov esi, 300
+    mov edx, 1
+    mov ecx, 0x00FFFFFF
+    call fill_circle
+
+    ; Triangle: normal (use stack scratch)
+    sub rsp, 32
+    mov dword [rsp + 0],  600
+    mov dword [rsp + 4],  100
+    mov dword [rsp + 8],  700
+    mov dword [rsp + 12], 200
+    mov dword [rsp + 16], 550
+    mov dword [rsp + 20], 250
+    mov rdi, rsp
+    mov esi, 0x00FF00FF
+    call fill_triangle
+    ; Triangle: degenerate (collinear)
+    mov dword [rsp + 0],  10
+    mov dword [rsp + 4],  10
+    mov dword [rsp + 8],  20
+    mov dword [rsp + 12], 10
+    mov dword [rsp + 16], 30
+    mov dword [rsp + 20], 10
+    mov rdi, rsp
+    mov esi, 0x00808080
+    call fill_triangle
+    mov eax, 10
+    imul rax, [scr_pitch_q]
+    mov ecx, 20
+    lea rax, [rax + rcx * 4]
+    mov rdx, [bb_addr]
+    cmp dword [rdx + rax], 0x00808080
+    je .rst_triangle_ok
+    mov ebx, 1
+.rst_triangle_ok:
+    add rsp, 32
+
+    test ebx, ebx
+    jz .rst_emit_ok
+    lea rsi, [rel rst_fail_msg]
+    jmp .rst_loop
+
+.rst_emit_ok:
+    lea rsi, [rel rst_ok_msg]
+.rst_loop:
+    mov al, [rsi]
+    test al, al
+    jz .rst_done
+    call serial_putc
+    inc rsi
+    jmp .rst_loop
+.rst_done:
+
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+section .data
+rst_ok_msg: db '[RST] OK', 13, 10, 0
+rst_fail_msg: db '[RST] FAIL', 13, 10, 0
+
+section .text

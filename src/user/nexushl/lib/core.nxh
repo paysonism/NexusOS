@@ -26,6 +26,24 @@ const SYS_FS_RENAME      = 20
 const SYS_FS_MKDIR       = 21
 const SYS_OPEN_FILE_NP   = 22
 const SYS_APP_OPEN       = 23
+const SYS_DISPLAY_FLAGS  = 24
+const SYS_DISPLAY_SET_FLAGS = 25
+const SYS_DESKTOP_BG     = 26
+const SYS_DESKTOP_SET_BG = 27
+const SYS_DISPLAY_NATIVE = 28
+const SYS_DISPLAY_SIZE   = 29
+
+const DISPLAY_FLAG_VSYNC   = 1
+const DISPLAY_FLAG_FPS     = 2
+# DISPLAY_FLAG_STRETCH — when off (default), modes set via display_set_mode
+# that differ from the monitor's native size will (in a follow-up) be
+# letterboxed; when on, the compositor will scale to fill the screen.
+# The flag is persisted today so Settings can expose the toggle ahead of
+# the scaler work.
+const DISPLAY_FLAG_STRETCH = 4
+const DESKTOP_BG_LIQUID_METAL  = 0
+const DESKTOP_BG_GLASS_RIBBONS = 1
+const DESKTOP_BG_FROSTED_BLOOM = 2
 
 # Window struct offsets (shadow window in app slot).
 const WIN_X        = 8
@@ -51,3 +69,51 @@ const COL_GRAY  = 0x00404040
 const COL_DARK  = 0x00202020
 const COL_BLUE  = 0x003060A0
 const COL_RED   = 0x00C03030
+
+fn display_flags() {
+    return syscall(SYS_DISPLAY_FLAGS);
+}
+
+fn display_set_flags(flags) {
+    return syscall(SYS_DISPLAY_SET_FLAGS, flags);
+}
+
+fn display_set_mode(width, height, bpp) {
+    return syscall(SYS_DISPLAY_MODE, width, height, bpp);
+}
+
+fn cursor_init() {
+    return syscall(SYS_CURSOR_INIT);
+}
+
+fn desktop_bg() {
+    return syscall(SYS_DESKTOP_BG);
+}
+
+fn desktop_set_bg(theme) {
+    return syscall(SYS_DESKTOP_SET_BG, theme);
+}
+
+# Returns the monitor's native framebuffer width packed in bits[31:0] of
+# the SYS_DISPLAY_NATIVE result.
+fn display_native_width() {
+    let packed = syscall(SYS_DISPLAY_NATIVE);
+    return packed & 0xFFFFFFFF;
+}
+
+# Returns the monitor's native framebuffer height (bits[63:32]).
+fn display_native_height() {
+    let packed = syscall(SYS_DISPLAY_NATIVE);
+    return (packed >> 32) & 0xFFFFFFFF;
+}
+
+# Current logical desktop size — drifts when display_set_mode succeeds.
+fn display_current_width() {
+    let packed = syscall(SYS_DISPLAY_SIZE);
+    return packed & 0xFFFFFFFF;
+}
+
+fn display_current_height() {
+    let packed = syscall(SYS_DISPLAY_SIZE);
+    return (packed >> 32) & 0xFFFFFFFF;
+}
