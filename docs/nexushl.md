@@ -6,15 +6,15 @@ refactored without hand-tracking registers, while every emitted instruction
 stays inside the syscall boundary documented in `docs/syscalls.md`.
 
 The toolchain is entirely host-side. The compiler emits plain NASM that the
-existing `build_uefi.ps1` pipeline assembles. There is no runtime, no heap,
+existing `scripts/build/build_uefi.ps1` pipeline assembles. There is no runtime, no heap,
 no interpreter, no dynamic loader — so there is no new attack surface on the
 running kernel.
 
 ## Quick start
 
 ```powershell
-powershell -NoProfile -File build_nxh.ps1     # compile apps and generate SDK include/manifest
-powershell -NoProfile -File run_uefi.ps1      # boot VM
+powershell -NoProfile -File scripts\build\build_nxh.ps1     # compile apps and generate SDK include/manifest
+powershell -NoProfile -File scripts\run\run_uefi.ps1      # boot VM
 python src/user/nexushl/compiler/nxhdbg.py    # tail serial, highlights [nxhl] lines
 ```
 
@@ -142,13 +142,13 @@ hit that limit.
 1. Instrument with `syscall(SYS_PRINT, &marker_string)` at every branch of
    interest. Prefix markers with `[nxhl]` so `nxhdbg.py --grep '\[nxhl\]'`
    filters them out of the kernel trace.
-2. Build + boot: `build_nxh.ps1; build_uefi.ps1; run_uefi.ps1`.
+2. Build + boot: `scripts\build\build_nxh.ps1; scripts\build\build_uefi.ps1; scripts\run\run_uefi.ps1`.
 3. Attach the debugger: `python src/user/nexushl/compiler/nxhdbg.py`.
 4. Stop the VM: `taskkill /F /IM qemu-system-x86_64.exe`.
 
 ## Integration with `apps.asm`
 
-`build_nxh.ps1` is the SDK integration point. It compiles every app under
+`scripts/build/build_nxh.ps1` is the SDK integration point. It compiles every app under
 `src/user/nexushl/apps`, then writes `build/nxh/generated_apps.inc` and
 `build/nxh/manifest.json`.
 
@@ -164,7 +164,7 @@ mov r11, app_hl_notepad_key
 The current shipped Notepad is generated from
 `src/user/nexushl/apps/notepad.nxh`. The old hand-written Notepad include is
 kept only as historical/reference source and is guarded from re-entering the
-active app blob by `test_source_guards.ps1`.
+active app blob by `scripts/test/test_source_guards.ps1`.
 
 ## GUI Library
 

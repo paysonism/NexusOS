@@ -26,7 +26,7 @@ main exported usermode-facing entrypoints.
 - `src/user/apps/*.inc`
   Split built-in app source.
 - `src/user/nexushl/apps/*.nxh`
-  NexusHL SDK app sources. `build_nxh.ps1` compiles these to `build/nxh/*.asm`
+  NexusHL SDK app sources. `scripts/build/build_nxh.ps1` compiles these to `build/nxh/*.asm`
   and emits `build/nxh/generated_apps.inc`, which `src/user/apps.asm` includes
   inside the app blob.
 - `src/user/lib/nexus_app.inc`
@@ -40,7 +40,7 @@ Each active user callback runs inside a per-slot arena:
 
 - `APP_DATA_ADDR + slot * APP_SLOT_SIZE`
 
-The automated serial gate for this path is `test_l3_app_markers.ps1`.
+The automated serial gate for this path is `scripts/test/test_l3_app_markers.ps1`.
 
 That slot holds:
 

@@ -18,9 +18,9 @@ For new SDK-authored apps, start from:
 
 - `C:\Users\user\Documents\new\src\user\nexushl\lib\core.nxh`
 - `C:\Users\user\Documents\new\src\user\nexushl\apps\hello.nxh`
-- `C:\Users\user\Documents\new\build_nxh.ps1`
+- `C:\Users\user\Documents\new\scripts\build\build_nxh.ps1`
 
-`build_nxh.ps1` compiles all `.nxh` apps and generates
+`scripts/build/build_nxh.ps1` compiles all `.nxh` apps and generates
 `C:\Users\user\Documents\new\build\nxh\generated_apps.inc`, which is included
 by `src/user/apps.asm`.
 
@@ -122,7 +122,7 @@ Display settings are exposed through syscalls, not kernel externs:
 1. Add or edit app code under `src/user`.
 2. Keep kernel-facing interfaces behind wrapper includes instead of hardcoding
    raw syscall numbers in app files.
-3. Run `powershell -ExecutionPolicy Bypass -File .\test_verify_all.ps1`
+3. Run `powershell -ExecutionPolicy Bypass -File .\scripts\test\test_verify_all.ps1`
 4. If the smoke gate fails, inspect
    `C:\Users\user\Documents\new\build\smoke_uefi_serial.log`
 

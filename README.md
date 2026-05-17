@@ -18,7 +18,7 @@ separated.
 ### UEFI
 
 ```powershell
-.\build_uefi.ps1
+.\scripts\build\build_uefi.ps1
 ```
 
 Outputs:
@@ -30,7 +30,7 @@ Outputs:
 ### BIOS
 
 ```powershell
-.\build_bios.ps1
+.\scripts\build\build_bios.ps1
 ```
 
 Outputs:
@@ -45,7 +45,7 @@ Outputs:
 Use this before and after structural changes:
 
 ```powershell
-.\test_verify_all.ps1
+.\scripts\test\test_verify_all.ps1
 ```
 
 That runs:
@@ -61,13 +61,13 @@ UEFI smoke output is written to `build\smoke_uefi_serial.log`.
 ### UEFI
 
 ```powershell
-.\run_uefi.ps1
+.\scripts\run\run_uefi.ps1
 ```
 
 This launches QEMU with:
 
 - OVMF firmware
-- 512 MB RAM by default (`.\run_uefi.ps1 -GuestMemory 256M` to override)
+- 512 MB RAM by default (`.\scripts\run\run_uefi.ps1 -GuestMemory 256M` to override)
 - standard VGA
 - xHCI USB controller with mouse and keyboard
 - serial on `tcp:127.0.0.1:5555`
@@ -76,8 +76,8 @@ This launches QEMU with:
 Cache-first performance profile:
 
 ```powershell
-.\build_uefi.ps1 -PerfProfile Cache32Max
-.\run_uefi.ps1 -PerfProfile Cache32Max
+.\scripts\build\build_uefi.ps1 -PerfProfile Cache32Max
+.\scripts\run\run_uefi.ps1 -PerfProfile Cache32Max
 ```
 
 This uses the 8-core QEMU topology. BIOS uses the strict 32 MB guest target;
@@ -87,10 +87,10 @@ UEFI uses a 36 MB OVMF floor while keeping the same kernel profile. See
 ### BIOS
 
 ```powershell
-.\run_bios.ps1
+.\scripts\run\run_bios.ps1
 ```
 
-BIOS also defaults to 512 MB RAM. Use `.\run_bios.ps1 -GuestMemory 256M`
+BIOS also defaults to 512 MB RAM. Use `.\scripts\run\run_bios.ps1 -GuestMemory 256M`
 to override.
 
 ## Source Layout
@@ -127,12 +127,12 @@ docs/
   data-layout-reference.md
   state-machine-reference.md
 
-build_uefi.ps1
-build_bios.ps1
-run_uefi.ps1
-run_bios.ps1
-test_smoke_uefi.ps1
-test_verify_all.ps1
+scripts\build\build_uefi.ps1
+scripts\build\build_bios.ps1
+scripts\run\run_uefi.ps1
+scripts\run\run_bios.ps1
+scripts\test\test_smoke_uefi.ps1
+scripts\test\test_verify_all.ps1
 ```
 
 ## App Development

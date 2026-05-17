@@ -1,0 +1,32 @@
+# Local agent/worktree state
+.claude/worktrees/
+.claude/worktrees/agent-*/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Local debug and capture scratch files
+*.tmp
+*.bak
+NUL
+null
+_ser.txt
+_test_output.txt
+qemu_debug.log
+serial_launch_debug.log
+
+# External or sensitive material that belongs outside the OS repo
+Unrelated/
+router-backups/
+KC.MacTelnet/
+MAC-Telnet/
+eero_api_pkg/
+winbox64.exe
+*.pcapng
+*_credentials.txt
+admin_*.backup
+admin_*.rsc
+
+# Dropped source archives after extraction into source-owned folders
+NexusOS Design System.zip

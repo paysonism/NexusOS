@@ -29,9 +29,9 @@ Scope: 4 core kernel files under `src/kernel/core/`
 Build sanity (run before commit):
 
 ```bash
-pwsh ./build_bios.ps1
-pwsh ./build_uefi.ps1
-pwsh ./test_smoke_uefi.ps1
+pwsh ./scripts\build\build_bios.ps1
+pwsh ./scripts\build\build_uefi.ps1
+pwsh ./scripts\test\test_smoke_uefi.ps1
 ```
 
 Re-hash:
@@ -201,9 +201,9 @@ Verified each remaining flagged item:
 ### Verification
 
 ```
-pwsh ./build_uefi.ps1
-pwsh ./build_bios.ps1
-pwsh ./test_smoke_uefi.ps1
+pwsh ./scripts\build\build_uefi.ps1
+pwsh ./scripts\build\build_bios.ps1
+pwsh ./scripts\test\test_smoke_uefi.ps1
 sha256sum -c <hashes-from-table>
 ```
 

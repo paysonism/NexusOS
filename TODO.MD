@@ -7,21 +7,21 @@ reduce maintenance risk.
 
 ## P0: Verification Blockers
 
-- [ ] Fix final `test_verify_all.ps1` failure: `test_smp_boot.ps1` reports `Missing extended SMP counters`.
+- [ ] Fix final `scripts\test\test_verify_all.ps1` failure: `scripts\test\test_smp_boot.ps1` reports `Missing extended SMP counters`.
 - [ ] Inspect why `build/cache32_serial.log` contains bare `SMP:` lines instead of the expected extended format: `SMP:<detected>/<target>/<started>/<alive>/<parked>`.
 - [ ] Verify whether `perfdiag_print_smp` in `src/kernel/core/perfdiag.asm` is being called in the Cache32Max BIOS boot path.
 - [ ] Confirm whether the SMP counters are missing because boot logging is truncated, the marker format changed, or AP startup state is not initialized before printing.
-- [ ] Add or adjust a serial marker that always emits extended SMP counters after AP startup, before `test_smp_boot.ps1` reads the log.
-- [ ] Re-run `.\test_smp_boot.ps1` alone until it passes.
-- [ ] Re-run full `.\test_verify_all.ps1` after the SMP marker fix.
+- [ ] Add or adjust a serial marker that always emits extended SMP counters after AP startup, before `scripts\test\test_smp_boot.ps1` reads the log.
+- [ ] Re-run `.\scripts\test\test_smp_boot.ps1` alone until it passes.
+- [ ] Re-run full `.\scripts\test\test_verify_all.ps1` after the SMP marker fix.
 - [ ] Investigate the Cache32 build warning/error during full verify: `WriteAllBytes ... file with a user-mapped section open`.
 - [ ] Ensure QEMU is fully stopped before rebuilding `build\NexusOS.img`.
-- [ ] Consider making `test_cache32_boot.ps1` delete/retry the image only after confirming no QEMU process holds it.
+- [ ] Consider making `scripts\test\test_cache32_boot.ps1` delete/retry the image only after confirming no QEMU process holds it.
 
 ## P0: Test And Guard Staleness
 
-- [ ] Fix `test_security_probe.ps1` F2 static guard: it expects literal `fat16_read_file:` but `src/kernel/fs/fat16.asm` now uses `FN_BEGIN fat16_read_file`.
-- [ ] Re-run `.\test_security_probe.ps1` after updating the regex.
+- [ ] Fix `scripts\test\test_security_probe.ps1` F2 static guard: it expects literal `fat16_read_file:` but `src/kernel/fs/fat16.asm` now uses `FN_BEGIN fat16_read_file`.
+- [ ] Re-run `.\scripts\test\test_security_probe.ps1` after updating the regex.
 - [ ] Keep the F2 guard checking the real property: read cluster into `FAT16_FILE_BUF`, then copy bounded length to caller buffer.
 - [ ] Add a runtime F2 assertion if possible, so the security probe does not rely only on source regex shape.
 - [ ] Check all static regex guards for macro-era drift: `FN_BEGIN`, `FN_DECL`, generated labels, auto-wrapped globals.
@@ -164,8 +164,8 @@ reduce maintenance risk.
 ## P2: Repo Hygiene
 
 - [ ] Decide whether generated build artifacts should be tracked or ignored.
-- [ ] Clean up accidental `NUL`/`null` files if they are not intentional.
-- [ ] Separate `Unrelated` Kinect files from the OS repo or document why they live here.
+- [x] Clean up accidental `NUL`/`null` files if they are not intentional.
+- [x] Separate `Unrelated` Kinect files from the OS repo or document why they live here.
 - [ ] Add a script that reports dirty generated files separately from dirty source files.
 - [ ] Normalize line endings for source and generated files.
 - [ ] Consider putting QEMU logs under a dedicated ignored `build/logs` folder.

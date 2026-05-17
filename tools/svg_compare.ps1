@@ -50,7 +50,7 @@ function Stop-Qemu {
 # --- 1. Build ---------------------------------------------------------------
 if (-not $SkipBuild) {
     Write-Host '[svg-compare] building UEFI image...' -ForegroundColor Cyan
-    & powershell -ExecutionPolicy Bypass -File (Join-Path $Root 'build_uefi.ps1')
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $Root 'scripts\build\build_uefi.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'build_uefi.ps1 failed' }
 }
 
@@ -76,7 +76,7 @@ Start-Sleep -Seconds 1
 
 $bootJob = Start-Job -ScriptBlock {
     param($RootPath)
-    powershell -ExecutionPolicy Bypass -File (Join-Path $RootPath 'run_uefi.ps1') -Headless
+    powershell -ExecutionPolicy Bypass -File (Join-Path $RootPath 'scripts\run\run_uefi.ps1') -Headless
 } -ArgumentList $Root
 
 $serialText = ''
