@@ -116,6 +116,8 @@ section .text
 %include "src/kernel/gui/desktop.asm"
 section .text
 %include "src/kernel/gui/cursor.asm"
+section .text
+%include "src/kernel/gui/boot_anim.asm"
 
 ; --- Built-in User Apps ---
 section .text

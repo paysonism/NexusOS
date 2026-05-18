@@ -1,0 +1,205 @@
+# NexusHL Task Manager — lists the system apps as launchable "processes"
+# and surfaces live machine stats (uptime, display resolution).
+#
+# Built on the shared gui/core NexusHL libraries; all per-instance state
+# lives in the `state {}` block so each window is self-contained.
+
+use gui
+
+app "Task Manager" { stack = 4096; }
+
+# Process list geometry.
+const PROC_COUNT = 6
+const LIST_Y     = 116
+const ROW_H      = 26
+const NAME_X     = 12
+const STATUS_X   = 232
+
+# Stats block.
+const STAT_Y     = 52
+const STAT_STEP  = 20
+const VALUE_X    = 110
+
+const C_ACCENT   = 0x002A6FFF
+
+state {
+    tm_sel:     4;
+    uptime_buf: 24;
+    res_buf:    24;
+    count_buf:  12;
+}
+
+str title       = "Task Manager";
+str subtitle    = "System processes";
+
+str lbl_uptime  = "Uptime";
+str lbl_display = "Display";
+str lbl_count   = "Processes";
+
+str col_name    = "Process";
+str col_status  = "Status";
+str st_ready    = "Ready";
+
+str proc_0      = "File Explorer";
+str proc_1      = "Terminal";
+str proc_2      = "Notepad";
+str proc_3      = "Settings";
+str proc_4      = "Paint";
+str proc_5      = "About";
+
+str status_text = "Click a process to launch it";
+
+# ------------------------------------------------------------------
+# small formatting helpers (same idiom as about.nxh)
+# ------------------------------------------------------------------
+fn put_uint(buf, n) {
+    if n == 0 {
+        sb(buf, 48);
+        return buf + 1;
+    }
+    let p = buf;
+    while n > 0 {
+        sb(p, 48 + (n % 10));
+        p = p + 1;
+        n = n / 10;
+    }
+    let i = buf;
+    let j = p - 1;
+    while i < j {
+        let a = lb(i);
+        let b = lb(j);
+        sb(i, b);
+        sb(j, a);
+        i = i + 1;
+        j = j - 1;
+    }
+    return p;
+}
+
+fn fmt_res(buf, w, h) {
+    let p = put_uint(buf, w);
+    sb(p, 120);                 # 'x'
+    p = p + 1;
+    p = put_uint(p, h);
+    sb(p, 0);
+}
+
+fn fmt_secs(buf, secs) {
+    let p = put_uint(buf, secs);
+    sb(p, 32);                  # ' '
+    sb(p + 1, 115);             # 's'
+    sb(p + 2, 0);
+}
+
+# Process index -> display name.
+fn proc_name(i) {
+    if i == 0 { return &proc_0; }
+    if i == 1 { return &proc_1; }
+    if i == 2 { return &proc_2; }
+    if i == 3 { return &proc_3; }
+    if i == 4 { return &proc_4; }
+    return &proc_5;
+}
+
+# Process index -> kernel app id (Explorer=2 .. About=7).
+fn proc_appid(i) {
+    return i + 2;
+}
+
+# ------------------------------------------------------------------
+# drawing
+# ------------------------------------------------------------------
+fn draw_header(win) {
+    ui_rect_at(win, 0, 0, ui_win_w(win), 40, C_ACCENT);
+    ui_text_at(win, NAME_X, 6,  &title,    UI_COL_TEXT_INVERT, C_ACCENT);
+    ui_text_at(win, NAME_X, 22, &subtitle, UI_COL_TEXT_INVERT, C_ACCENT);
+}
+
+fn stat_row(win, y, label, value) {
+    ui_text_at(win, NAME_X, y, label, UI_COL_TEXT_MUTED, UI_COL_BG_BASE);
+    ui_text_at(win, VALUE_X, y, value, UI_COL_TEXT, UI_COL_BG_BASE);
+    return y + STAT_STEP;
+}
+
+fn draw_stats(win) {
+    fmt_secs(&uptime_buf, syscall(SYS_TICKS) / 100);
+    fmt_res(&res_buf, display_current_width(), display_current_height());
+    put_uint(&count_buf, PROC_COUNT);
+    sb(&count_buf + 1, 0);
+    if PROC_COUNT >= 10 { sb(&count_buf + 2, 0); }
+
+    let y = STAT_Y;
+    y = stat_row(win, y, &lbl_uptime,  &uptime_buf);
+    y = stat_row(win, y, &lbl_display, &res_buf);
+    y = stat_row(win, y, &lbl_count,   &count_buf);
+}
+
+fn draw_list(win) {
+    let w = ui_win_w(win);
+    # Column header strip.
+    ui_rect_at(win, 0, LIST_Y - 18, w, 18, UI_COL_SURFACE_2);
+    ui_text_at(win, NAME_X,   LIST_Y - 16, &col_name,   UI_COL_TEXT, UI_COL_SURFACE_2);
+    ui_text_at(win, STATUS_X, LIST_Y - 16, &col_status, UI_COL_TEXT, UI_COL_SURFACE_2);
+
+    let sel = lw(&tm_sel);
+    let i = 0;
+    while i < PROC_COUNT {
+        let y = LIST_Y + i * ROW_H;
+        let bg = UI_COL_BG_BASE;
+        let fg = UI_COL_TEXT;
+        if i == sel {
+            bg = C_ACCENT;
+            fg = UI_COL_TEXT_INVERT;
+        }
+        ui_rect_at(win, 0, y, w, ROW_H, bg);
+        ui_rect_at(win, 0, y + ROW_H - 1, w, 1, UI_COL_BORDER);
+        ui_text_at(win, NAME_X,   y + 6, proc_name(i), fg, bg);
+        ui_text_at(win, STATUS_X, y + 6, &st_ready,    fg, bg);
+        i = i + 1;
+    }
+}
+
+fn draw(win) {
+    ui_fill_client_below(win, 0, UI_COL_BG_BASE);
+    draw_header(win);
+    draw_stats(win);
+    draw_list(win);
+    ui_status_bar(win, &status_text, UI_COL_SURFACE_2);
+}
+
+# ------------------------------------------------------------------
+# input
+# ------------------------------------------------------------------
+fn row_at(y) {
+    if y < LIST_Y { return -1; }
+    let r = (y - LIST_Y) / ROW_H;
+    if r >= PROC_COUNT { return -1; }
+    return r;
+}
+
+fn click(win, x, y) {
+    let r = row_at(y);
+    if r < 0 { return; }
+    sw(&tm_sel, r);
+    syscall(SYS_APP_LAUNCH, proc_appid(r));
+}
+
+fn key(win, k) {
+    let sc = k & 0xFF;
+    let sel = lw(&tm_sel);
+    # Up arrow.
+    if sc == 0xC8 {
+        if sel > 0 { sw(&tm_sel, sel - 1); }
+        return;
+    }
+    # Down arrow.
+    if sc == 0xD0 {
+        if sel < PROC_COUNT - 1 { sw(&tm_sel, sel + 1); }
+        return;
+    }
+    # Enter launches the selected process.
+    if sc == 0x1C {
+        syscall(SYS_APP_LAUNCH, proc_appid(sel));
+        return;
+    }
+}

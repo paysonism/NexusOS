@@ -61,6 +61,13 @@ if (Test-Path $WallpaperTool) {
     if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED wallpaper string gen' -ForegroundColor Red; exit 1 }
 }
 
+# 0c. Generate boot animation -> build/BOOTANIM.NBA (raw BGRA frames + header).
+$BootAnimTool = Join-Path $Root 'tools\gen_boot_anim.py'
+if (Test-Path $BootAnimTool) {
+    & python $BootAnimTool
+    if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED boot anim gen' -ForegroundColor Red; exit 1 }
+}
+
 # 1. Assemble UEFI Loader -> BOOTX64.EFI
 Write-Host '[1/2] Assembling UEFI Loader...' -ForegroundColor Yellow
 $ErrorActionPreference = 'Continue'
@@ -103,8 +110,9 @@ $dataImgPath = Join-Path $BUILD_DIR 'data.img'
 $targetSize = 10 * 1024 * 1024   # 10MB
 $imgBytes = New-Object byte[] $targetSize
 
-# FAT16 partition starts at sector 320 (same as BIOS layout)
-$fatPartStart = 320 * 512
+# FAT16 partition starts where the kernel's FAT16_PART_LBA points. Keep this
+# aligned with src/include/constants.inc: KERNEL_START_SECTOR + KERNEL_SECTORS.
+$fatPartStart = (64 + 4096) * 512
 $fatPartSectors = [int](($targetSize - $fatPartStart) / 512)
 
 $bytesPerSect = 512
@@ -251,6 +259,16 @@ for ($y = 0; $y -lt $bmpHeight; $y++) {
 $logoCluster = Write-FileData $bmpData
 Write-DirEntry ($rootDirOff + $entryIdx * 32) "LOGO" "BMP" 0x20 $logoCluster $bmpData.Length
 $entryIdx++
+
+# Boot animation file
+$bootAnimPath = Join-Path $BUILD_DIR 'BOOTANIM.NBA'
+if (Test-Path $bootAnimPath) {
+    $bootAnimData = [System.IO.File]::ReadAllBytes($bootAnimPath)
+    $bootAnimCluster = Write-FileData $bootAnimData
+    Write-DirEntry ($rootDirOff + $entryIdx * 32) "BOOTANIM" "NBA" 0x20 $bootAnimCluster $bootAnimData.Length
+    $entryIdx++
+    Write-Host "  + BOOTANIM.NBA ($($bootAnimData.Length) bytes)" -ForegroundColor DarkGray
+}
 
 # Copy FAT1 to FAT2
 [Array]::Copy($imgBytes, $fat1Off, $imgBytes, $fat2Off, $fatSizeSects * $bytesPerSect)

@@ -53,6 +53,12 @@ APPS_BLOB_ADDR        equ 0x2E00000              ; APP_DATA_ADDR + 8 slots
 APPS_BLOB_MAX_SIZE    equ 0x100000
 L3_SYSCALL_STACK_ADDR equ 0x2F00000
 
+; App arena 4KB page tables. The arena is split into 4KB pages (one PT per
+; covered PDE) so the kernel can mark only the running slot's pages USER and
+; enforce W^X per page. 4 PTs cover the 8 MiB arena (0x75000..0x78FFF).
+APP_ARENA_PT_BASE     equ 0x75000
+ARENA_SLOT_PAGES      equ (APP_SLOT_SIZE / 0x1000) ; 256 4KB pages per slot
+
 GUI_LLC_ARENA_START equ BACK_BUFFER_ADDR
 GUI_LLC_ARENA_END   equ APP_DATA_ADDR
 

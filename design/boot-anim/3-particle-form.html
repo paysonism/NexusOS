@@ -1,0 +1,67 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>3 - Particle Form</title>
+<style>
+  html,body{margin:0;height:100%;background:#03040a;color:#cfd6e4;font-family:system-ui,sans-serif;overflow:hidden}
+  .wrap{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px}
+  canvas{display:block}
+  .label{font-size:13px;letter-spacing:.3em;color:#5f6b82;text-transform:uppercase}
+  button{margin-top:18px;background:#11151f;border:1px solid #2a3245;color:#9fb0d0;padding:8px 16px;border-radius:6px;cursor:pointer;letter-spacing:.15em;font-size:11px}
+  button:hover{background:#1a2030}
+</style></head>
+<body><div class="wrap">
+<canvas id="c" width="640" height="360"></canvas>
+<div class="label">Concept 3 &mdash; Particle Form</div>
+<button onclick="init()">Replay</button>
+</div>
+<script>
+const c=document.getElementById('c'),x=c.getContext('2d');
+const W=c.width,H=c.height,CX=W/2,CY=H/2;
+let t0,particles=[];
+function sampleN(){
+  // render N to offscreen and sample pixels
+  const o=document.createElement('canvas');o.width=160;o.height=160;
+  const k=o.getContext('2d');
+  k.fillStyle='#fff';k.font='900 170px system-ui,sans-serif';k.textBaseline='middle';k.textAlign='center';
+  k.fillText('N',80,86);
+  const d=k.getImageData(0,0,160,160).data;
+  const pts=[];
+  for(let y=0;y<160;y+=3)for(let xx=0;xx<160;xx+=3){
+    if(d[(y*160+xx)*4+3]>128)pts.push([xx-80,y-80]);
+  }
+  return pts;
+}
+function init(){
+  t0=performance.now();
+  const pts=sampleN();
+  particles=pts.map(p=>{
+    const a=Math.random()*Math.PI*2,d=300+Math.random()*200;
+    return{tx:p[0],ty:p[1],sx:Math.cos(a)*d,sy:Math.sin(a)*d,delay:Math.random()*0.4,hue:200+Math.random()*40};
+  });
+}
+function frame(now){
+  const t=(now-t0)/1000;
+  x.fillStyle='rgba(3,4,10,0.35)';x.fillRect(0,0,W,H);
+  for(const p of particles){
+    const u=Math.max(0,Math.min(1,(t-p.delay)/1.0));
+    const e=1-Math.pow(1-u,3);
+    const px=CX+p.sx*(1-e)+p.tx*e;
+    const py=CY+p.sy*(1-e)+p.ty*e;
+    const a=0.2+0.8*e;
+    x.fillStyle=`hsla(${p.hue},90%,70%,${a})`;
+    x.fillRect(px,py,2,2);
+  }
+  // settle glow
+  if(t>1.1){
+    const a=Math.min(1,(t-1.1)/0.4);
+    x.fillStyle=`rgba(120,200,255,${0.06*a})`;
+    x.beginPath();x.arc(CX,CY,90,0,Math.PI*2);x.fill();
+  }
+  const wa=Math.max(0,Math.min(1,(t-1.4)/0.6));
+  x.globalAlpha=wa;
+  x.fillStyle='#e6f0ff';x.font='600 22px system-ui,sans-serif';x.textAlign='center';
+  x.fillText('NexusOS',CX,CY+110);
+  x.globalAlpha=1;
+  requestAnimationFrame(frame);
+}
+init();requestAnimationFrame(frame);
+</script></body></html>

@@ -25,11 +25,22 @@
 ;   * Take exactly one argument in RDI and return a scalar result in RAX.
 ;   * Follow the SysV ABI: preserve RBX, RBP, R12-R15 (the worker loop relies
 ;     on this to keep its bookkeeping registers across the call).
-;   * NOT touch BSP-only mutable state without its own locking. SAFE inputs:
-;     read-only data, a scratch buffer owned solely by this job, the job's own
-;     output buffer. UNSAFE: the shared framebuffer, the kernel heap, driver
-;     state - touching those concurrently corrupts the system.
-;   * Do bounded work. APs receive no timer IRQs, so a job runs to completion.
+;   * Do bounded work. APs receive no timer IRQs, so a job runs to completion;
+;     a job that loops forever permanently consumes one AP - but never the BSP,
+;     so the GUI keeps running regardless. Job PRIORITY (WQ_PRIO_* below) exists
+;     so a flood of cheap app jobs cannot starve system-critical jobs: workers
+;     always claim the highest-priority PENDING job first.
+;
+; SHARED STATE - a job MAY touch state shared with the BSP, provided every
+; accessor (the BSP side included) holds the matching lock. This replaces the
+; old "jobs must be self-contained" rule, which was an un-enforceable honour
+; system. Use wq_lock / wq_unlock with one of the named locks:
+;     wq_alloc_lock   - the physical page allocator (page_alloc / page_free).
+;     wq_fb_lock      - the shared framebuffer.
+;     wq_driver_lock  - shared driver state.
+; A lock only protects if BOTH sides take it; page_alloc / page_free already
+; do. Lock-free, self-contained jobs remain the simplest option - a job that
+; only reads read-only data and writes its own output buffer needs no lock.
 ;
 ; STATUS LIFECYCLE (status word at offset 0 of every slot):
 ;       FREE -> BUILDING -> PENDING -> RUNNING -> DONE -> FREE
@@ -40,8 +51,9 @@
 ; BSP API
 ;   workqueue_init                  - zero the queue, allow workers to run.
 ;   workqueue_submit(rdi=func,       - queue a job. Returns a handle (0..N-1)
-;                    rsi=arg) -> rax   in RAX, or WQ_INVALID (-1) if full.
-;                                     If no AP is available the job runs
+;                    rsi=arg,          in RAX, or WQ_INVALID (-1) if full.
+;                    rdx=priority)     priority is WQ_PRIO_LOW/NORMAL/HIGH.
+;                          -> rax     If no AP is available the job runs
 ;                                     inline so callers stay correct on
 ;                                     single-core builds.
 ;   workqueue_done(rdi=handle) -> rax - 1 if the job finished, else 0.
@@ -49,9 +61,16 @@
 ;   workqueue_wait(rdi=handle) -> rax - spin until done, return result + free.
 ;   workqueue_selftest               - submit known jobs, verify, print "WQ:".
 ;
+; SHARED-STATE LOCK API
+;   wq_lock(rdi=lock word ptr)        - spin until the lock is acquired.
+;   wq_unlock(rdi=lock word ptr)      - release a lock held by this core.
+;     Both preserve every register except RDI's pointee. Named locks live in
+;     .data: wq_alloc_lock, wq_fb_lock, wq_driver_lock.
+;
 ; TYPICAL ASYNC USE (keeps the render loop alive):
 ;       mov rdi, my_heavy_func
 ;       mov rsi, my_arg
+;       mov rdx, WQ_PRIO_NORMAL
 ;       call workqueue_submit
 ;       mov [job], eax            ; stash handle, keep rendering frames...
 ;   ... later, once per frame ...
@@ -78,6 +97,7 @@ WQ_OFF_FUNC    equ 8                ; dq  - job entry point
 WQ_OFF_ARG     equ 16               ; dq  - single argument, passed in RDI
 WQ_OFF_RESULT  equ 24               ; dq  - RAX returned by the job
 WQ_OFF_RUNS    equ 32               ; dd  - diagnostics: 1 once a worker ran it
+WQ_OFF_PRIO    equ 36               ; dd  - job priority (WQ_PRIO_* below)
 WQ_JOB_SIZE    equ 64
 WQ_MAX_JOBS    equ 32
 
@@ -87,6 +107,11 @@ WQ_PENDING     equ 1                ; published, waiting for a worker
 WQ_RUNNING     equ 2                ; a core is executing it
 WQ_DONE        equ 3                ; finished, result is valid
 WQ_BUILDING    equ 4                ; BSP is filling in func/arg (not yet visible)
+
+; --- job priority values (higher number = claimed first by workers) ---
+WQ_PRIO_LOW    equ 0                ; background app work; may be starved
+WQ_PRIO_NORMAL equ 1                ; default
+WQ_PRIO_HIGH   equ 2                ; system-critical; never starved by apps
 
 WQ_INVALID     equ -1               ; workqueue_submit return value when full
 
@@ -117,18 +142,20 @@ FN_BEGIN workqueue_init, 0, 0, FN_RET_VOID
     ret
 
 ; ----------------------------------------------------------------------------
-; workqueue_submit(RDI = func, RSI = arg) -> RAX = handle, or WQ_INVALID.
-; Finds a FREE slot, fills it in, and publishes it as PENDING. If no AP is
-; alive the job is executed inline so the result is ready on return.
+; workqueue_submit(RDI = func, RSI = arg, RDX = priority) -> RAX = handle,
+; or WQ_INVALID. Finds a FREE slot, fills it in, and publishes it as PENDING.
+; If no AP is alive the job is executed inline so the result is ready on return.
 ; ----------------------------------------------------------------------------
-FN_BEGIN workqueue_submit, 2, 0, FN_RET_HANDLE
+FN_BEGIN workqueue_submit, 3, 0, FN_RET_HANDLE
     push rbx
     push rcx
     push rdx
     push rsi
     push rdi
     push r8
+    push r9
     mov r8, rdi                     ; r8 = func pointer
+    mov r9d, edx                    ; r9d = priority (survives the cmpxchg)
     xor ecx, ecx                    ; ecx = candidate slot index
 .scan:
     cmp ecx, WQ_MAX_JOBS
@@ -148,6 +175,7 @@ FN_BEGIN workqueue_submit, 2, 0, FN_RET_HANDLE
     mov [rbx + WQ_OFF_ARG], rsi
     mov qword [rbx + WQ_OFF_RESULT], 0
     mov dword [rbx + WQ_OFF_RUNS], 0
+    mov [rbx + WQ_OFF_PRIO], r9d
     ; smp_alive_cores counts the BSP, so a value >= 2 means at least one AP is
     ; available to run the job. Otherwise execute it inline right here.
     mov eax, [smp_alive_cores]
@@ -176,6 +204,7 @@ FN_BEGIN workqueue_submit, 2, 0, FN_RET_HANDLE
 .full:
     mov eax, WQ_INVALID
 .ret:
+    pop r9
     pop r8
     pop rdi
     pop rsi
@@ -245,6 +274,41 @@ FN_BEGIN workqueue_wait, 1, 0, FN_RET_SCALAR
     ret
 
 ; ----------------------------------------------------------------------------
+; wq_lock(RDI = pointer to a lock word) - acquire a spinlock.
+; Test-and-test-and-set: spin reading the word (cheap, cache-shared) and only
+; attempt the bus-locked cmpxchg once it looks free. Preserves every register;
+; the only side effect is the lock word becoming 1.
+; ----------------------------------------------------------------------------
+global wq_lock
+wq_lock:
+    push rax
+    push rcx
+.try:
+    xor eax, eax                    ; expect the lock to be 0 (free)
+    mov ecx, 1                      ; write 1 (held)
+    lock cmpxchg [rdi], ecx
+    je .acquired
+.spin:
+    pause                           ; another core holds it - back off
+    cmp dword [rdi], 0
+    jne .spin                       ; still held, do not hammer the bus lock
+    jmp .try
+.acquired:
+    pop rcx
+    pop rax
+    ret
+
+; ----------------------------------------------------------------------------
+; wq_unlock(RDI = pointer to a lock word) - release a spinlock.
+; A plain store is enough: x86 store ordering makes every write the holder did
+; inside the critical section visible before the lock word reads back as 0.
+; ----------------------------------------------------------------------------
+global wq_unlock
+wq_unlock:
+    mov dword [rdi], 0
+    ret
+
+; ----------------------------------------------------------------------------
 ; smp_worker_loop - the permanent home of every AP.
 ; Entry: RDI = pointer to this core's SMP_CORE_STATE record (offset 16 of that
 ; record is a liveness heartbeat). Reached from the AP trampoline in apic.asm
@@ -252,7 +316,8 @@ FN_BEGIN workqueue_wait, 1, 0, FN_RET_SCALAR
 ;
 ; Bookkeeping registers across the job call: R12 (slot index) and R14 (core
 ; state ptr) are callee-saved, so a well-behaved job preserves them; R13 (slot
-; ptr) is recomputed after the call regardless.
+; ptr) is recomputed after the call regardless. EBX/R15 are only used during
+; the pre-claim sweep, never across the job call.
 ; ----------------------------------------------------------------------------
 global smp_worker_loop
 smp_worker_loop:
@@ -265,19 +330,42 @@ smp_worker_loop:
     pause
     jmp .wait_ready
 .scan:
-    xor r12d, r12d                  ; r12 = slot index
-.next:
     inc qword [r14 + 16]            ; liveness heartbeat
+    ; --- sweep every slot, remember the highest-priority PENDING one ---
+    ; Priority is written while the slot is BUILDING (before its status store
+    ; to PENDING), so x86 store ordering guarantees a worker that sees PENDING
+    ; also sees the correct priority.
+    xor r12d, r12d                  ; r12 = sweep index
+    mov ebx, -1                     ; ebx = best slot index (-1 = none found)
+    mov r15d, -1                    ; r15d = best priority seen so far
+.find:
     mov eax, r12d
     imul eax, WQ_JOB_SIZE
     mov r13, workqueue_jobs
     add r13, rax                    ; r13 = &slot[r12]
-    ; Atomically claim a PENDING job: PENDING -> RUNNING. If another core won
-    ; it (or it is not pending) cmpxchg leaves ZF clear.
+    cmp dword [r13 + WQ_OFF_STATUS], WQ_PENDING
+    jne .find_next
+    mov edx, [r13 + WQ_OFF_PRIO]
+    cmp edx, r15d
+    jle .find_next                  ; not strictly higher - keep current best
+    mov r15d, edx
+    mov ebx, r12d
+.find_next:
+    inc r12d
+    cmp r12d, WQ_MAX_JOBS
+    jb .find
+    cmp ebx, -1
+    je .idle                        ; nothing claimable this sweep
+    ; --- try to claim the chosen slot: PENDING -> RUNNING ---
+    mov r12d, ebx                   ; r12 = chosen slot index
+    mov eax, r12d
+    imul eax, WQ_JOB_SIZE
+    mov r13, workqueue_jobs
+    add r13, rax                    ; r13 = &slot[r12]
     mov eax, WQ_PENDING
     mov ecx, WQ_RUNNING
     lock cmpxchg [r13 + WQ_OFF_STATUS], ecx
-    jne .advance
+    jne .scan                       ; another core won it - re-sweep
     ; --- this core owns slot r12 ---
     mov dword [r14 + 0], 2              ; SMP state: RUNNING/busy
     mov rax, [r13 + WQ_OFF_FUNC]
@@ -293,10 +381,8 @@ smp_worker_loop:
     ; Status store LAST: the BSP must never see DONE before the result.
     mov dword [r13 + WQ_OFF_STATUS], WQ_DONE
     mov dword [r14 + 0], 3              ; SMP state: PARKED/available
-.advance:
-    inc r12d
-    cmp r12d, WQ_MAX_JOBS
-    jb .next
+    jmp .scan
+.idle:
     pause                           ; idle hint - nothing claimable this sweep
     jmp .scan
 
@@ -325,6 +411,7 @@ FN_BEGIN workqueue_selftest, 0, 0, FN_RET_VOID
     jae .wait_loop
     mov rdi, wq_test_job
     mov esi, r12d                   ; arg = x
+    mov edx, WQ_PRIO_NORMAL         ; priority
     call workqueue_submit
     mov [wq_test_handles + r12*4], eax
     inc r12d
@@ -368,6 +455,19 @@ align 64
 workqueue_ready:  dd 0              ; 0 until workqueue_init; gates the workers
 wq_test_handles:  times WQ_SELFTEST_N dd 0
 wq_msg:           db 'WQ:', 0
+
+; Named shared-state locks. Each sits on its own 64-byte cache line so cores
+; contending one lock do not ping-pong the line of an unrelated lock. 0 = free,
+; 1 = held. See the SHARED STATE section of the header for the contract.
+align 64
+global wq_alloc_lock
+wq_alloc_lock:    dd 0              ; guards page_alloc / page_free
+align 64
+global wq_fb_lock
+wq_fb_lock:       dd 0              ; guards the shared framebuffer
+align 64
+global wq_driver_lock
+wq_driver_lock:   dd 0              ; guards shared driver state
 
 ; The job array. 64-byte aligned and 64 bytes per slot so each slot is its own
 ; cache line - cores working different slots never share a line.

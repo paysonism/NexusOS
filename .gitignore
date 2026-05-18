@@ -2,6 +2,9 @@
 .claude/worktrees/
 .claude/worktrees/agent-*/
 
+# Build output and artifacts (binaries, disk images, screenshots, logs)
+build/
+
 # Python caches
 __pycache__/
 *.py[cod]

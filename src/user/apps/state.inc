@@ -1,4 +1,8 @@
-section .data
+; All per-instance app state must live in .text (between app_blob_start and
+; app_blob_end) so that slot-relative addressing `slot_base + (sym - app_blob_start)`
+; produces an offset inside the 1 MB slot. Symbols left in .data end up past
+; app_blob_end and every slot-relative access points to garbage.
+section .text
 
 ; --- Window titles ---
 szExplorerTitle db "File Explorer", 0
@@ -6,6 +10,7 @@ szTermTitle     db "Terminal", 0
 szNotepadTitle  db "Notepad", 0
 szSettingsTitle db "Settings", 0
 szAboutTitle    db "About NexusOS", 0
+szTaskMgrTitle  db "Task Manager", 0
 
 ; --- Explorer strings ---
 szPathRoot      db "C:\", 0
@@ -283,7 +288,6 @@ szCmdMouse db "mouse", 0
 szCmdTouchpad db "touchpad", 0
 szCmdIdebug db "idebug", 0
 
-section .text
 align 8
 term_input:        times 64 db 0
 notepad_buf:       times NP_BUF_SIZE db 0
@@ -298,4 +302,3 @@ np_saveas_buf:     times 24 db 0
 np_saveas_83:      times 12 db 0
 np_saveloc_buf:    times 24 db 0
 np_saveloc_83:     times 12 db 0
-section .text

@@ -19,6 +19,7 @@ WIN_OFF_FLAGS       equ 40
 WIN_OFF_KEYFN       equ 120
 WIN_OFF_CLICKFN     equ 128
 WIN_OFF_APPDATA     equ 136
+WIN_OFF_DRAGFN      equ 144
 DIR_ENTRY_SIZE      equ 32
 %ifdef NEXUS_CACHE32_MAX
 FAT16_ROOT_CACHE    equ 0x1A11000
@@ -64,6 +65,7 @@ extern display_stretch
 extern fb_native_width
 extern fb_native_height
 extern desktop_bg_theme
+extern wallpaper_selected
 extern wallpaper_cache_valid
 extern render_rect
 extern render_text
@@ -79,6 +81,12 @@ extern app_blob_end_v
 extern l3_app_arena_base_v
 extern l3_app_arena_size_v
 extern trace_syscall
+extern last_fps
+extern free_page_count
+extern boot_free_pages
+extern cpu_tsc_per_tick
+extern cpuid_logical_count
+extern bsp_util
 extern xml_parse
 extern xml_root
 extern xml_tag
@@ -348,13 +356,9 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 
 .sc_gui_rect:
     ; rdi=x, rsi=y, rdx=w, r10=h, r8=color.  User syscalls must not feed
-    ; negative or high-half values into the renderer's clipping arithmetic.
-    mov rax, rdi
-    or  rax, rsi
-    or  rax, rdx
-    or  rax, r10
-    shr rax, 32
-    jnz .sc_gui_rect_reject
+    ; out-of-range low 32-bit values into the renderer's clipping arithmetic.
+    ; NexusHL callers sometimes leave stale high halves in argument registers;
+    ; the renderer consumes edi/esi/edx/ecx, so validate those exact values.
     cmp edi, [scr_width]
     ja .sc_gui_rect_reject
     cmp esi, [scr_height]
@@ -373,11 +377,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jmp .done
 
 .sc_gui_text:
-    ; rdi=x, rsi=y, rdx=cstring, r10=color
-    mov rax, rdi
-    or  rax, rsi
-    shr rax, 32
-    jnz .sc_gui_text_reject
+    ; rdi=x, rsi=y, rdx=cstring, r10=fg_color, r8=bg_color
     cmp edi, [scr_width]
     ja .sc_gui_text_reject
     cmp esi, [scr_height]
@@ -392,6 +392,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov rdx, [rsp + ALL_RDX]
     mov r10, [rsp + ALL_R10]
     mov rcx, r10
+    mov r8,  [rsp + ALL_R8]
     call render_text
     xor eax, eax
     mov [rsp + ALL_RAX], rax
@@ -773,6 +774,55 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov [rsp + ALL_RAX], rax
     jmp .done
 
+.sc_sysinfo:
+    ; rdi = selector, rsi = arg (e.g. core index). Returns a scalar in rax.
+    xor eax, eax
+    cmp rdi, 0
+    je .si_fps
+    cmp rdi, 1
+    je .si_ram_free
+    cmp rdi, 2
+    je .si_ram_max
+    cmp rdi, 3
+    je .si_cpu_mhz
+    cmp rdi, 4
+    je .si_cores
+    cmp rdi, 5
+    je .si_core_util
+    cmp rdi, 6
+    je .si_cpu_mhz          ; per-core speed: uniform clock, reuse MHz path
+    jmp .si_store
+.si_fps:
+    mov eax, [last_fps]
+    jmp .si_store
+.si_ram_free:
+    mov rax, [free_page_count]
+    shl rax, 2              ; 4 KB pages -> KB
+    jmp .si_store
+.si_ram_max:
+    mov rax, [boot_free_pages]
+    shl rax, 2
+    jmp .si_store
+.si_cpu_mhz:
+    mov rax, [cpu_tsc_per_tick]
+    xor rdx, rdx
+    mov rcx, 10000          ; tsc/tick -> MHz (Hz = val*100)
+    test rcx, rcx
+    div rcx
+    jmp .si_store
+.si_cores:
+    mov eax, [cpuid_logical_count]
+    jmp .si_store
+.si_core_util:
+    ; Core 0 (BSP) runs the GUI; report its measured utilization. The work
+    ; queue APs are parked when idle, so they report 0.
+    test rsi, rsi
+    jnz .si_store
+    mov eax, [bsp_util]
+.si_store:
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
 .sc_desktop_bg:
     movzx eax, byte [desktop_bg_theme]
     mov [rsp + ALL_RAX], rax
@@ -785,6 +835,11 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     cmp edi, 2
     ja .sc_desktop_set_bg_reject
     mov [desktop_bg_theme], dil
+    ; The user has now picked a wallpaper in Settings: enable wallpaper drawing
+    ; and drop the cache so wm_draw_desktop_background rasterizes this theme on
+    ; the next frame. This is the only path that triggers the SVG renderer.
+    mov byte [wallpaper_selected], 1
+    mov byte [wallpaper_cache_valid], 0
     xor eax, eax
     mov [rsp + ALL_RAX], rax
     jmp .done
@@ -1330,12 +1385,20 @@ sc_dir_entry_handle_to_kernel:
     ja .deht_from_slot
     ret
 .deht_from_slot:
+    ; The per-slot handle encodes the *valid-entry* index (the same index that
+    ; SYS_FS_ENTRY took), not a raw byte offset into the root cache. Volume-
+    ; label, LFN and deleted entries are skipped by fat16_get_entry, so raw
+    ; offset != index*32 whenever any are present (data.img begins with a
+    ; volume-label entry). Re-resolve through fat16_get_entry so the skip
+    ; logic matches and we land on the real directory entry.
     mov rax, rdi
     sub rax, [rel l3_app_arena_base_v]
-    mov edx, eax
-    and edx, APP_SLOT_SIZE - 1
-    sub edx, L3_DIR_ENTRY_CACHE_OFF
-    lea rdi, [FAT16_ROOT_CACHE + rdx]
+    and eax, APP_SLOT_SIZE - 1
+    sub eax, L3_DIR_ENTRY_CACHE_OFF
+    shr eax, 5                          ; eax = valid-entry index
+    mov edi, eax
+    call fat16_get_entry                ; rax = real root-cache entry ptr
+    mov rdi, rax
     ret
 
 %define SC_KIND1(a) (a)
@@ -1358,7 +1421,7 @@ syscall_table:
     SYSCALL_ENTRY syscall_entry.sc_print,            1, SC_KIND1(FN_KIND_CSTRING)
     SYSCALL_ENTRY syscall_entry.sc_exit,             0, 0
     SYSCALL_ENTRY syscall_entry.sc_gui_rect,         5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR)
-    SYSCALL_ENTRY syscall_entry.sc_gui_text,         4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_CSTRING, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_gui_text,         5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_CSTRING, FN_KIND_SCALAR, FN_KIND_SCALAR)
     SYSCALL_ENTRY syscall_entry.sc_fs_count,         0, 0
     SYSCALL_ENTRY syscall_entry.sc_fs_entry,         1, SC_KIND1(FN_KIND_SCALAR)
     SYSCALL_ENTRY syscall_entry.sc_fs_chdir,         1, SC_KIND1(FN_KIND_SCALAR)
@@ -1410,6 +1473,7 @@ syscall_table:
     SYSCALL_ENTRY syscall_entry.sc_blend_span_argb,  4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR)
     SYSCALL_ENTRY syscall_entry.sc_blend_span_argb_screen, 4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR)
     SYSCALL_ENTRY syscall_entry.sc_blend_span_argb_multiply, 4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR)
+    SYSCALL_ENTRY syscall_entry.sc_sysinfo,          2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR)
 syscall_table_end:
 syscall_table_count equ (syscall_table_end - syscall_table) / SYSCALL_ENTRY_SIZE
 

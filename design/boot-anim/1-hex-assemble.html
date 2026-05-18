@@ -1,0 +1,80 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>1 - Hex Assemble</title>
+<style>
+  html,body{margin:0;height:100%;background:#06080d;color:#cfd6e4;font-family:system-ui,sans-serif;overflow:hidden}
+  .wrap{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px}
+  canvas{display:block}
+  .label{font-size:13px;letter-spacing:.3em;color:#5f6b82;text-transform:uppercase}
+  button{margin-top:18px;background:#11151f;border:1px solid #2a3245;color:#9fb0d0;padding:8px 16px;border-radius:6px;cursor:pointer;letter-spacing:.15em;font-size:11px}
+  button:hover{background:#1a2030}
+</style></head>
+<body><div class="wrap">
+<canvas id="c" width="640" height="360"></canvas>
+<div class="label">Concept 1 &mdash; Hex Assemble</div>
+<button onclick="start()">Replay</button>
+</div>
+<script>
+const c=document.getElementById('c'),x=c.getContext('2d');
+const W=c.width,H=c.height,CX=W/2,CY=H/2;
+let t0=performance.now();
+// Hex cluster forming an N
+const hexes=[];
+const COLS=7,ROWS=9,R=14;
+// Bitmap of N (cols x rows): 1 = part of N
+const N=[
+  "1000001",
+  "1100001",
+  "1010001",
+  "1011001",
+  "1001101",
+  "1000111",
+  "1000011",
+  "1000001",
+  "1000001",
+];
+for(let r=0;r<ROWS;r++)for(let q=0;q<COLS;q++){
+  if(N[r][q]!=='1')continue;
+  const px=(q-COLS/2+0.5)*R*1.732;
+  const py=(r-ROWS/2+0.5)*R*1.55 + (q%2?R*0.77:0);
+  // fly-in start point
+  const ang=Math.random()*Math.PI*2, dist=420+Math.random()*180;
+  hexes.push({tx:px,ty:py,sx:Math.cos(ang)*dist,sy:Math.sin(ang)*dist,d:Math.random()*0.5});
+}
+function hex(cx,cy,r,fill,stroke){
+  x.beginPath();
+  for(let i=0;i<6;i++){const a=Math.PI/3*i-Math.PI/2;x[i?'lineTo':'moveTo'](cx+Math.cos(a)*r,cy+Math.sin(a)*r);}
+  x.closePath();
+  if(fill){x.fillStyle=fill;x.fill();}
+  if(stroke){x.strokeStyle=stroke;x.lineWidth=1.2;x.stroke();}
+}
+function frame(now){
+  const t=(now-t0)/1000;
+  // bg gradient
+  const g=x.createRadialGradient(CX,CY,0,CX,CY,W*0.6);
+  g.addColorStop(0,'#0d1422');g.addColorStop(1,'#04060b');
+  x.fillStyle=g;x.fillRect(0,0,W,H);
+  // ring pulse
+  const rp=(t%2)/2;
+  x.strokeStyle=`rgba(80,160,255,${0.18*(1-rp)})`;x.lineWidth=2;
+  x.beginPath();x.arc(CX,CY,60+rp*180,0,Math.PI*2);x.stroke();
+  // hexes
+  for(const h of hexes){
+    const u=Math.max(0,Math.min(1,(t-h.d)/0.9));
+    const e=1-Math.pow(1-u,3);
+    const px=CX+h.sx*(1-e)+h.tx*e;
+    const py=CY+h.sy*(1-e)+h.ty*e;
+    const glow=Math.max(0,1-Math.abs(t-h.d-0.9)/0.4);
+    hex(px,py,R*0.9,`rgba(${60+glow*120},${140+glow*80},${255},${0.15+0.85*e})`,`rgba(140,200,255,${0.6*e})`);
+  }
+  // wordmark
+  const wa=Math.max(0,Math.min(1,(t-1.4)/0.6));
+  x.globalAlpha=wa;
+  x.fillStyle='#dbe7ff';
+  x.font='600 22px system-ui,sans-serif';x.textAlign='center';
+  x.fillText('NexusOS',CX,CY+R*ROWS*0.85+34);
+  x.globalAlpha=1;
+  requestAnimationFrame(frame);
+}
+function start(){t0=performance.now();}
+requestAnimationFrame(frame);
+</script></body></html>

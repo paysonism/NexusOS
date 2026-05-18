@@ -860,10 +860,12 @@ setup_paging:
     push r12
     push r13
 
-    ; Clear 5 pages (PML4 + PDPT0 + PDPT1 + PD0 + PT0)
+    ; Clear 9 pages: PML4 + PDPT0 + PDPT1 + PD0 + PT0 + 4 app-arena PTs
+    ; (0x70000..0x78FFF). The 4 arena PTs at UEFI_APP_PT_BASE give the app
+    ; arena 4KB granularity for per-slot USER toggling and W^X.
     mov rdi, PT_BASE
     xor eax, eax
-    mov ecx, 5 * 4096 / 4
+    mov ecx, 9 * 4096 / 4
     rep stosd
 
     ; PML4[0] -> PDPT0 at 0x71000 (covers 0-512 GB).
@@ -895,12 +897,15 @@ setup_paging:
     ; PT0[0..511]: 4KB identity pages over 0..2MB.
     ;   pages [KTEXT_START..KTEXT_END)  : executable (kernel code)
     ;   all other pages                  : NX + writable (data/stack/etc)
+    ; All supervisor-only: ring 3 never accesses anything below 2MB. Marking
+    ; these USER would expose the page tables (PT_BASE), GDT, IDT pointer and
+    ; kernel text to ring-3 reads/writes.
     mov rdi, UEFI_PT0_BASE
     xor ebx, ebx                    ; ebx = PTE index
     xor eax, eax                    ; eax = physical base
 .loop_pt0:
     mov rdx, rax
-    or  edx, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_USER
+    or  edx, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE
     ; Trampoline at 0x8000 must stay executable: its final two instructions
     ; (mov rax,KERN_DEST / jmp rax) execute AFTER cr3 is reloaded with PT_BASE.
     cmp ebx, 8
@@ -940,8 +945,14 @@ setup_paging:
     jb .pd0_nx
     cmp rbx, r15
     jae .pd0_nx
-    ; App arena: 2MB large page, USER accessible, executable (no NX).
-    or  rdx, UEFI_PAGE_USER | UEFI_PAGE_LARGE
+    ; App arena: PDE points at a 4KB page table (not a 2MB large page) so the
+    ; kernel can toggle the USER bit per slot and enforce W^X per page.
+    ; PT for this PDE is at UEFI_APP_PT_BASE + (pde_index - r14) * 4KB.
+    mov rdx, rbx
+    sub rdx, r14
+    shl rdx, 12
+    add rdx, UEFI_APP_PT_BASE
+    or  rdx, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_USER
     jmp .pd0_write
 .pd0_nx:
     ; Keep the loaded kernel image executable after the first 2 MiB. The
@@ -960,6 +971,24 @@ setup_paging:
     inc ebx
     cmp ebx, 512
     jb .loop_pd0
+
+    ; Fill the app-arena 4KB page tables. The arena spans (r15-r14) PDEs,
+    ; each PDE backed by 512 4KB PTEs. Physical base = r14 << 21.
+    ; Every PTE starts Present|Writable|USER and executable; the kernel
+    ; tightens USER (slot isolation) and NX (W^X) at runtime per slot.
+    mov rdi, UEFI_APP_PT_BASE
+    mov rax, r14
+    shl rax, 21                     ; arena physical base
+    or  rax, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_USER
+    mov rcx, r15
+    sub rcx, r14                    ; arena PDE count
+    shl rcx, 9                      ; * 512 PTEs per PDE
+.loop_app_pt:
+    mov [rdi], rax
+    add rax, 0x1000
+    add rdi, 8
+    dec rcx
+    jnz .loop_app_pt
 
     ; PDPT1[0..511]: 1 GB identity pages starting at 512 GB, supervisor-only, NX.
     mov rdi, PT_BASE + 0x2000

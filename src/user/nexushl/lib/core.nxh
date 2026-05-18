@@ -32,6 +32,16 @@ const SYS_DESKTOP_BG     = 26
 const SYS_DESKTOP_SET_BG = 27
 const SYS_DISPLAY_NATIVE = 28
 const SYS_DISPLAY_SIZE   = 29
+const SYS_SYSINFO        = 55
+
+# SYS_SYSINFO selector ids — see sc_sysinfo in src/kernel/proc/syscall.asm.
+const SI_FPS         = 0
+const SI_RAM_FREE_KB = 1
+const SI_RAM_MAX_KB  = 2
+const SI_CPU_MHZ     = 3
+const SI_CORE_COUNT  = 4
+const SI_CORE_UTIL   = 5
+const SI_CORE_MHZ    = 6
 
 const DISPLAY_FLAG_VSYNC   = 1
 const DISPLAY_FLAG_FPS     = 2
@@ -55,6 +65,9 @@ const WIN_DRAWFN   = 112
 const WIN_KEYFN    = 120
 const WIN_CLICKFN  = 128
 const WIN_APPDATA  = 136
+# Optional fn(win, client_x, client_y). Set by the kernel-side launch
+# helper. Apps simply define `fn drag(...)` and the WM dispatches it.
+const WIN_DRAGFN   = 144
 
 # Key codes commonly needed in apps.
 const KEY_ESC  = 27
@@ -117,3 +130,12 @@ fn display_current_height() {
     let packed = syscall(SYS_DISPLAY_SIZE);
     return (packed >> 32) & 0xFFFFFFFF;
 }
+
+# --- Live system stats (SYS_SYSINFO) ---
+fn sys_fps()          { return syscall(SYS_SYSINFO, SI_FPS, 0); }
+fn sys_ram_free_kb()  { return syscall(SYS_SYSINFO, SI_RAM_FREE_KB, 0); }
+fn sys_ram_max_kb()   { return syscall(SYS_SYSINFO, SI_RAM_MAX_KB, 0); }
+fn sys_cpu_mhz()      { return syscall(SYS_SYSINFO, SI_CPU_MHZ, 0); }
+fn sys_core_count()   { return syscall(SYS_SYSINFO, SI_CORE_COUNT, 0); }
+fn sys_core_util(i)   { return syscall(SYS_SYSINFO, SI_CORE_UTIL, i); }
+fn sys_core_mhz(i)    { return syscall(SYS_SYSINFO, SI_CORE_MHZ, i); }

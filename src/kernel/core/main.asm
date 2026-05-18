@@ -66,7 +66,6 @@ extern render_text
 
 ; GUI
 extern wm_init
-extern wm_prewarm_wallpaper_caches
 extern render_init
 extern cursor_init
 extern wm_create_window
@@ -105,6 +104,7 @@ extern fat16_init
 ; SVG render-comparison probe
 extern wm_draw_desktop_background
 extern desktop_bg_theme
+extern wallpaper_selected
 extern wallpaper_cache_valid
 extern wallpaper_cache_active_addr
 extern scr_width
@@ -139,6 +139,7 @@ WIN_OFF_DRAWFN  equ 112
 WIN_OFF_KEYFN   equ 120
 WIN_OFF_CLICKFN equ 128
 WIN_OFF_APPDATA equ 136
+WIN_OFF_DRAGFN  equ 144         ; optional fn(win, client_x, client_y) fired while left button held
 
 ; FPS overlay region
 FPS_REGION_X    equ 8
@@ -178,7 +179,17 @@ FN_BEGIN debug_print, 0, 0, FN_RET_SCALAR
     mov rax, [bb_addr]
     test rax, rax
     jz .done
-    
+
+    ; Boot splash: keep the green console hidden during boot so the animation
+    ; owns the screen. Holding a key reveals the live console.
+    extern kb_repeat_scancode
+    cmp byte [gui_initialized], 1
+    je .console_draw
+    movzx ecx, byte [kb_repeat_scancode]
+    test ecx, ecx
+    jz .done
+.console_draw:
+
     mov edi, 0
     mov esi, [debug_y]
     mov edx, 800
@@ -351,6 +362,18 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     call scheduler_init
     call pic_init
     call pit_init
+
+    ; Enable interrupts early so the boot splash has a PIT tick to time frames
+    ; with and a keyboard IRQ to be skipped by.
+    sti
+    call fat16_init             ; needed to load BOOTANIM.NBA
+    call keyboard_init          ; needed so the splash can be skipped by a key
+
+    ; Boot splash: plays BOOTANIM.NBA before any hardware init prints to the
+    ; console. The green console stays hidden unless a key is held.
+    extern boot_anim_play
+    call boot_anim_play
+
     call acpi_init
     call apic_init
     call ioapic_init
@@ -359,7 +382,6 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     
     call usb_hid_init
     call i2c_hid_init
-    call fat16_init
 
     ; SMP work queue must be initialised BEFORE the APs are started: workers
     ; gate on workqueue_ready, so init first guarantees they see a clean queue.
@@ -371,21 +393,23 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     call smp_ap_startup
 %endif
     call workqueue_selftest
-    sti
     call perfdiag_init
-    call keyboard_init
     call mouse_init
 
     call render_init
     call cursor_init
     call wm_init
-    call wm_prewarm_wallpaper_caches
-    
+    ; Wallpapers are NOT prewarmed here: the desktop boots with a solid
+    ; background and only rasterizes an SVG wallpaper once one is selected in
+    ; Settings, so boot never stalls on the renderer.
+
     mov byte [gui_initialized], 1
 
+    call cpu_acct_init
     call render_frame
 
 .infinite:
+    call cpu_acct_idle_end
     cmp byte [gui_initialized], 1
     jne .skip_gui
     call render_frame
@@ -401,8 +425,85 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     jnz .drain_kb
     call serial_poll_command
 .skip_gui:
+    call cpu_acct_work_end
     hlt
     jmp .infinite
+
+; ============================================================================
+; CPU utilization accounting for the BSP (core 0).
+; The main loop alternates between a work phase (render + polling) and an
+; idle phase (hlt until the next interrupt). We timestamp each transition
+; with RDTSC, accumulate busy vs idle cycles, and every ~0.5s collapse the
+; window into a 0..100 percentage in [bsp_util]. Task Manager reads this
+; through SYS_SYSINFO.
+; ============================================================================
+cpu_acct_init:
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov [acct_last_mark], rax
+    mov [acct_work_start], rax
+    mov rax, [tick_count]
+    mov [acct_win_tick], rax
+    ret
+
+; Called at the top of each loop iteration: the time since the previous
+; mark was spent halted, so bank it as idle and start the work timer.
+cpu_acct_idle_end:
+    push rcx
+    push rdx
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov rcx, rax
+    sub rax, [acct_last_mark]
+    add [acct_idle_acc], rax
+    mov [acct_work_start], rcx
+    pop rdx
+    pop rcx
+    ret
+
+; Called right before hlt: bank the work-phase cycles and, once the 50-tick
+; window closes, recompute the utilization percentage.
+cpu_acct_work_end:
+    push rbx
+    push rcx
+    push rdx
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    sub rax, [acct_work_start]
+    add [acct_busy_acc], rax
+    mov [acct_last_mark], rbx
+    mov rax, [tick_count]
+    sub rax, [acct_win_tick]
+    cmp rax, 50
+    jl .acct_done
+    mov rax, [acct_busy_acc]
+    mov rcx, [acct_idle_acc]
+    add rcx, rax
+    test rcx, rcx
+    jz .acct_reset
+    mov rbx, 100
+    xor rdx, rdx
+    mul rbx                  ; rdx:rax = busy * 100
+    div rcx                  ; rax = busy*100 / total
+    cmp rax, 100
+    jbe .acct_store
+    mov rax, 100
+.acct_store:
+    mov [bsp_util], eax
+.acct_reset:
+    mov qword [acct_busy_acc], 0
+    mov qword [acct_idle_acc], 0
+    mov rax, [tick_count]
+    mov [acct_win_tick], rax
+.acct_done:
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
 
 ; ============================================================================
 ; serial_poll_command - poll COM1 for serial automation input
@@ -549,6 +650,7 @@ serial_dispatch_control:
 .svg_dump:
     SER 'G'
     mov byte [desktop_bg_theme], 1       ; glass ribbons
+    mov byte [wallpaper_selected], 1     ; probe needs the SVG path, not solid fill
     mov byte [wallpaper_cache_valid], 0  ; force a fresh rasterize
     sub rsp, 8
     call wm_draw_desktop_background      ; rasterize + populate cache
@@ -1137,6 +1239,15 @@ render_frame:
 section .data
 szFPSPrefix db "FPS:", 0
 fps_str     times 16 db 0
+
+; BSP CPU utilization accounting (see cpu_acct_* routines above).
+global bsp_util
+bsp_util         dd 0
+acct_last_mark   dq 0
+acct_work_start  dq 0
+acct_busy_acc    dq 0
+acct_idle_acc    dq 0
+acct_win_tick    dq 0
 
 section .bss
 serial_command_armed resb 1

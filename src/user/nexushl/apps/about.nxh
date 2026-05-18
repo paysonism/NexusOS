@@ -1,0 +1,213 @@
+# NexusHL About app — full rewrite of the old raw-asm src/user/apps/about.inc.
+#
+# Built entirely on the shared NexusHL libraries:
+#   - gui : window chrome, layout constants, sections, buttons, status bar
+#   - core: syscall wrappers, display geometry, tick counter
+#
+# Two tabs: "System" surfaces live machine facts (resolution, uptime);
+# "Credits" shows project attribution. State lives in a `state {}` block so
+# the app keeps no kernel-global coupling.
+
+use gui
+
+app "About" { stack = 4096; }
+
+# Tab identifiers.
+const TAB_SYSTEM  = 0
+const TAB_CREDITS = 1
+
+# Logo.
+const LOGO_X    = 16
+const LOGO_Y    = 16
+const LOGO_SIZE = 56
+const C_LOGO    = 0x002A6FFF
+
+# Header text column (to the right of the logo).
+const HDR_X     = 88
+
+# Tab bar.
+const TAB_Y     = 86
+const TAB_W     = 104
+
+# Content layout.
+const SEP_Y       = 80
+const CONTENT_Y   = 116
+const ROW_STEP    = 22
+const VALUE_X     = 132
+
+state {
+    about_tab: 4;
+    # Scratch buffers for the two formatted "System" values.
+    res_buf:    24;
+    uptime_buf: 24;
+}
+
+str title       = "NexusOS";
+str version     = "Version 3.0";
+str tagline     = "x86-64 graphical desktop OS";
+str logo_glyph  = "N";
+
+str tab_system  = "System";
+str tab_credits = "Credits";
+
+str lbl_arch    = "Architecture";
+str lbl_kernel  = "Kernel";
+str lbl_display = "Display";
+str lbl_uptime  = "Uptime";
+str val_arch    = "x86-64 assembly";
+str val_kernel  = "NexusOS 3.0";
+
+str credit_1    = "NexusOS Project";
+str credit_2    = "(c) 2026 NexusOS contributors";
+str credit_3    = "User apps written in NexusHL";
+str credit_4    = "Kernel hand-written in x86-64 asm";
+
+str status_text = "NexusOS - press a tab to switch view";
+
+# ------------------------------------------------------------------
+# small formatting helpers (same idiom as settings.nxh)
+# ------------------------------------------------------------------
+fn put_uint(buf, n) {
+    if n == 0 {
+        sb(buf, 48);
+        return buf + 1;
+    }
+    let p = buf;
+    while n > 0 {
+        sb(p, 48 + (n % 10));
+        p = p + 1;
+        n = n / 10;
+    }
+    let i = buf;
+    let j = p - 1;
+    while i < j {
+        let a = lb(i);
+        let b = lb(j);
+        sb(i, b);
+        sb(j, a);
+        i = i + 1;
+        j = j - 1;
+    }
+    return p;
+}
+
+# Format "WxH" NUL-terminated into buf.
+fn fmt_res(buf, w, h) {
+    let p = put_uint(buf, w);
+    sb(p, 120);                 # 'x'
+    p = p + 1;
+    p = put_uint(p, h);
+    sb(p, 0);
+}
+
+# Format "<n> s" NUL-terminated into buf.
+fn fmt_secs(buf, secs) {
+    let p = put_uint(buf, secs);
+    sb(p, 32);                  # ' '
+    sb(p + 1, 115);             # 's'
+    sb(p + 2, 0);
+}
+
+# ------------------------------------------------------------------
+# drawing
+# ------------------------------------------------------------------
+# One label/value row. Returns next cursor-y.
+fn kv_row(win, y, label, value) {
+    ui_text_at(win, UI_PAD, y, label, UI_COL_TEXT_MUTED, UI_COL_BG_BASE);
+    ui_text_at(win, VALUE_X, y, value, UI_COL_TEXT, UI_COL_BG_BASE);
+    return y + ROW_STEP;
+}
+
+fn draw_header(win) {
+    # Logo tile with a one-pixel frame and the "N" glyph.
+    ui_rect_at(win, LOGO_X, LOGO_Y, LOGO_SIZE, LOGO_SIZE, C_LOGO);
+    ui_rect_at(win, LOGO_X, LOGO_Y, LOGO_SIZE, 1, UI_COL_BORDER_2);
+    ui_rect_at(win, LOGO_X, LOGO_Y + LOGO_SIZE - 1, LOGO_SIZE, 1, UI_COL_BORDER_2);
+    ui_text_at(win, LOGO_X + 24, LOGO_Y + 22, &logo_glyph, UI_COL_TEXT_INVERT, C_LOGO);
+
+    ui_text_at(win, HDR_X, LOGO_Y + 4,  &title,   UI_COL_TEXT,       UI_COL_BG_BASE);
+    ui_text_at(win, HDR_X, LOGO_Y + 22, &version, UI_COL_TEXT_MUTED, UI_COL_BG_BASE);
+    ui_text_at(win, HDR_X, LOGO_Y + 40, &tagline, UI_COL_TEXT_MUTED, UI_COL_BG_BASE);
+
+    # Separator under the header.
+    ui_rect_at(win, UI_PAD, SEP_Y, ui_win_w(win) - UI_BORDER * 2 - UI_PAD * 2, 1,
+               UI_COL_BORDER);
+}
+
+fn draw_tab(win, index, label) {
+    let x = UI_PAD + index * (TAB_W + UI_GAP);
+    let fill = UI_COL_SURFACE_2;
+    let fg = UI_COL_TEXT;
+    if lw(&about_tab) == index {
+        fill = C_LOGO;
+        fg = UI_COL_TEXT_INVERT;
+    }
+    ui_rect_at(win, x, TAB_Y, TAB_W, UI_BUTTON_H, fill);
+    ui_text_at(win, x + 10, TAB_Y + 2, label, fg, fill);
+}
+
+fn draw_system_tab(win) {
+    fmt_res(&res_buf, display_current_width(), display_current_height());
+    fmt_secs(&uptime_buf, syscall(SYS_TICKS) / 100);
+
+    let y = CONTENT_Y;
+    y = kv_row(win, y, &lbl_arch,    &val_arch);
+    y = kv_row(win, y, &lbl_kernel,  &val_kernel);
+    y = kv_row(win, y, &lbl_display, &res_buf);
+    y = kv_row(win, y, &lbl_uptime,  &uptime_buf);
+}
+
+fn draw_credits_tab(win) {
+    let y = CONTENT_Y;
+    ui_text_at(win, UI_PAD, y, &credit_1, UI_COL_TEXT, UI_COL_BG_BASE);
+    y = y + ROW_STEP;
+    ui_text_at(win, UI_PAD, y, &credit_2, UI_COL_TEXT_MUTED, UI_COL_BG_BASE);
+    y = y + ROW_STEP;
+    ui_text_at(win, UI_PAD, y, &credit_3, UI_COL_TEXT_MUTED, UI_COL_BG_BASE);
+    y = y + ROW_STEP;
+    ui_text_at(win, UI_PAD, y, &credit_4, UI_COL_TEXT_MUTED, UI_COL_BG_BASE);
+}
+
+fn draw(win) {
+    ui_fill_client_below(win, 0, UI_COL_BG_BASE);
+    draw_header(win);
+    draw_tab(win, TAB_SYSTEM,  &tab_system);
+    draw_tab(win, TAB_CREDITS, &tab_credits);
+
+    if lw(&about_tab) == TAB_CREDITS {
+        draw_credits_tab(win);
+    } else {
+        draw_system_tab(win);
+    }
+
+    ui_status_bar(win, &status_text, UI_COL_SURFACE_2);
+}
+
+# ------------------------------------------------------------------
+# input
+# ------------------------------------------------------------------
+fn click(win, x, y) {
+    if y < TAB_Y { return; }
+    if y >= TAB_Y + UI_BUTTON_H { return; }
+    let x0 = UI_PAD;
+    let x1 = UI_PAD + TAB_W + UI_GAP;
+    if x >= x0 {
+        if x < x0 + TAB_W {
+            sw(&about_tab, TAB_SYSTEM);
+            return;
+        }
+    }
+    if x >= x1 {
+        if x < x1 + TAB_W {
+            sw(&about_tab, TAB_CREDITS);
+            return;
+        }
+    }
+}
+
+fn key(win, k) {
+    # Left/Right arrows cycle the tabs; mirrors the System/Credits buttons.
+    let sc = k & 0xFF;
+    if sc == 0xCB { sw(&about_tab, TAB_SYSTEM);  return; }
+    if sc == 0xCD { sw(&about_tab, TAB_CREDITS); return; }
+}

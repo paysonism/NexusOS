@@ -40,6 +40,8 @@ through the whole tree first.
   NexusHL immediate-mode GUI library and widget ownership rules.
 - `app-loader-format.md`
   Proposed future external app binary and loader contract.
+- `multicore.md`
+  SMP work queue: offloading heavy work to application processors.
 
 ## By Problem Area
 
@@ -117,6 +119,12 @@ through the whole tree first.
 ### State machines and live subsystem flow
 
 - `state-machine-reference.md`
+
+### Multi-core and offloading heavy work
+
+- `src/kernel/proc/workqueue.asm`
+- `src/kernel/arch/apic.asm` (AP bring-up)
+- See `multicore.md`
 
 ## Quick “Where Do I Fix This?” Map
 

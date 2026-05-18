@@ -1,0 +1,74 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>4 - Node Network</title>
+<style>
+  html,body{margin:0;height:100%;background:#04060c;color:#cfd6e4;font-family:system-ui,sans-serif;overflow:hidden}
+  .wrap{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px}
+  canvas{display:block}
+  .label{font-size:13px;letter-spacing:.3em;color:#5f6b82;text-transform:uppercase}
+  button{margin-top:18px;background:#11151f;border:1px solid #2a3245;color:#9fb0d0;padding:8px 16px;border-radius:6px;cursor:pointer;letter-spacing:.15em;font-size:11px}
+  button:hover{background:#1a2030}
+</style></head>
+<body><div class="wrap">
+<canvas id="c" width="640" height="360"></canvas>
+<div class="label">Concept 4 &mdash; Node Network</div>
+<button onclick="t0=performance.now()">Replay</button>
+</div>
+<script>
+const c=document.getElementById('c'),x=c.getContext('2d');
+const W=c.width,H=c.height,CX=W/2,CY=H/2;
+let t0=performance.now();
+// nodes form the corners + midpoints of N
+const N=[[-30,30],[-30,-30],[30,30],[30,-30],[-15,15],[0,0],[15,-15],[-30,0],[30,0]];
+const edges=[[0,7],[7,1],[1,4],[4,5],[5,6],[6,2],[2,8],[8,3]];
+function frame(now){
+  const t=(now-t0)/1000;
+  // bg
+  x.fillStyle='#04060c';x.fillRect(0,0,W,H);
+  // background nodes drift
+  for(let i=0;i<40;i++){
+    const a=i*1.37+t*0.1;
+    const r=120+(i%5)*40;
+    const px=CX+Math.cos(a)*r,py=CY+Math.sin(a*0.7)*r*0.5;
+    x.fillStyle=`rgba(90,140,200,${0.15+0.1*Math.sin(t+i)})`;
+    x.fillRect(px,py,1.5,1.5);
+  }
+  // scale up the N
+  const SC=2.4;
+  // draw nodes appearing
+  for(let i=0;i<N.length;i++){
+    const appear=Math.max(0,Math.min(1,(t-i*0.08)/0.4));
+    if(appear<=0)continue;
+    const px=CX+N[i][0]*SC,py=CY+N[i][1]*SC;
+    x.fillStyle=`rgba(150,210,255,${appear})`;
+    x.shadowColor='#5aaaff';x.shadowBlur=12*appear;
+    x.beginPath();x.arc(px,py,3.5,0,Math.PI*2);x.fill();
+    x.shadowBlur=0;
+  }
+  // draw edges progressively
+  const eStart=0.6;
+  for(let i=0;i<edges.length;i++){
+    const u=Math.max(0,Math.min(1,(t-eStart-i*0.08)/0.3));
+    if(u<=0)continue;
+    const a=N[edges[i][0]],b=N[edges[i][1]];
+    const ax=CX+a[0]*SC,ay=CY+a[1]*SC,bx=CX+b[0]*SC,by=CY+b[1]*SC;
+    const ex=ax+(bx-ax)*u,ey=ay+(by-ay)*u;
+    x.strokeStyle='rgba(140,200,255,0.9)';x.lineWidth=2;
+    x.shadowColor='#5aaaff';x.shadowBlur=8;
+    x.beginPath();x.moveTo(ax,ay);x.lineTo(ex,ey);x.stroke();
+    x.shadowBlur=0;
+    // packet
+    if(u<1){
+      x.fillStyle='#ffffff';
+      x.beginPath();x.arc(ex,ey,2.2,0,Math.PI*2);x.fill();
+    }
+  }
+  // wordmark
+  const wa=Math.max(0,Math.min(1,(t-1.6)/0.5));
+  x.globalAlpha=wa;
+  x.fillStyle='#e6f0ff';x.font='600 22px system-ui,sans-serif';x.textAlign='center';
+  x.fillText('NexusOS',CX,CY+105);
+  x.globalAlpha=1;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body></html>

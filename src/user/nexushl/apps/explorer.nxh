@@ -73,6 +73,8 @@ str szPropLoc        = "Path:"
 str szPropTypeFile   = "File"
 str szPropTypeDir    = "Folder"
 str szPropSizeDir    = "--"
+str szRowNameScratch = "               "
+str szRowSizeScratch = "                   "
 
 # -------------------- externs --------------------
 # State buffers/flags. Defined in src/user/apps/state.inc — kept asm-side
@@ -141,6 +143,41 @@ fn clear_buf(buf, cap) {
     }
 }
 
+fn format_entry_name(ent, dst) {
+    clear_buf(dst, 16);
+    let out = 0;
+    let i = 0;
+
+    while i < 8 {
+        let c = lb(ent + i);
+        if c == 32 {
+            i = 8;
+        } else {
+            sb(dst + out, c);
+            out = out + 1;
+            i = i + 1;
+        }
+    }
+
+    if lb(ent + 8) != 32 {
+        sb(dst + out, 46);
+        out = out + 1;
+        let e = 0;
+        while e < 3 {
+            let c2 = lb(ent + 8 + e);
+            if c2 == 32 {
+                e = 3;
+            } else {
+                sb(dst + out, c2);
+                out = out + 1;
+                e = e + 1;
+            }
+        }
+    }
+
+    sb(dst + out, 0);
+}
+
 fn dismiss_overlays() {
     sb(&exp_rename_active, 0);
     sb(&exp_newfolder_active, 0);
@@ -154,7 +191,7 @@ fn start_rename() {
     sb(&exp_rename_active, 1);
     sw(&exp_rename_cursor, 0);
     clear_buf(&exp_rename_buf, 24);
-    syscall(SYS_FS_FORMAT_NAME, ent, &exp_rename_buf);
+    format_entry_name(ent, &exp_rename_buf);
     let i = 0;
     while i < 23 {
         if lb(&exp_rename_buf + i) == 0 {
@@ -233,16 +270,18 @@ fn draw_row(win, w, i, ent) {
         fg = C_WHITE;
         ui_rect_at(win, 0, row_y, w, ROW_H, C_SELECT);
     }
-    syscall(SYS_FS_FORMAT_NAME, ent, &fat16_name_buf);
     if fs_is_dir(ent) == 1 {
+        format_entry_name(ent, &szRowNameScratch);
         let dirfg = C_DIR;
         if is_sel == 1 { dirfg = C_WHITE; }
-        ui_text_at(win, 8, row_y + 1, &fat16_name_buf, dirfg, bg);
+        ui_text_at(win, 8, row_y + 1, &szRowNameScratch, dirfg, bg);
         ui_text_at(win, w - 80, row_y + 1, &szDirLabel, C_MUTED, bg);
     } else {
-        ui_text_at(win, 8, row_y + 1, &fat16_name_buf, fg, bg);
-        format_bytes_size(lw(ent + 28), &fat16_size_buf);
-        ui_text_at(win, w - 80, row_y + 1, &fat16_size_buf, C_MUTED, bg);
+        let file_size = lw(ent + 28);
+        format_entry_name(ent, &szRowNameScratch);
+        format_bytes_size(file_size, &szRowSizeScratch);
+        ui_text_at(win, 8, row_y + 1, &szRowNameScratch, fg, bg);
+        ui_text_at(win, w - 80, row_y + 1, &szRowSizeScratch, C_MUTED, bg);
     }
 }
 
@@ -272,6 +311,8 @@ fn draw_context_menu(win) {
 
 fn draw_done_message(win, w) {
     if lb(&exp_newfolder_done_msg) == 0 { return; }
+    sb(&exp_newfolder_done_msg, 0);
+    return;
     let ox = (w - 140) / 2;
     ui_rect_at(win, ox, 60, 140, 30, C_OK);
     ui_text_at(win, ox + 15, 68, &szNewFolderDone, C_WHITE, C_OK);
@@ -448,7 +489,7 @@ fn properties_draw(win) {
     let ent = lq(&prop_entry_ptr);
     if ent == 0 { return; }
 
-    syscall(SYS_FS_FORMAT_NAME, ent, &fat16_name_buf);
+    format_entry_name(ent, &fat16_name_buf);
 
     ui_text_at(win, 8,  8,  &szPropName, C_MUTED, C_WHITE);
     ui_text_at(win, 60, 8,  &fat16_name_buf, C_BLACK, C_WHITE);
