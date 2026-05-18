@@ -6,6 +6,14 @@ bits 64
 
 %include "constants.inc"
 
+; SMP work-queue spinlock API - lets work-queue jobs running on an AP allocate
+; or free physical pages concurrently with the BSP. Both sides take the same
+; lock, so page_alloc / page_free are safe to call from a job (see workqueue.asm
+; "SHARED STATE").
+extern wq_lock
+extern wq_unlock
+extern wq_alloc_lock
+
 section .text
 
 ; --- Initialize page allocator from E820 map ---
@@ -99,6 +107,10 @@ FN_BEGIN memory_init, 0, 0, FN_RET_SCALAR
 .done:
     ; Recount free pages properly
     call count_free_pages
+    ; Snapshot the post-init free total as the allocator's manageable RAM
+    ; ceiling. Task Manager reports "used" as (boot total - free now).
+    mov rax, [free_page_count]
+    mov [boot_free_pages], rax
 
     pop r14
     pop r13
@@ -113,6 +125,10 @@ FN_BEGIN page_alloc, 0, 0, FN_RET_SCALAR
     push rbx
     push rcx
     push rdx
+
+    ; Serialise against any other core (BSP or an AP job) touching the bitmap.
+    mov rdi, wq_alloc_lock
+    call wq_lock
 
     ; Scan bitmap for first free bit (0 = free)
     mov rdi, PAGE_BITMAP_ADDR
@@ -158,6 +174,9 @@ FN_BEGIN page_alloc, 0, 0, FN_RET_SCALAR
     dec qword [free_page_count]
 
 .alloc_done:
+    ; RAX holds the result; wq_unlock preserves it.
+    mov rdi, wq_alloc_lock
+    call wq_unlock
     pop rdx
     pop rcx
     pop rbx
@@ -169,6 +188,13 @@ FN_BEGIN page_alloc, 0, 0, FN_RET_SCALAR
 FN_BEGIN page_free, 0, 0, FN_RET_SCALAR
     push rax
     push rcx
+
+    ; Serialise against any other core touching the bitmap. RDI is the page
+    ; address argument, so save it across the lock acquire.
+    push rdi
+    mov rdi, wq_alloc_lock
+    call wq_lock
+    pop rdi
 
     shr rdi, 12              ; Convert to page number
     mov rax, rdi
@@ -185,6 +211,8 @@ FN_BEGIN page_free, 0, 0, FN_RET_SCALAR
 
     inc qword [free_page_count]
 
+    mov rdi, wq_alloc_lock
+    call wq_unlock
     pop rcx
     pop rax
     ret
@@ -232,3 +260,5 @@ FN_BEGIN memory_get_free, 0, 0, FN_RET_SCALAR
 section .data
 global free_page_count
 free_page_count: dq 0
+global boot_free_pages
+boot_free_pages: dq 0

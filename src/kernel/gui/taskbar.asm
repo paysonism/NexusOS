@@ -32,12 +32,12 @@ extern scr_tb_btn_y, scr_bat_ind_x, scr_bat_ind_y
 %endmacro
 
 START_MENU_W    equ 200
-START_MENU_H    equ 200
+START_MENU_H    equ 228
 START_MENU_X    equ 4
 MENU_ITEM_H     equ 28
 MENU_COLOR_BG   equ COLOR_SURFACE
 MENU_COLOR_HL   equ COLOR_ACCENT
-MENU_ITEM_COUNT equ 6
+MENU_ITEM_COUNT equ 7
 
 ; Taskbar button layout
 TB_BTN_START_X  equ (START_BTN_X + START_BTN_W + 8)  ; after start button
@@ -298,11 +298,12 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
     MENU_ITEM 2, nx_icon_notepad_16, szMenuNotepad
     MENU_ITEM 3, nx_icon_settings_16, szMenuSettings
     MENU_ITEM 4, nx_icon_paint_16, szMenuPaint
+    MENU_ITEM 5, nx_icon_settings_16, szMenuTaskMgr
 
     ; --- Separator ---
     mov rdi, START_MENU_X + 8
     mov esi, [scr_start_menu_y]
-    add esi, 8 + MENU_ITEM_H * 5
+    add esi, 8 + MENU_ITEM_H * 6
     mov rdx, START_MENU_W - 16
     mov rcx, 1
     mov r8d, 0x00555588
@@ -312,11 +313,11 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
     mov rdi, nx_icon_about_16
     mov rsi, START_MENU_X + 8
     mov edx, [scr_start_menu_y]
-    add edx, 12 + MENU_ITEM_H * 5
+    add edx, 12 + MENU_ITEM_H * 6
     call nx_icon_blit
     mov rdi, START_MENU_X + 36
     mov esi, [scr_start_menu_y]
-    add esi, 14 + MENU_ITEM_H * 5
+    add esi, 14 + MENU_ITEM_H * 6
     mov rdx, szMenuAbout
     mov ecx, COLOR_TEXT_GRAY
     mov r8d, MENU_COLOR_BG
@@ -595,9 +596,10 @@ FN_BEGIN tb_handle_click, 0, 0, FN_RET_SCALAR
     cmp rax, MENU_ITEM_COUNT
     jge .close_menu
 
-    ; Close menu and return item index + 2
+    ; Close menu and return the app id for this menu row.
     mov byte [tb_start_menu_open], 0
-    add rax, 2
+    lea rcx, [rel menu_app_ids]
+    movzx rax, byte [rcx + rax]
     jmp .tb_click_ret
 
 .close_menu:
@@ -798,13 +800,13 @@ FN_BEGIN tb_handle_rclick, 0, 0, FN_RET_SCALAR
     cmp eax, MENU_ITEM_COUNT
     jge .rc_not_handled
 
-    ; Save app ID and open submenu next to the item
-    add eax, 2                ; app_id = menu_index + 2
-    mov byte [sm_submenu_app], al
+    ; eax = menu row index. Look up the app id; keep the row for Y placement.
+    push rax
+    lea rcx, [rel menu_app_ids]
+    movzx edx, byte [rcx + rax]
+    mov byte [sm_submenu_app], dl
     mov dword [sm_submenu_x], START_MENU_X + START_MENU_W + 2
-    ; Y = menu item Y position (scr_start_menu_y + 4 + (idx) * MENU_ITEM_H)
-    mov ecx, eax
-    sub ecx, 2
+    pop rcx                   ; rcx = menu row index
     imul ecx, MENU_ITEM_H
     add ecx, [scr_start_menu_y]
     add ecx, 4
@@ -951,7 +953,11 @@ szMenuTerm     db "Terminal", 0
 szMenuNotepad  db "Notepad", 0
 szMenuSettings db "Settings", 0
 szMenuPaint    db "Paint", 0
+szMenuTaskMgr  db "Task Manager", 0
 szMenuAbout    db "About NexusOS", 0
+
+; Maps a start-menu row index (0..MENU_ITEM_COUNT-1) to a kernel app id.
+menu_app_ids   db 2, 3, 4, 5, 6, 9, 7
 
 global tb_start_menu_open
 tb_start_menu_open db 0

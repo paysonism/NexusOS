@@ -121,6 +121,8 @@ FN_DECL enter_usermode, 0, 0, FN_RET_SCALAR
     jb .slot_ok
     xor r11d, r11d
 .slot_ok:
+    mov edi, r11d
+    call l3_apply_slot_isolation
     push qword GDT64_USER_DATA
     mov edi, r11d
     call l3_user_stack_top
@@ -171,6 +173,46 @@ FN_BEGIN l3_syscall_stack_top, 0, 0, FN_RET_SCALAR
     add rax, rdx
     add rax, L3_SYSCALL_STACK_SIZE
     and rax, -16
+    ret
+
+; l3_apply_slot_isolation - EDI = active slot
+; Walks the app-arena 4KB page tables and marks only the active slot's pages
+; USER-accessible; every other slot's pages become supervisor-only. A ring-3
+; app therefore faults if it dereferences another slot's memory. Flushes the
+; TLB so the change takes effect before the iretq into ring 3.
+FN_BEGIN l3_apply_slot_isolation, 0, 0, FN_RET_SCALAR
+    push rax
+    push rcx
+    push rdx
+    push r8
+    push r9
+    mov r8d, edi                    ; active slot
+    mov r9, APP_ARENA_PT_BASE       ; PTE cursor
+    xor edx, edx                    ; slot index
+.slot_loop:
+    xor ecx, ecx                    ; 4KB page index within slot
+.page_loop:
+    mov rax, [r9]
+    and rax, ~4                     ; clear USER (bit 2)
+    cmp edx, r8d
+    jne .store
+    or  rax, 4                      ; active slot: USER-accessible
+.store:
+    mov [r9], rax
+    add r9, 8
+    inc ecx
+    cmp ecx, ARENA_SLOT_PAGES
+    jb .page_loop
+    inc edx
+    cmp edx, MAX_WINDOWS
+    jb .slot_loop
+    mov rax, cr3
+    mov cr3, rax                    ; flush TLB
+    pop r9
+    pop r8
+    pop rdx
+    pop rcx
+    pop rax
     ret
 
 FN_DECL l3_install_app_done_trampoline, 0, 0, FN_RET_SCALAR
@@ -341,6 +383,10 @@ FN_DECL call_app_l3, 0, 0, FN_RET_SCALAR
     call ser_print_hex64
     SER 13
     SER 10
+
+    ; Restrict the arena so only this slot's pages are ring-3 accessible.
+    mov edi, r11d
+    call l3_apply_slot_isolation
 
     mov edi, r11d
     call l3_user_stack_top

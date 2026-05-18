@@ -61,7 +61,7 @@ desktop_draw_icons:
     ; index = app_id - 2 (apps start at ID 2)
     sub eax, 2
     js .draw_next
-    cmp eax, 6
+    cmp eax, 8
     jge .draw_next
     imul eax, eax, 16        ; 16 bytes per entry: label_ptr + icon_ptr
     add rbx, rax
@@ -235,9 +235,9 @@ desktop_remove_icon:
 section .data
 
 ; Desktop icon table: up to MAX_DESK_ICONS app IDs (0=empty)
-; Default: Explorer(2), Terminal(3), Notepad(4)
+; Default: Explorer(2), Terminal(3), Notepad(4), Task Manager(9)
 desktop_icons:
-    db 2, 3, 4, 0, 0, 0, 0, 0
+    db 2, 3, 4, 9, 0, 0, 0, 0
 
 ; Icon info table: indexed by (app_id - 2), 16 bytes each
 ; Format: dq label_ptr, dq icon48_ptr
@@ -260,6 +260,12 @@ icon_table:
     ; App 7: About
     dq szAbout
     dq nx_icon_about_48
+    ; App 8: Security Probe (not shown on desktop; slot kept for indexing)
+    dq szAbout
+    dq nx_icon_about_48
+    ; App 9: Task Manager
+    dq szTaskMgr
+    dq nx_icon_settings_48
 
 szMyPC       db "My PC", 0
 szTerminal   db "Terminal", 0
@@ -267,5 +273,6 @@ szNotepad    db "Notepad", 0
 szSettings   db "Settings", 0
 szPaint      db "Paint", 0
 szAbout      db "About", 0
+szTaskMgr    db "Task Mgr", 0
 
 section .text

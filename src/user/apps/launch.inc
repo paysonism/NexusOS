@@ -71,7 +71,10 @@ app_l3_test_key:
     pop rdi
     ret
 
-; RAX = window ID, R10 = click handler, R11 = key handler
+; RAX = window ID, R10 = click handler, R11 = key handler.
+; Drag handler (optional): install separately via app_set_window_drag below
+; (kept as a separate helper so existing callers stay unchanged and we never
+; clobber a stale value).
 app_set_window_handlers:
     push rax
     imul rax, WINDOW_STRUCT_SIZE
@@ -81,18 +84,36 @@ app_set_window_handlers:
     pop rax
     ret
 
+; RAX = window ID, R10 = drag handler. Same calling convention as click:
+;   drag_fn(rsi=win_ptr, rdx=client_x, rcx=client_y).
+; The WM fires drag_fn for every mouse-poll tick where the cursor has moved
+; AND the left button is still held AND the initial press landed on this
+; window's client area. The cursor may leave the window's bounds — drag
+; events keep flowing until the button is released. Pass 0 to detach.
+app_set_window_drag:
+    push rax
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    mov qword [rax + WIN_OFF_DRAGFN], r10
+    pop rax
+    ret
+
 ; RAX = window ID. Preserve RAX.
 ; The NexusHL notepad callbacks read state from the window's L3 slot copy of
-; the app blob, so launch-time starter text has to be written there.
+; the app blob. ALL per-instance notepad state must be written through this
+; helper (slot-relative) — never to the kernel image's master copy, which is
+; shared across all instances and is only a linker placeholder.
 app_seed_notepad_slot:
     push rax
     push rbx
+    push rcx
     push rdi
 
     mov edi, eax
     call l3_copy_app_blob_to_slot
     mov rbx, rax
 
+    ; Starter text "Hello"
     mov byte [rbx + notepad_buf - app_blob_start + 0], 'H'
     mov byte [rbx + notepad_buf - app_blob_start + 1], 'e'
     mov byte [rbx + notepad_buf - app_blob_start + 2], 'l'
@@ -104,6 +125,61 @@ app_seed_notepad_slot:
     mov dword [rbx + np_cursor_col - app_blob_start], 5
     mov dword [rbx + np_num_lines - app_blob_start], 1
     mov dword [rbx + np_scroll_top - app_blob_start], 0
+
+    ; Reset transient UI / dialog state in the slot
+    mov byte  [rbx + np_menu_open - app_blob_start], 0
+    mov byte  [rbx + np_save_dialog - app_blob_start], 0
+    mov byte  [rbx + np_save_done_msg - app_blob_start], 0
+    mov byte  [rbx + np_has_saved - app_blob_start], 0
+    mov dword [rbx + np_save_field - app_blob_start], 0
+    mov dword [rbx + np_saveas_cursor - app_blob_start], 0
+    mov byte  [rbx + np_saveas_buf - app_blob_start], 0
+    mov dword [rbx + np_saveloc_cursor - app_blob_start], 1
+    mov byte  [rbx + np_saveloc_buf - app_blob_start], 47       ; '/'
+    mov byte  [rbx + np_saveloc_buf - app_blob_start + 1], 0
+    mov qword [rbx + np_open_entry - app_blob_start], 0
+
+    pop rdi
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; RAX = window ID. Preserve RAX.
+; NexusHL app state is read from the per-window L3 slot. When a window slot is
+; reused, call_app_l3 sees the existing magic and does not recopy the blob, so
+; launch-time state resets done above would otherwise stay invisible.
+app_refresh_window_slot:
+    push rax
+    push rdi
+
+    mov edi, eax
+    call l3_copy_app_blob_to_slot
+
+    pop rdi
+    pop rax
+    ret
+
+; RAX = Explorer window ID. Preserve RAX.
+app_reset_explorer_slot:
+    push rax
+    push rbx
+    push rdi
+
+    mov edi, eax
+    call l3_slot_base
+    mov rbx, rax
+    mov dword [rbx + explorer_sel - app_blob_start], 0
+    mov dword [rbx + explorer_dir - app_blob_start], 0
+    mov byte [rbx + ctx_menu_visible - app_blob_start], 0
+    mov byte [rbx + exp_ctx_visible - app_blob_start], 0
+    mov byte [rbx + exp_rename_active - app_blob_start], 0
+    mov byte [rbx + exp_newfolder_active - app_blob_start], 0
+    mov byte [rbx + exp_newfolder_done_msg - app_blob_start], 0
+    mov dword [rbx + exp_rename_cursor - app_blob_start], 0
+    mov dword [rbx + exp_newfolder_cursor - app_blob_start], 0
+    mov byte [rbx + exp_rename_buf - app_blob_start], 0
+    mov byte [rbx + exp_newfolder_buf - app_blob_start], 0
 
     pop rdi
     pop rbx
@@ -138,6 +214,8 @@ app_launch:
     je .launch_about
     cmp rdi, APP_SECURITY_PROBE
     je .launch_security_probe
+    cmp rdi, APP_TASKMGR
+    je .launch_taskmgr
     mov rax, -1
     ret
 
@@ -171,6 +249,8 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
+    call app_refresh_window_slot
+    call app_reset_explorer_slot
     mov r10, app_hl_explorer_click
     mov r11, app_hl_explorer_key
     call app_set_window_handlers
@@ -252,37 +332,10 @@ app_launch:
 .launch_notepad:
     SER 'N'
     SER 'n'
-    ; Reset notepad state
-    lea rdi, [notepad_buf]
-    xor eax, eax
-    mov ecx, NP_BUF_SIZE
-    rep stosb
-    mov dword [np_cursor_row], 0
-    mov dword [np_cursor_col], 0
-    mov dword [np_num_lines], 1
-    mov dword [np_scroll_top], 0
-    mov byte [np_menu_open], 0
-    mov byte [np_save_dialog], 0
-    mov dword [np_save_field], 0
-    mov dword [np_saveloc_cursor], 1
-    mov byte [np_saveloc_buf], 47
-    mov byte [np_saveloc_buf + 1], 0
-    mov qword [np_open_entry], 0
-    ; Initialize line lengths array - line 0 starts with length 0
-    lea rdi, [np_line_len]
-    xor eax, eax
-    mov ecx, NP_MAX_LINES
-    rep stosd
-    ; Seed starter text so launch is obviously functional and key insertion has a visible baseline.
-    lea rdi, [notepad_buf]
-    mov byte [rdi+0], 'H'
-    mov byte [rdi+1], 'e'
-    mov byte [rdi+2], 'l'
-    mov byte [rdi+3], 'l'
-    mov byte [rdi+4], 'o'
-    mov byte [rdi+5], 0
-    mov dword [np_line_len], 5
-    mov dword [np_cursor_col], 5
+    ; Per-instance state is owned by the L3 slot; app_seed_notepad_slot below
+    ; populates it. Do NOT touch the kernel image's np_* master copies here —
+    ; they are linker placeholders, not shared state, and were a source of
+    ; cross-instance corruption when used as scratch.
     lea rdi, [rel szNotepadTitle]
     mov rsi, 250
     mov rdx, 120
@@ -340,16 +393,14 @@ app_launch:
 .launch_paint:
     SER 'P'
     SER 'p'
-    ; Reset paint state before creating the window.
-    mov dword [paint_color], 0xFF000000 ; Black
-    mov dword [paint_brush_size], 2
-
+    ; Per-instance paint state is owned by the L3 slot via the NexusHL
+    ; `state {}` block; the kernel-image paint_* placeholders are unused.
     lea rdi, [rel szPaintTitle]
     mov rsi, 150
     mov rdx, 100
-    mov rcx, 340   ; width (canvas 200 + border/tools + buttons)
-    mov r8, 240    ; height (canvas 150 + toolbar)
-    mov r9, app_paint_draw
+    mov rcx, 340   ; width (toolbar + canvas)
+    mov r8, 240    ; height (toolbar + canvas)
+    mov r9, app_hl_paint_draw
     SER '{'
     sub rsp, 8
     call wm_create_window_ex
@@ -363,22 +414,12 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
-
-    ; Setup callback
-    push rax
-    imul rax, WINDOW_STRUCT_SIZE
-    add rax, WINDOW_POOL_ADDR
-    mov rdi, [rax + WIN_OFF_APPDATA]
-    add rdi, APP_SLOT_PAINT_CANVAS_OFF
-    mov ecx, 30000
-    mov eax, 0xFFFFFFFF
-    rep stosd
-    mov rax, [rsp]
-    mov r10, app_paint_click
-    mov r11, app_paint_key
+    mov r10, app_hl_paint_click
+    mov r11, app_hl_paint_key
     call app_set_window_handlers
+    mov r10, app_hl_paint_drag
+    call app_set_window_drag
     SER 'p'
-    pop rax
     jmp .done
 
 .launch_about:
@@ -387,9 +428,9 @@ app_launch:
     lea rdi, [rel szAboutTitle]
     mov rsi, 280
     mov rdx, 200
-    mov rcx, 340
-    mov r8, 220
-    mov r9, app_about_draw
+    mov rcx, 380
+    mov r8, 300
+    mov r9, app_hl_about_draw
     SER '{'
     sub rsp, 8
     call wm_create_window_ex
@@ -403,6 +444,9 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
+    mov r10, app_hl_about_click
+    mov r11, app_hl_about_key
+    call app_set_window_handlers
     SER 'b'
     jmp .done
 
@@ -421,6 +465,34 @@ app_launch:
     xor r10d, r10d
     xor r11d, r11d
     call app_set_window_handlers
+    jmp .done
+
+.launch_taskmgr:
+    SER 'M'
+    SER 'm'
+    lea rdi, [rel szTaskMgrTitle]
+    mov rsi, 200
+    mov rdx, 120
+    mov rcx, 360
+    mov r8, 300
+    mov r9, app_hl_taskmgr_draw
+    SER '{'
+    sub rsp, 8
+    call wm_create_window_ex
+    add rsp, 8
+    SER '}'
+    push rax
+    push rdi
+    mov rdi, rax
+    call ser_print_hex64
+    pop rdi
+    pop rax
+    cmp rax, -1
+    je .done
+    mov r10, app_hl_taskmgr_click
+    mov r11, app_hl_taskmgr_key
+    call app_set_window_handlers
+    SER 'm'
     jmp .done
 
 .done:
@@ -938,31 +1010,35 @@ app_find_entry_83:
     ret
 
 global kernel_open_file_in_notepad
+; Open a FAT16 file (RDI = dir-entry ptr) in a fresh Notepad window. All per-
+; instance state is written directly into the new window's L3 slot — never
+; into the kernel image's np_* master copies. The kernel-side notepad_buf is
+; used as a transient raw-bytes scratch, scoped strictly to this call.
 kernel_open_file_in_notepad:
     SER 'O'
     SER 'F'
     push rbx
     push r12
     push r13
+    push r14
+    push r15
 
-    mov r12, rdi             ; save dir entry ptr
+    mov r12, rdi                      ; dir entry ptr
 
-    ; Launch notepad in kernel context (this also seeds the slot with "Hello").
+    ; Launch a fresh Notepad. app_seed_notepad_slot resets the slot to a
+    ; pristine "Hello" baseline; we then overwrite slot state with file data.
     mov rdi, APP_NOTEPAD
     sub rsp, 8
     call app_launch
     add rsp, 8
     cmp rax, -1
     je .kop_fail
-    mov r13, rax             ; window ID
+    mov r13, rax                      ; new window id (== slot index)
 
-    ; Format name into title buffer (WIN_OFF_TITLE = +48)
+    ; Cascade window position so file viewers don't cover Explorer.
     mov rax, r13
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    ; File-open Notepads should not cover the Explorer list that launched
-    ; them. Keep plain Notepad launches at their normal default position, but
-    ; move file viewers to the right with a small per-window cascade.
     mov qword [rax + WIN_OFF_X], 560
     mov rbx, r13
     imul rbx, 24
@@ -972,10 +1048,31 @@ kernel_open_file_in_notepad:
     mov rsi, r12
     call fat16_format_name_to
 
-    ; Save dir entry for notepad (so Save knows the filename)
-    mov [np_open_entry], r12
+    ; Resolve the slot base. All subsequent writes are slot-relative.
+    mov edi, r13d
+    call l3_slot_base
+    mov r14, rax                      ; r14 = slot base
 
-    ; Read file content from real FAT16 disk
+    ; Save dir entry into slot so Save can find the file later.
+    mov [r14 + np_open_entry - app_blob_start], r12
+
+    ; Pre-zero slot's notepad_buf + np_line_len so untouched cells stay clean.
+    push rdi
+    push rax
+    push rcx
+    lea rdi, [r14 + notepad_buf - app_blob_start]
+    xor eax, eax
+    mov ecx, NP_BUF_SIZE
+    rep stosb
+    lea rdi, [r14 + np_line_len - app_blob_start]
+    xor eax, eax
+    mov ecx, NP_MAX_LINES
+    rep stosd
+    pop rcx
+    pop rax
+    pop rdi
+
+    ; Read raw file bytes into kernel-side notepad_buf (scratch only).
     mov rdi, r12
     lea rsi, [notepad_buf]
     mov edx, NP_BUF_SIZE - 1
@@ -984,16 +1081,22 @@ kernel_open_file_in_notepad:
     je .kop_empty
     test eax, eax
     jz .kop_empty
-
-    ; Null-terminate raw read
+    ; Clamp the byte count to the scratch capacity; fat16_read_file is
+    ; expected to honour edx, but defence-in-depth — this is the only
+    ; bound between an attacker-controlled file size and the parse loop.
+    cmp eax, NP_BUF_SIZE - 1
+    jbe .kop_size_ok
+    mov eax, NP_BUF_SIZE - 1
+.kop_size_ok:
     lea rbx, [notepad_buf]
     mov byte [rbx + rax], 0
 
-    ; Split into lines on CR/LF
-    mov r12d, eax            ; total bytes
-    xor ecx, ecx             ; current line
-    xor edx, edx             ; current col
-    xor esi, esi             ; source offset
+    ; Parse scratch -> slot's per-line layout.
+    ;   r14 = slot base, rbx = scratch base, r12d = raw byte count
+    mov r12d, eax
+    xor ecx, ecx                      ; line index
+    xor edx, edx                      ; column
+    xor esi, esi                      ; raw offset
 
 .kop_parse_loop:
     cmp esi, r12d
@@ -1010,11 +1113,12 @@ kernel_open_file_in_notepad:
     je .kop_parse_lf
 
     cmp edx, NP_MAX_COLS - 1
-    jge .kop_parse_loop
+    jge .kop_parse_loop               ; clip overlong lines
 
     push rcx
     imul ecx, NP_MAX_COLS
-    mov [notepad_buf + rcx + rdx], al
+    add rcx, rdx
+    mov [r14 + rcx + notepad_buf - app_blob_start], al
     pop rcx
     inc edx
     jmp .kop_parse_loop
@@ -1029,9 +1133,10 @@ kernel_open_file_in_notepad:
 .kop_parse_newline:
     push rcx
     imul ecx, NP_MAX_COLS
-    mov byte [notepad_buf + rcx + rdx], 0
+    add rcx, rdx
+    mov byte [r14 + rcx + notepad_buf - app_blob_start], 0
     pop rcx
-    mov [np_line_len + rcx * 4], edx
+    mov [r14 + np_line_len - app_blob_start + rcx * 4], edx
     inc ecx
     xor edx, edx
     jmp .kop_parse_loop
@@ -1040,69 +1145,60 @@ kernel_open_file_in_notepad:
     push rcx
     push rcx
     imul ecx, NP_MAX_COLS
-    mov byte [notepad_buf + rcx + rdx], 0
+    add rcx, rdx
+    mov byte [r14 + rcx + notepad_buf - app_blob_start], 0
     pop rcx
-    mov [np_line_len + rcx * 4], edx
+    mov [r14 + np_line_len - app_blob_start + rcx * 4], edx
     pop rcx
     inc ecx
-    mov [np_num_lines], ecx
-    mov dword [np_cursor_row], 0
-    mov dword [np_cursor_col], 0
-    jmp .kop_sync
+    mov [r14 + np_num_lines - app_blob_start], ecx
+    mov dword [r14 + np_cursor_row - app_blob_start], 0
+    mov dword [r14 + np_cursor_col - app_blob_start], 0
+    mov dword [r14 + np_scroll_top - app_blob_start], 0
+    jmp .kop_seed_visible
 
 .kop_empty:
-    mov dword [np_num_lines], 1
-    mov dword [np_cursor_row], 0
-    mov dword [np_cursor_col], 0
-    mov byte [notepad_buf], 0
-    mov dword [np_line_len], 0
+    mov dword [r14 + np_num_lines - app_blob_start], 1
+    mov dword [r14 + np_cursor_row - app_blob_start], 0
+    mov dword [r14 + np_cursor_col - app_blob_start], 0
+    mov dword [r14 + np_scroll_top - app_blob_start], 0
+    mov byte  [r14 + notepad_buf - app_blob_start], 0
+    mov dword [r14 + np_line_len - app_blob_start], 0
 
-.kop_sync:
-    ; Copy the kernel-side notepad globals into the L3 slot. We cannot use
-    ; l3_copy_app_blob_to_slot here: it copies from app_blob_base_v (the
-    ; UEFI-loaded user blob), which still holds the *original* zeroed values
-    ; for notepad_buf — overwriting the freshly-read file content seeded by
-    ; app_seed_notepad_slot.
+.kop_seed_visible:
+    ; Seed slot's szOpenTextScratch with the first visible line so the very
+    ; first draw frame (which may fire before copy_line_to_scratch runs)
+    ; renders real bytes instead of whatever was there before.
+    lea rdi, [r14 + app_hl_notepad_szOpenTextScratch - app_blob_start]
+    lea rsi, [r14 + notepad_buf - app_blob_start]
+    mov ecx, NP_MAX_COLS - 1
+.kop_copy_visible:
+    lodsb
+    test al, al
+    jz .kop_copy_visible_done
+    stosb
+    dec ecx
+    jnz .kop_copy_visible
+.kop_copy_visible_done:
+    mov byte [rdi], 0
+
+    ; Clear scratch so we don't leave file bytes in the kernel image's master
+    ; copy (defence-in-depth — nothing should read them, but stale file
+    ; content lingering in kernel .data is a needless info-leak surface).
     push rdi
-    push rsi
+    push rax
     push rcx
-    push rbx
-
-    mov edi, r13d
-    call l3_slot_base
-    mov rbx, rax                     ; rbx = slot base
-
-    ; notepad_buf
-    lea rdi, [rbx + notepad_buf - app_blob_start]
-    lea rsi, [notepad_buf]
+    lea rdi, [notepad_buf]
+    xor eax, eax
     mov ecx, NP_BUF_SIZE
-    cld
-    rep movsb
-
-    ; np_line_len[]
-    lea rdi, [rbx + np_line_len - app_blob_start]
-    lea rsi, [np_line_len]
-    mov ecx, NP_MAX_LINES * 4
-    rep movsb
-
-    ; Scalars
-    mov eax, [np_num_lines]
-    mov [rbx + np_num_lines - app_blob_start], eax
-    mov eax, [np_cursor_row]
-    mov [rbx + np_cursor_row - app_blob_start], eax
-    mov eax, [np_cursor_col]
-    mov [rbx + np_cursor_col - app_blob_start], eax
-    mov eax, [np_scroll_top]
-    mov [rbx + np_scroll_top - app_blob_start], eax
-    mov rax, [np_open_entry]
-    mov [rbx + np_open_entry - app_blob_start], rax
-
-    pop rbx
+    rep stosb
     pop rcx
-    pop rsi
+    pop rax
     pop rdi
 
     mov rax, r13
+    pop r15
+    pop r14
     pop r13
     pop r12
     pop rbx
@@ -1110,6 +1206,8 @@ kernel_open_file_in_notepad:
 
 .kop_fail:
     mov rax, -1
+    pop r15
+    pop r14
     pop r13
     pop r12
     pop rbx

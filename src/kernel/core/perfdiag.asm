@@ -111,6 +111,7 @@ perfdiag_print_profile:
     lea rdi, [rel msg_freq]
     call serial_puts
     call measure_tsc_tick
+    mov [cpu_tsc_per_tick], rax
     mov rdi, rax
     call ser_print_hex64
     call serial_crlf
@@ -313,7 +314,12 @@ l1d_kb: dd 32
 l1i_kb: dd 32
 l2_kb: dd 1024
 l3_kb: dd 16384
+global cpuid_logical_count
 cpuid_logical_count: dd 1
+; TSC ticks elapsed over one PIT tick (10ms). CPU Hz = value * 100, so
+; MHz = value / 10000. Captured once by perfdiag_print_profile.
+global cpu_tsc_per_tick
+cpu_tsc_per_tick: dq 0
 
 msg_cpu:    db 'CPU:', 0
 msg_cache:  db 'CACHE:', 0

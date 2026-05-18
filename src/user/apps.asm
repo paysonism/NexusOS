@@ -37,6 +37,13 @@ app_l3_done_trampoline:
     syscall
     ud2
 %include "src/user/apps/common.inc"
+; state.inc must come BEFORE any large code blob: every symbol it defines
+; (notepad_buf, np_line_len, …) is accessed slot-relative as
+; `slot_base + (sym - app_blob_start)`, so the offset MUST fit within
+; APP_SLOT_SIZE (1 MB) AND L3_APP_BLOB_COPY_CAP. Pushed below the >1 MB of
+; generated NexusHL code it overflows the slot and every notepad ends up
+; aliasing into the next slot's memory.
+%include "src/user/apps/state.inc"
 %include "src/user/apps/launch.inc"
 ; explorer.inc deleted — Explorer is now a pure-NexusHL app built by
 ; build_nxh.ps1 and included via build/nxh/generated_apps.inc below.
@@ -44,10 +51,11 @@ app_l3_done_trampoline:
 %define DISABLE_FN_RUNTIME_TRACE
 %include "build/nxh/generated_apps.inc"
 %undef DISABLE_FN_RUNTIME_TRACE
-%include "src/user/apps/about.inc"
+; about.inc deleted — About is now a pure-NexusHL app built by build_nxh.ps1
+; and included via build/nxh/generated_apps.inc above.
 %include "src/user/apps/shell.inc"
-%include "src/user/apps/paint.inc"
-%include "src/user/apps/state.inc"
+; paint.inc deleted — Paint is now a pure-NexusHL app built by build_nxh.ps1
+; and included via build/nxh/generated_apps.inc above.
 %include "src/user/apps/security_probe.inc"
 ; End sentinel (16 bytes, distinct from start marker).
 db 0x4E, 0x58, 0x41, 0x50, 0x50, 0x42, 0x4C, 0x4F    ; "NXAPPBLO"

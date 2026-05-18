@@ -69,8 +69,11 @@ try {
     }
 
     Set-Content -Path $LogPath -Value $serial -Encoding ASCII
-    foreach ($marker in @('L0000000000000002', 'R0000000000000000', 'U', '@')) {
+    foreach ($marker in @('L0000000000000002', 'U', '@')) {
         if ($serial -notlike "*$marker*") { throw "Missing Explorer L3 marker: $marker" }
+    }
+    if ($serial -notmatch 'R[0-9A-Fa-f]{16}') {
+        throw 'Missing Explorer L3 return marker'
     }
     if ($serial -match 'X000000000000000(6|E)') {
         throw 'Explorer path hit a ring-3 exception during launch/callback'

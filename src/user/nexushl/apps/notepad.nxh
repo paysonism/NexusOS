@@ -71,11 +71,48 @@ extern szCursor;
 extern render_rect;
 extern render_text;
 
+str szOpenTextScratch = "                                                                                "
+
 # ============================================================
 # helpers
 # ============================================================
 fn line_ptr(row) { return &notepad_buf + row * NP_MAX_COLS; }
 fn len_ptr(row)  { return &np_line_len + row * 4; }
+fn notepad_buf_off() {
+    asm "mov rax, notepad_buf - app_blob_start";
+}
+fn np_line_len_off() {
+    asm "mov rax, np_line_len - app_blob_start";
+}
+fn np_num_lines_off() {
+    asm "mov rax, np_num_lines - app_blob_start";
+}
+fn np_scroll_top_off() {
+    asm "mov rax, np_scroll_top - app_blob_start";
+}
+fn np_cursor_row_off() {
+    asm "mov rax, np_cursor_row - app_blob_start";
+}
+fn np_cursor_col_off() {
+    asm "mov rax, np_cursor_col - app_blob_start";
+}
+
+fn copy_line_to_scratch(src) {
+    let i = 0;
+    while i < NP_MAX_COLS {
+        sb(&szOpenTextScratch + i, 0);
+        i = i + 1;
+    }
+
+    i = 0;
+    while i < NP_MAX_COLS - 1 {
+        let c = lb(src + i);
+        if c == 0 { return; }
+        sb(&szOpenTextScratch + i, c);
+        i = i + 1;
+    }
+    sb(&szOpenTextScratch + i, 0);
+}
 
 fn clear_buffer() {
     let i = 0;
@@ -281,19 +318,31 @@ fn arrow_right() {
 }
 
 fn build_save_content() {
+    # np_saved_content is NP_BUF_SIZE bytes. Worst case is
+    # NP_MAX_LINES * (NP_MAX_COLS-1 chars + CRLF), which exceeds the slot
+    # buffer, so every byte write here is bounds-checked against the cap
+    # before it lands.
+    let cap = NP_MAX_LINES * NP_MAX_COLS;
     let n = lw(&np_num_lines);
+    if n < 0 { n = 0; }
+    if n > NP_MAX_LINES { n = NP_MAX_LINES; }
     let i = 0;
     let w = 0;
     while i < n {
         let lp = line_ptr(i);
         let ll = lw(len_ptr(i));
+        if ll < 0 { ll = 0; }
+        if ll >= NP_MAX_COLS { ll = NP_MAX_COLS - 1; }
         let x = 0;
         while x < ll {
+            if w >= cap { sw(&np_save_total_bytes, w); return w; }
             sb(&np_saved_content + w, lb(lp + x));
             w = w + 1; x = x + 1;
         }
         if i + 1 < n {
+            if w >= cap { sw(&np_save_total_bytes, w); return w; }
             sb(&np_saved_content + w, 13); w = w + 1;
+            if w >= cap { sw(&np_save_total_bytes, w); return w; }
             sb(&np_saved_content + w, 10); w = w + 1;
         }
         i = i + 1;
@@ -409,19 +458,23 @@ fn draw(win) {
     if max_lines == 0 { return; }
 
     # draw text lines
-    let top = lw(&np_scroll_top);
-    let n = lw(&np_num_lines);
+    let app_base = lq(win + WIN_APPDATA);
+    let buf_base = app_base + notepad_buf_off();
+    let len_base = app_base + np_line_len_off();
+    let top = lw(app_base + np_scroll_top_off());
+    let n = lw(app_base + np_num_lines_off());
     let dl = 0;
     let li = top;
     while dl < max_lines {
         if li >= n { dl = max_lines; }
         if dl < max_lines {
-            let lp = line_ptr(li);
+            let lp = buf_base + li * NP_MAX_COLS;
             if lb(lp) != 0 {
+                copy_line_to_scratch(lp);
                 render_text(
                     x + BORDER_WIDTH + 4,
                     y + TITLEBAR_HEIGHT + NP_EDIT_TOP + 2 + dl * LINE_H,
-                    lp, C_BLACK, C_WHITE);
+                    &szOpenTextScratch, C_BLACK, C_WHITE);
             }
             li = li + 1;
             dl = dl + 1;
@@ -429,8 +482,8 @@ fn draw(win) {
     }
 
     # cursor
-    let cr = lw(&np_cursor_row);
-    let cc = lw(&np_cursor_col);
+    let cr = lw(app_base + np_cursor_row_off());
+    let cc = lw(app_base + np_cursor_col_off());
     let drow = cr - top;
     if drow >= 0 {
         if drow < max_lines {

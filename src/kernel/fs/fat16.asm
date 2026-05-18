@@ -84,8 +84,8 @@ FN_BEGIN fat16_init, 0, 0, FN_RET_SCALAR
     push rdi
     push rsi
 
-    ; Read boot sector of FAT16 partition
-    ; First attempt with default drive (0xE0)
+    ; Read boot sector of FAT16 partition.
+    mov byte [ata_drive_sel], 0xE0
     mov rdi, FAT16_PART_LBA
     mov rsi, FAT16_SECTOR_BUF
     mov edx, 1
@@ -93,8 +93,15 @@ FN_BEGIN fat16_init, 0, 0, FN_RET_SCALAR
     test eax, eax
     jnz .try_next_drive
 
-    ; Check partition signature
+    ; Check partition signature and NexusOS FAT image marker. In UEFI QEMU the
+    ; ESP is also exposed as an ATA disk; it can contain a valid-looking boot
+    ; sector at this LBA, so a signature-only probe can bind the file manager
+    ; to the wrong disk.
     cmp word [abs FAT16_SECTOR_BUF + 510], 0xAA55
+    jne .try_next_drive
+    cmp dword [abs FAT16_SECTOR_BUF + 3], 0x5558454E     ; "NEXU"
+    jne .try_next_drive
+    cmp dword [abs FAT16_SECTOR_BUF + 7], 0x20534F53     ; "SOS "
     je .bpb_found
 
 .try_next_drive:
@@ -111,8 +118,12 @@ FN_BEGIN fat16_init, 0, 0, FN_RET_SCALAR
     test eax, eax
     jnz .init_fail
 
-    ; Check signature again
+    ; Check signature and marker again
     cmp word [abs FAT16_SECTOR_BUF + 510], 0xAA55
+    jne .init_fail
+    cmp dword [abs FAT16_SECTOR_BUF + 3], 0x5558454E
+    jne .init_fail
+    cmp dword [abs FAT16_SECTOR_BUF + 7], 0x20534F53
     jne .init_fail
 
 .bpb_found:
@@ -266,6 +277,7 @@ fat16_count_root_files:
 ; Returns: eax = file count
 ; ============================================================================
 FN_BEGIN fat16_file_count, 0, 0, FN_RET_SCALAR
+    call fat16_count_root_files
     mov eax, [fat16_file_count_val]
     ret
 

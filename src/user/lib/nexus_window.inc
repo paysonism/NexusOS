@@ -15,6 +15,11 @@ WIN_OFF_DRAWFN  equ 112
 WIN_OFF_KEYFN   equ 120
 WIN_OFF_CLICKFN equ 128
 WIN_OFF_APPDATA equ 136
+; Optional drag callback: fn(win_ptr, client_x, client_y). Fired by the WM
+; while the left mouse button is held after an initial press inside the
+; window's client area, even if the cursor leaves the window's bounds. Same
+; calling convention as click_fn. Zero (default) means "no drag handler".
+WIN_OFF_DRAGFN  equ 144
 
 APP_EXPLORER    equ 2
 APP_TERMINAL    equ 3
@@ -23,6 +28,7 @@ APP_SETTINGS    equ 5
 APP_PAINT       equ 6
 APP_ABOUT       equ 7
 APP_SECURITY_PROBE equ 8
+APP_TASKMGR     equ 9
 
 APP_SLOT_PARAM_OFF         equ 0x100
 APP_SLOT_PARAM_SZ          equ 256

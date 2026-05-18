@@ -15,7 +15,6 @@ global wm_create_window
 global wm_create_window_ex
 global wm_draw_window
 global wm_draw_desktop
-global wm_prewarm_wallpaper_caches
 global wm_handle_mouse_event
 global wm_get_window_at
 global wm_close_window
@@ -23,8 +22,12 @@ global wm_window_count
 global wm_focused_window
 global wm_drag_window_id
 global desktop_bg_theme
+global wallpaper_selected
 global wallpaper_cache_valid
 global wallpaper_cache_active_addr
+
+; Plain desktop fill colour used until a wallpaper is selected (0x00RRGGBB).
+DESKTOP_SOLID_COLOR equ 0x00202632
 
 extern render_rect
 extern render_text
@@ -59,6 +62,7 @@ FN_BEGIN wm_init, 0, 0, FN_RET_VOID
     rep stosb
     mov qword [wm_window_count], 0
     mov qword [wm_drag_window_id], -1
+    mov qword [wm_app_drag_window_id], -1
     mov qword [wm_focused_window], -1
 
     ; Slot 0 = native NexusHL wallpaper renderer. Set it up like a regular
@@ -377,6 +381,14 @@ FN_BEGIN wm_draw_desktop_background, 0, 0, FN_RET_VOID
     push r14
     push r15
 
+    ; Until the user picks a wallpaper in Settings, the desktop uses a plain
+    ; solid fill. This keeps the SVG rasterizer (a multi-second, syscall-heavy
+    ; pass) entirely off the boot path so no core stalls while booting.
+    cmp byte [wallpaper_selected], 0
+    jne .have_wallpaper
+    call wm_bg_fill_solid
+    jmp .done
+.have_wallpaper:
     movzx r12d, byte [desktop_bg_theme]
     cmp r12d, 2
     ja .theme_zero
@@ -459,30 +471,39 @@ wm_wallpaper_cache_addr:
     mov rax, WALLPAPER_CACHE2_ADDR
     ret
 
-; Warm every wallpaper cache before the GUI becomes interactive. This keeps the
-; expensive SVG work out of the user-visible background-change path.
-FN_BEGIN wm_prewarm_wallpaper_caches, 0, 0, FN_RET_VOID
-    push r12
-    push r13
-    movzx r13d, byte [desktop_bg_theme]
-    mov byte [wallpaper_cache_valid], 0
-    mov byte [wallpaper_cache_valid_by_theme + 0], 0
-    mov byte [wallpaper_cache_valid_by_theme + 1], 0
-    mov byte [wallpaper_cache_valid_by_theme + 2], 0
-    xor r12d, r12d
-.prewarm_loop:
-    cmp r12d, 3
-    jae .prewarm_done
-    mov [desktop_bg_theme], r12b
-    call wm_draw_desktop_background
-    inc r12d
-    jmp .prewarm_loop
-.prewarm_done:
-    mov [desktop_bg_theme], r13b
-    call wm_draw_desktop_background
-    pop r13
-    pop r12
-    FN_END wm_prewarm_wallpaper_caches
+; Paint the back buffer with the plain desktop color. Used as the background
+; whenever no wallpaper has been selected yet (notably the whole boot path) so
+; the expensive SVG rasterizer never runs unprompted. Preserves all registers.
+wm_bg_fill_solid:
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    push r8
+    push r9
+    mov rdi, [bb_addr]
+    mov r8d, [scr_height]
+    mov r9d, [scr_width]
+    mov rdx, [scr_pitch_q]          ; bytes per scanline
+    mov eax, r9d
+    shl eax, 2
+    sub rdx, rax                    ; rdx = end-of-row gap (pitch - width*4)
+    mov eax, DESKTOP_SOLID_COLOR
+.fs_row:
+    test r8d, r8d
+    jz .fs_done
+    mov ecx, r9d
+    rep stosd                       ; EAX is preserved across rep stosd
+    add rdi, rdx
+    dec r8d
+    jmp .fs_row
+.fs_done:
+    pop r9
+    pop r8
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
     ret
 
 wm_bg_save_cache:
@@ -805,6 +826,13 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     cmp qword [wm_drag_window_id], -1
     jne .dragging
 
+    ; App-drag in flight? Route mouse-move to the latched window's drag_fn
+    ; or release the latch on button-up. Takes precedence over click/focus
+    ; routing for as long as the left button stays down, so drag events keep
+    ; flowing even when the cursor leaves the window's bounds.
+    cmp qword [wm_app_drag_window_id], -1
+    jne .app_drag_active
+
     ; Need left button down to start anything
     test r14, 1
     jz .mouse_done
@@ -909,6 +937,26 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     jz .set_focus
     test qword [wm_last_buttons], 1
     jnz .client_click_already_down
+
+    ; Button-down edge inside a window's client area. If this window also
+    ; installed a drag_fn, latch a drag session: subsequent ticks will route
+    ; mouse-move events to drag_fn via the .app_drag_active path until the
+    ; left button is released. Seed last_x/last_y with the press position so
+    ; the very first move-tick only fires after the cursor actually moves.
+    mov r9, [rax + WIN_OFF_DRAGFN]
+    test r9, r9
+    jz .client_click_no_drag_latch
+    mov [wm_app_drag_window_id], rbx
+    mov r10, r12
+    sub r10, [rax + WIN_OFF_X]
+    sub r10, BORDER_WIDTH
+    mov [wm_app_drag_last_x], r10
+    mov r10, r13
+    sub r10, [rax + WIN_OFF_Y]
+    sub r10, TITLEBAR_HEIGHT
+    mov [wm_app_drag_last_y], r10
+.client_click_no_drag_latch:
+
     mov r10, [wm_focused_window]
     mov [wm_click_focus_before], r10
     push rax
@@ -1051,6 +1099,74 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     mov byte [cursor_mode], 0
     mov eax, 1
     jmp .mouse_ret
+
+; ----------------------------------------------------------------------------
+; App-drag dispatch
+;
+; Entered when [wm_app_drag_window_id] != -1, i.e. a previous click started a
+; drag session on a window that installed a drag_fn. On every mouse-poll tick:
+;
+;   * left button released  -> clear the latch and exit (no event emitted).
+;   * window slot reused    -> bail out silently (defensive — the app may
+;                              have closed mid-drag and a new window now
+;                              owns the slot).
+;   * cursor moved          -> dispatch drag_fn(win_ptr, client_x, client_y)
+;                              and record the new position.
+;
+; client_x / client_y are computed the same way as click_fn (relative to the
+; window's client origin, below the titlebar and inside the border) and may
+; be negative or exceed window dimensions when the cursor drags outside the
+; window — apps are expected to clip. r12=mouseX, r13=mouseY, r14=buttons.
+.app_drag_active:
+    test r14, 1
+    jz .app_drag_release
+
+    mov rbx, [wm_app_drag_window_id]
+    cmp rbx, -1
+    je .mouse_done
+
+    mov rax, rbx
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    test qword [rax + WIN_OFF_FLAGS], WF_ACTIVE
+    jz .app_drag_release
+    mov r11, [rax + WIN_OFF_DRAGFN]
+    test r11, r11
+    jz .app_drag_release
+
+    ; client_x = mouseX - WIN_X - BORDER_WIDTH
+    mov rdx, r12
+    sub rdx, [rax + WIN_OFF_X]
+    sub rdx, BORDER_WIDTH
+    ; client_y = mouseY - WIN_Y - TITLEBAR_HEIGHT
+    mov rcx, r13
+    sub rcx, [rax + WIN_OFF_Y]
+    sub rcx, TITLEBAR_HEIGHT
+
+    ; Skip dispatch if neither coord changed since the last fired event.
+    ; The poll tick can fire many times a frame; collapsing same-position
+    ; ticks keeps the L3 trampoline cost down for stationary holds.
+    mov r8, [wm_app_drag_last_x]
+    cmp r8, rdx
+    jne .app_drag_dispatch
+    mov r8, [wm_app_drag_last_y]
+    cmp r8, rcx
+    je .app_drag_handled
+
+.app_drag_dispatch:
+    mov [wm_app_drag_last_x], rdx
+    mov [wm_app_drag_last_y], rcx
+    mov rdi, r11                ; target = drag_fn
+    mov rsi, rax                ; arg0 = window ptr
+    call call_app_l3
+
+.app_drag_handled:
+    mov eax, 1
+    jmp .mouse_ret
+
+.app_drag_release:
+    mov qword [wm_app_drag_window_id], -1
+    jmp .mouse_done
 
 
 .mouse_done:
@@ -1252,6 +1368,14 @@ wm_click_focus_before dq -1
 wm_drag_window_id dq -1
 wm_drag_off_x     dq 0
 wm_drag_off_y     dq 0
+; App-drag (per-window drag callback) tracking. Independent from the
+; titlebar window-drag above — that one moves the whole window; this one
+; routes mouse-move events to the app while the left button stays held.
+; Latched on left-button-down inside a client area whose window has a
+; non-zero WIN_OFF_DRAGFN. Cleared on left-button release.
+wm_app_drag_window_id dq -1
+wm_app_drag_last_x    dq 0
+wm_app_drag_last_y    dq 0
 global wm_drag_preview_x
 global wm_drag_preview_y
 global wm_drag_preview_w
@@ -1262,6 +1386,10 @@ wm_drag_preview_w dq 0          ; outline width
 wm_drag_preview_h dq 0          ; outline height
 wm_last_buttons   dq 0
 desktop_bg_theme  db 0
+; 0 = no wallpaper chosen yet -> desktop draws a solid colour and the SVG
+; rasterizer never runs. Set to 1 by SYS_DESKTOP_SET_BG when the user picks a
+; theme in Settings; only then is a wallpaper rendered.
+wallpaper_selected db 0
 wallpaper_cache_valid db 0
 wallpaper_cache_valid_by_theme db 0, 0, 0
 align 8

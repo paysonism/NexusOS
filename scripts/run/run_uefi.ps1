@@ -18,16 +18,23 @@ Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -For
 
 Start-Sleep -Seconds 1
 
+# Cache32Max constrains the *allocator* to CACHE32_RAM_LIMIT (32 MiB) in
+# software; it is NOT a QEMU RAM size. The kernel's static memory layout
+# (wallpaper caches at 0x3000000, BACK_BUFFER_SAVE_ADDR at 0x4C00000, ...)
+# reaches ~76 MiB, so the guest must still be given enough physical RAM to
+# load. 36M is far too small - the kernel never loads and the firmware
+# faults with #UD. 256M is comfortably above the kernel's footprint plus
+# OVMF overhead.
 if (-not $GuestMemory) {
-    $GuestMemory = if ($PerfProfile -eq 'Cache32Max') { '36M' } else { '512M' }
+    $GuestMemory = if ($PerfProfile -eq 'Cache32Max') { '256M' } else { '512M' }
 }
 
 Write-Host "Launching NexusOS UEFI with XHCI+HID ($PerfProfile, $GuestMemory RAM)..." -ForegroundColor Cyan
 
 $qemuArgs = @(
     '-bios', "$BUILD\OVMF.fd",
-    '-drive', "format=raw,file=fat:rw:$BUILD\esp",
-    '-drive', "file=$BUILD\data.img,format=raw,media=disk",
+    '-drive', "file=$BUILD\data.img,format=raw,if=ide,index=0,media=disk",
+    '-drive', "format=raw,file=fat:rw:$BUILD\esp,if=ide,index=1,media=disk",
     '-m', $GuestMemory,
     '-vga', 'std'
 )
