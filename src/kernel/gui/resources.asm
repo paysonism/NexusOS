@@ -101,6 +101,7 @@ global nx_icon_notepad_16, nx_icon_notepad_32, nx_icon_notepad_48
 global nx_icon_paint_16, nx_icon_paint_32, nx_icon_paint_48
 global nx_icon_settings_16, nx_icon_settings_32, nx_icon_settings_48
 global nx_icon_start_16, nx_icon_start_32, nx_icon_start_48
+global nx_icon_taskmgr_16, nx_icon_taskmgr_32, nx_icon_taskmgr_48
 global nx_icon_terminal_16, nx_icon_terminal_32, nx_icon_terminal_48
 
 align 8
@@ -199,6 +200,16 @@ nx_icon_start_32:
 align 8
 nx_icon_start_48:
     incbin "src/resources/design-system/icons/start-48.nic"
+
+align 8
+nx_icon_taskmgr_16:
+    incbin "src/resources/design-system/icons/taskmgr.nic"
+align 8
+nx_icon_taskmgr_32:
+    incbin "src/resources/design-system/icons/taskmgr-32.nic"
+align 8
+nx_icon_taskmgr_48:
+    incbin "src/resources/design-system/icons/taskmgr-48.nic"
 
 align 8
 nx_icon_terminal_16:

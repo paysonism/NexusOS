@@ -21,6 +21,7 @@ global smp_core_states
 extern madt_enabled_cpu_count
 extern madt_lapic_ids
 extern smp_worker_loop          ; proc/workqueue.asm - AP job-processing loop
+extern ap_long_mode_init        ; kernel/arch/apic.asm - Stage 2b ring-3 prep
 
 ; --- Initialize Local APIC ---
 FN_BEGIN apic_init, 0, 0, FN_RET_SCALAR
@@ -76,7 +77,6 @@ FN_BEGIN apic_eoi, 0, 0, FN_RET_SCALAR
     mov dword [rdi + 0x0B0], 0
     ret
 
-%ifdef NEXUS_CACHE32_MAX
 %ifdef NEXUS_CACHE32_AP_STARTUP
 FN_BEGIN smp_ap_startup, 0, 0, FN_RET_SCALAR
     push rbx
@@ -274,10 +274,21 @@ ap_lm64:
     mov rax, smp_ap_started_count
     lock inc dword [rax]
     mov dword [rdi + 0], 3      ; state = PARKED/available (counted by smp_count_states)
+    ; --- Stage 2b: prepare this AP to handle ring 3 -------------------------
+    ; ap_long_mode_init lives in the kernel image at its real address (not in
+    ; the trampoline copy), so jumping to it via absolute imm64 is correct.
+    ; It loads the full GDT/IDT, ltrs this core's TSS selector, and sets the
+    ; SYSCALL MSRs so dispatched app code can syscall normally. RDI carries
+    ; this core's index (offset 4 of the per-core state record) so the init
+    ; function can pick the right TSS slot. After it returns we continue to
+    ; the worker loop exactly as before.
+    push rdi                     ; preserve per-core state ptr across the call
+    mov edi, [rdi + 4]           ; edi = this AP's core index
+    mov rax, ap_long_mode_init
+    call rax
+    pop rdi
     ; Hand this AP to the SMP work queue. smp_worker_loop never returns: the
     ; core now pulls compute jobs from the queue instead of sitting in HLT.
-    ; The address is an absolute imm64, so the jump is correct even though
-    ; this code executes from the relocated trampoline copy.
     mov rax, smp_worker_loop
     jmp rax
 align 8
@@ -295,6 +306,111 @@ ap_boot_state_ptr:
     dq 0
 ap_tramp_end:
 
+; ----------------------------------------------------------------------------
+; ap_long_mode_init - one-time per-AP ring-3 enablement (Stage 2b)
+; ----------------------------------------------------------------------------
+; Called from the AP trampoline once this CPU is in long mode with paging.
+; EDI = this AP's core index (>= 1). NEVER call from the BSP — the BSP runs
+; gdt64_init / idt_init / tss_init / syscall_init explicitly during kmain.
+;
+; Steps:
+;   1. Load the kernel's full GDT (gdt64_ptr) so ring-3 selectors and the
+;      per-core TSS descriptor are visible to this CPU.
+;   2. Reload segment registers from the new GDT. Kernel selectors are at
+;      the same indices as the trampoline GDT (CS=0x08, DS=0x10) so this is
+;      defensive rather than strictly required, but doing it explicitly
+;      flushes the descriptor cache to the new GDT contents.
+;   3. Load the kernel IDT (idt_ptr). APs do NOT service hardware IRQs (the
+;      I/O APIC routes those to the BSP), but they MUST have an IDT loaded
+;      so a CPU exception in ring 3 (e.g. #PF from a buggy callback) lands
+;      in the kernel handler instead of triple-faulting.
+;   4. Set up this AP's TSS via tss_init_for_core(idx). Each AP needs its
+;      own TSS so its TSS.RSP0 is a private kernel stack — without that,
+;      two cores taking exceptions simultaneously would clobber each other.
+;   5. Program the SYSCALL MSRs (EFER.SCE, STAR, LSTAR, FMASK) on this CPU
+;      via syscall_init_this_cpu. Each core has its own copy of these MSRs.
+;
+; Preserves no caller-visible registers; the trampoline saves/restores its
+; bookkeeping (RDI = per-core state ptr) around the call.
+; ----------------------------------------------------------------------------
+%ifdef NEXUS_CACHE32_AP_STARTUP
+extern gdt64_ptr
+extern idt_ptr
+extern tss_init_for_core
+extern syscall_init_this_cpu
+
+global ap_long_mode_init
+ap_long_mode_init:
+    push rax
+    push rcx
+    push rdi
+    mov ecx, edi                      ; save core index across the GDT load
+    ; --- 0. Sanitize CR4 to match what the UEFI loader did for the BSP. ---
+    ; UEFI may leave SMEP / SMAP / PCIDE / LA57 / PKE set when it hands off,
+    ; and the trampoline only forced PAE on. With SMAP enabled in particular,
+    ; the first time call_app_l3 writes the slot's shadow-window page from
+    ; kernel mode the AP page-faults (kernel touching a USER-bit page) and
+    ; without a recoverable #PF handler the AP triple-faults silently. This
+    ; mirrors the sanitisation in src/boot/uefi_loader.asm.
+    mov rax, cr4
+    btr rax, 7                        ; PGE   off
+    btr rax, 12                       ; LA57  off
+    btr rax, 17                       ; PCIDE off
+    btr rax, 20                       ; SMEP  off
+    btr rax, 21                       ; SMAP  off
+    btr rax, 22                       ; PKE   off
+    bts rax, 5                        ; PAE   on
+    bts rax, 9                        ; OSFXSR on
+    bts rax, 10                       ; OSXMMEXCPT on
+    mov cr4, rax
+    ; EFER: enable NXE so kernel page tables with the NX bit are accepted.
+    push rdx
+    mov ecx, 0xC0000080
+    rdmsr
+    bts eax, 11                       ; NXE on
+    wrmsr
+    ; IA32_PAT: write the canonical Linux layout (slot 0=WB, slot 1=WC, ...)
+    ; so the FB leaf PTE patched by fbperf_wc_activate is interpreted as WC
+    ; on every core, not just the BSP. Each logical CPU has its own PAT MSR;
+    ; APs come out of reset with the architectural default (slot 1 = WT),
+    ; which would degrade any AP-side FB access to write-through. Slot 0=WB
+    ; matches the default so this is safe to write before BSP has activated.
+    mov ecx, 0x277
+    mov eax, 0x00070106
+    mov edx, 0x00070106
+    wrmsr
+    pop rdx
+    mov ecx, edi                      ; restore core index in ecx
+    ; --- 1. Load the kernel GDT ---
+    lea rax, [rel gdt64_ptr]
+    lgdt [rax]
+    ; --- 2. Reload segment registers from the new GDT ---
+    mov ax, 0x10                      ; kernel data selector
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    ; Reload CS via push/retfq.
+    lea rax, [rel .reloaded]
+    push qword 0x08                   ; kernel code selector
+    push rax
+    retfq
+.reloaded:
+    ; --- 3. Load the kernel IDT ---
+    lea rax, [rel idt_ptr]
+    lidt [rax]
+    ; --- 4. Per-core TSS ---
+    mov edi, ecx
+    call tss_init_for_core
+    ; --- 5. SYSCALL MSRs on this CPU ---
+    call syscall_init_this_cpu
+    pop rdi
+    pop rcx
+    pop rax
+    ret
+%endif
+
 %else
 smp_ap_startup:
     ret
@@ -308,14 +424,3 @@ smp_started_cores: dd 1
 smp_alive_cores: dd 1
 smp_parked_cores: dd 1
 smp_ap_started_count: dd 0
-%else
-smp_ap_startup:
-    ret
-section .data
-align 64
-smp_core_states: equ SMP_CORE_STATE_ADDR
-smp_target_cores: dd 1
-smp_started_cores: dd 1
-smp_alive_cores: dd 1
-smp_parked_cores: dd 1
-%endif

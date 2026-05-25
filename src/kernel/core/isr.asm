@@ -187,7 +187,7 @@ FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
     jc .exc_ring3_slot_zero
     cmp rax, [rel l3_app_arena_size_v]
     jae .exc_ring3_slot_zero
-    shr rax, 20
+    shr rax, 21
     jmp .exc_ring3_slot_ready
 .exc_ring3_slot_zero:
     xor eax, eax

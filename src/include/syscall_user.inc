@@ -430,4 +430,89 @@
     syscall
 %endmacro
 
+; SYS_SYSINFO(selector, arg)
+%macro SYS_SYSINFO 2
+    mov rax, 55
+    mov rdi, %1
+    mov rsi, %2
+    syscall
+%endmacro
+
+; SYS_NET_PING4(ip)
+;   ip = A.B.C.D packed into a 32-bit scalar (8.8.8.8 => 0x08080808)
+;   returns approximate RTT in ms, or -1 after a 2s timeout/failure.
+%macro SYS_NET_PING4 1
+    mov rax, 56
+    mov rdi, %1
+    syscall
+%endmacro
+
+; SYS_NET_TCP_CONNECT4(ip, dst_port, src_port)
+;   ip = A.B.C.D packed into a 32-bit scalar
+;   returns 1 if a TCP SYN was sent, 0 on network failure, -2 if busy.
+%macro SYS_NET_TCP_CONNECT4 3
+    mov rax, 60
+    mov rdi, %1
+    mov rsi, %2
+    mov rdx, %3
+    syscall
+%endmacro
+
+; SYS_NET_DNS_A(hostname)
+;   hostname = app-owned C-string such as "example.com"
+;   returns IPv4 A.B.C.D packed into a 32-bit scalar, 0 on lookup failure,
+;   -1 for invalid arguments, or -2 if another DNS query is in flight.
+%macro SYS_NET_DNS_A 1
+    mov rax, 61
+    mov rdi, %1
+    syscall
+%endmacro
+
+; SYS_NET_PING4_TICK(ip)
+;   Async, non-blocking ICMP echo. Call repeatedly each frame until the
+;   return value is non-zero. The kernel runs the ARP+ICMP state machine
+;   one short step per call, so the GUI keeps drawing in between.
+;   returns:
+;     > 0  -> RTT in microseconds (one echo completed)
+;     0    -> still in flight, call again next frame
+;     -1   -> timeout / no link / send failed
+;     -2   -> a ping with a different target is still in flight
+%macro SYS_NET_PING4_TICK 1
+    mov rax, 62
+    mov rdi, %1
+    syscall
+%endmacro
+
+; SYS_DESKTOP_BG_BUSY()
+;   returns 1 while a selected wallpaper is invalid, rendering, or waiting to
+;   be presented; 0 once the finished cache has been shown.
+%macro SYS_DESKTOP_BG_BUSY 0
+    mov rax, 63
+    syscall
+%endmacro
+
+; SYS_OPEN_FILE_MEDIA(dir_entry_handle) — kernel-side: launch Media Player
+;   and load the file's bytes into the new window's slot at
+;   APP_SLOT_BMP_FILE_OFF. The Media Player draw fn (app_media_draw) probes
+;   the file's magic on every frame and dispatches to the matching codec.
+;   rdi = slot-cached dir entry pointer (from SYS_FS_ENTRY)
+;   returns rax = media window id, or -1
+%macro SYS_OPEN_FILE_MEDIA 1
+    mov rax, 64
+    mov rdi, %1
+    syscall
+%endmacro
+
+; SYS_WM_SET_USER_ARG(win_id, value)
+;   Writes a 64-bit opaque value into the target window's WIN_OFF_USER_ARG
+;   field. Used by a window's *creator* to pass a small bit of context to a
+;   freshly created window whose drawfn will run in a different app slot
+;   (e.g. Explorer → Properties window: pass the file-row index).
+%macro SYS_WM_SET_USER_ARG 2
+    mov rax, 65
+    mov rdi, %1
+    mov rsi, %2
+    syscall
+%endmacro
+
 %endif

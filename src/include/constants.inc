@@ -21,18 +21,38 @@
 
 %ifdef NEXUS_CACHE32_MAX
 CACHE32_RAM_LIMIT   equ 0x2000000    ; 32MB strict profile cap
-SYSTEM_RESERVED_END equ 0x5600000    ; Allocator starts above wallpaper/drag caches
+SYSTEM_RESERVED_END equ (BACK_BUFFER_SAVE_ADDR + BOOT_BACK_BUFFER_SIZE)
 SMP_CORE_STATE_ADDR equ 0xC40000     ; Cacheline-aligned per-core records
 SMP_CORE_STACK_BASE equ 0xC50000     ; AP stacks grow down from here
 SMP_MAX_CORES       equ 8
-SMP_CORE_STATE_SIZE equ 64
+SMP_CORE_STATE_SIZE equ 128
 SMP_CORE_STACK_SIZE equ 0x4000
+%elifdef NEXUS_SMP
+SMP_CORE_STATE_ADDR equ 0xC40000
+SMP_CORE_STACK_BASE equ 0xC50000
+SMP_MAX_CORES       equ 8
+SMP_CORE_STATE_SIZE equ 128
+SMP_CORE_STACK_SIZE equ 0x4000
+SYSTEM_RESERVED_END equ (BACK_BUFFER_SAVE_ADDR + BOOT_BACK_BUFFER_SIZE)
 %else
 SMP_CORE_STATE_ADDR equ 0xC40000
 SMP_MAX_CORES       equ 1
-SMP_CORE_STATE_SIZE equ 64
-SYSTEM_RESERVED_END equ 0x5600000    ; Allocator starts above wallpaper/drag caches
+SMP_CORE_STATE_SIZE equ 128
+SYSTEM_RESERVED_END equ (BACK_BUFFER_SAVE_ADDR + BOOT_BACK_BUFFER_SIZE)
 %endif
+
+; --- SMP process-manager core policy ---------------------------------------
+; Cores 0 and 1 are reserved for "system" work: the BSP render loop, drivers,
+; GUI, and high-priority kernel jobs. App processes default to the complement
+; mask so user code never preempts system work. An app may broaden or narrow
+; its mask via SYS_PROC_SET_AFFINITY (Stage 2+); the kernel still rejects any
+; bit that would land an app on a system core.
+SMP_SYSTEM_CORE_MASK equ 0x00000003   ; bit 0 = core 0, bit 1 = core 1
+SMP_APP_CORE_MASK    equ 0xFFFFFFFC   ; complement; masked against ncores at use
+
+; --- Process pool layout (shared by proc/process.asm and workqueue.asm) -----
+MAX_PROCESSES        equ 12
+PROCESS_POOL         equ 0xC30000     ; 12 * 512 bytes
 
 ; --- Stage 2 disk layout ---
 STAGE2_SECTORS      equ 63           ; Sectors 1-63
@@ -97,7 +117,7 @@ COLOR_START_BTN      equ COLOR_SURFACE_1
 COLOR_START_HOVER    equ COLOR_SURFACE_2
 
 ; --- Window Manager ---
-MAX_WINDOWS         equ 8
+MAX_WINDOWS         equ APP_SLOT_COUNT
 WINDOW_STRUCT_SIZE  equ 256          ; Bytes per window struct
 L3_USER_STACK_SIZE  equ 16384        ; 16 KB user stack per L3 window callback context
 L3_SYSCALL_STACK_SIZE equ 4096       ; 4 KB syscall stack per L3 context
@@ -181,42 +201,37 @@ KEY_F11             equ 0xFB
 KEY_F12             equ 0xFC
 
 ; --- USB/XHCI Memory Layout ---
-%ifdef NEXUS_CACHE32_MAX
-XHCI_DCBAA_ADDR     equ 0x1700000    ; Cold DMA region outside GUI/app arenas
-XHCI_CMD_RING_ADDR  equ 0x1710000
-XHCI_ERST_ADDR      equ 0x1720000
-XHCI_EVT_RING_ADDR  equ 0x1730000
-XHCI_SCRATCH_ADDR   equ 0x1740000
-XHCI_DEV_CTX_ADDR   equ 0x1750000
-XHCI_INPUT_CTX_ADDR equ 0x1760000
-XHCI_CTRL_RING_ADDR equ 0x1770000
-XHCI_INT_RING_ADDR  equ 0x1780000
-XHCI_CTRL_BUF_ADDR  equ 0x1790000
-XHCI_MOUSE_BUF_ADDR equ 0x17A0000
-XHCI_DEV_CTX2_ADDR  equ 0x17B0000
-XHCI_INT_RING2_ADDR equ 0x17C0000
-XHCI_MOUSE_BUF2_ADDR equ 0x17D0000
-XHCI_CTRL_RING2_ADDR equ 0x17E0000
-XHCI_MEM_END        equ 0x17F0000
-%else
-XHCI_DCBAA_ADDR     equ 0x1700000    ; Device Context Base Address Array
-XHCI_CMD_RING_ADDR  equ 0x1710000    ; Command Ring (4096 TRBs)
-XHCI_ERST_ADDR      equ 0x1720000    ; Event Ring Segment Table
-XHCI_EVT_RING_ADDR  equ 0x1730000    ; Event Ring (4096 TRBs)
-XHCI_SCRATCH_ADDR   equ 0x1740000    ; Scratchpad array + buffers
-XHCI_DEV_CTX_ADDR   equ 0x1750000    ; Output Device Context (slot 1)
-XHCI_INPUT_CTX_ADDR equ 0x1760000    ; Input Context
-XHCI_CTRL_RING_ADDR equ 0x1770000    ; Control EP0 Transfer Ring
-XHCI_INT_RING_ADDR  equ 0x1780000    ; Interrupt IN Transfer Ring
-XHCI_CTRL_BUF_ADDR  equ 0x1790000    ; Control transfer data buffers
-XHCI_MOUSE_BUF_ADDR equ 0x17A0000    ; Mouse interrupt data buffers (slot 1)
+XHCI_DCBAA_ADDR     equ 0x1900000    ; Device Context Base Address Array
+XHCI_CMD_RING_ADDR  equ 0x1910000    ; Command Ring (4096 TRBs)
+XHCI_ERST_ADDR      equ 0x1920000    ; Event Ring Segment Table
+XHCI_EVT_RING_ADDR  equ 0x1930000    ; Event Ring (4096 TRBs)
+XHCI_SCRATCH_ADDR   equ 0x1940000    ; Scratchpad array + buffers
+XHCI_DEV_CTX_ADDR   equ 0x1950000    ; Output Device Context (slot 1)
+XHCI_INPUT_CTX_ADDR equ 0x1960000    ; Input Context
+XHCI_CTRL_RING_ADDR equ 0x1970000    ; Control EP0 Transfer Ring
+XHCI_INT_RING_ADDR  equ 0x1980000    ; Interrupt IN Transfer Ring
+XHCI_CTRL_BUF_ADDR  equ 0x1990000    ; Control transfer data buffers
+XHCI_MOUSE_BUF_ADDR equ 0x19A0000    ; Mouse interrupt data buffers (slot 1)
 ; Slot 2 device support
-XHCI_DEV_CTX2_ADDR  equ 0x17B0000    ; Output Device Context (slot 2)
-XHCI_INT_RING2_ADDR equ 0x17C0000    ; Interrupt IN Transfer Ring (slot 2)
-XHCI_MOUSE_BUF2_ADDR equ 0x17D0000   ; Mouse interrupt data buffers (slot 2)
-XHCI_CTRL_RING2_ADDR equ 0x17E0000   ; Control EP0 Transfer Ring (slot 2)
-XHCI_MEM_END        equ 0x17F0000    ; End of XHCI memory region
-%endif
+XHCI_DEV_CTX2_ADDR  equ 0x19B0000    ; Output Device Context (slot 2)
+XHCI_INT_RING2_ADDR equ 0x19C0000    ; Interrupt IN Transfer Ring (slot 2)
+XHCI_MOUSE_BUF2_ADDR equ 0x19D0000   ; Mouse interrupt data buffers (slot 2)
+XHCI_CTRL_RING2_ADDR equ 0x19E0000   ; Control EP0 Transfer Ring (slot 2)
+XHCI_MEM_END        equ 0x19F0000    ; End of XHCI memory region
+
+; --- RTL8152/RTL8156 USB Ethernet DMA region ---
+; Kept outside the fixed xHCI controller workspace. The RTL8139 fallback uses
+; 0x1B00000..0x1B04800, so USB NIC rings start after that window.
+RTL8156_BULK_IN_RING_ADDR  equ 0x1B10000
+RTL8156_BULK_OUT_RING_ADDR equ 0x1B20000
+RTL8156_RX_BUF_ADDR        equ 0x1B30000
+RTL8156_TX_BUF_ADDR        equ 0x1B40000
+RTL8156_SCRATCH_ADDR       equ 0x1B50000
+; Dedicated xHCI device context + control EP0 ring for the NIC slot, so that
+; addressing the NIC does not stomp the HID slot1/slot2 device contexts that
+; the mouse/keyboard drivers depend on.
+RTL8156_XHCI_DEV_CTX_ADDR  equ 0x1B60000
+RTL8156_XHCI_CTRL_RING_ADDR equ 0x1B70000
 
 ; --- XHCI Capability Register Offsets (from MMIO base) ---
 XHCI_CAP_CAPLENGTH  equ 0x00
@@ -278,9 +293,12 @@ TRB_DATA             equ (3 << 10)
 TRB_STATUS           equ (4 << 10)
 TRB_LINK             equ (6 << 10)
 TRB_ENABLE_SLOT      equ (9 << 10)
+TRB_DISABLE_SLOT     equ (10 << 10)
 TRB_ADDRESS_DEV      equ (11 << 10)
 TRB_CONFIG_EP        equ (12 << 10)
 TRB_EVAL_CTX         equ (13 << 10)
+TRB_RESET_ENDPOINT   equ (14 << 10)
+TRB_SET_TR_DEQUEUE   equ (16 << 10)
 TRB_TRANSFER_EVT     equ (32 << 10)
 TRB_CMD_COMPLETION   equ (33 << 10)
 TRB_PORT_STATUS_CHG  equ (34 << 10)

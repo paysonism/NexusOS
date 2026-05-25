@@ -169,9 +169,16 @@ Rejected pointer-bearing syscalls now return `-1` in `RAX`.
 
 `23` `SYS_APP_OPEN`
 - Args: `RDI=command_line_ptr`
-- Effect: launch an app from a command string such as `notepad README.TXT`
+- Effect: launch an app from a command string of the form `"<app> <params>"`
+  (e.g. `notepad README.TXT`, `ping 8.8.8.8`). The first whitespace/comma
+  separates the app name from the param tail; the tail is copied (up to 255
+  bytes) into the new window's L3 slot at `APP_SLOT_PARAM_OFF` (`0x17C000`)
+  for the launched app to read. Notepad treats the param as a FAT16 path and
+  loads it; other apps receive the raw string.
 - Returns: launched window id in `RAX`, or `-1`
-- Validation: command line must be an app-owned NUL-terminated string
+- Validation: command line must be an app-owned NUL-terminated string; app
+  name must match the registry in `app_command_name_to_id` (case-insensitive)
+- See: `docs/app-authoring.md` § Launching apps with parameters
 
 `24` `SYS_DISPLAY_FLAGS`
 - Args: none
@@ -270,6 +277,49 @@ Rejected pointer-bearing syscalls now return `-1` in `RAX`.
 - Args: `RDI=name`, `RSI=name_len`, `RDX=out`, `R10=max`
 - Returns: bytes copied from a custom internal-DTD entity value, or `-1`
 - Validation: `name` and `out` must be app-owned buffers
+
+`55` `SYS_SYSINFO`
+- Args: `RDI=selector`, `RSI=arg`
+- Returns: system information scalar such as FPS, RAM, CPU MHz, core count, or
+  per-core utilization. See `src/user/nexushl/lib/core.nxh`.
+- GPU selectors expose the passive AMD display provider state used by Settings:
+  provider/status, BDF, device/vendor ID, class, BAR0 low/high dwords, command
+  register, and active flag. These are identity/readiness values only; the
+  kernel still does not enable PCI decode or touch AMD MMIO during this phase.
+
+`56` `SYS_NET_PING4`
+- Args: `RDI=IPv4 address packed as A.B.C.D`, for example `8.8.8.8` is
+  `0x08080808`
+- Returns: approximate ICMP echo RTT in milliseconds, or `-1` after a 2 second
+  timeout or network failure
+- Scope: system-wide kernel network service. Apps should call the NexusHL
+  wrapper in `src/user/nexushl/lib/net.nxh` instead of issuing the syscall
+  directly.
+
+`57` `SYS_NET_INFO`
+- Args: `RDI=selector`
+- Returns: current network state scalar. Selector `9` returns the DHCP-learned
+  DNS server in A.B.C.D order, falling back to the DHCP server identifier when
+  no DNS option was provided.
+- Scope: diagnostic/app status surface. Apps should use `net_info()` and the
+  `NI_*` constants in `src/user/nexushl/lib/core.nxh`.
+
+`60` `SYS_NET_TCP_CONNECT4`
+- Args: `RDI=IPv4 address packed as A.B.C.D`, `RSI=destination port`,
+  `RDX=source port`
+- Returns: `1` if the TCP SYN was queued/sent, `0` on network failure, `-1`
+  for invalid arguments, or `-2` if another TCP open is in flight
+- Scope: generic kernel TCP path. It resolves the current next-hop with ARP,
+  builds IPv4/TCP above the selected NIC, and does not call NIC-specific TCP
+  code.
+
+`61` `SYS_NET_DNS_A`
+- Args: `RDI=app-owned hostname C-string`
+- Returns: IPv4 address packed as A.B.C.D, `0` when lookup fails, `-1` for an
+  invalid pointer/name, or `-2` if another DNS lookup is in flight
+- Scope: generic kernel DNS path. It uses the DHCP-learned DNS server exposed
+  by `SYS_NET_INFO` selector `9`, sends a UDP query through `net/udp.asm`, and
+  currently returns the first A record in the response.
 
 ## Current hardening notes
 

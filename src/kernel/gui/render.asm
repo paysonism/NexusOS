@@ -16,6 +16,7 @@ extern draw_hline
 extern draw_vline
 extern display_clear
 extern bb_addr
+extern scr_width
 extern scr_height
 extern scr_pitch_q
 
@@ -28,6 +29,7 @@ global render_get_backbuffer
 global render_mark_dirty
 global render_mark_full
 global render_flush
+global render_restore_dirty_backbuffer
 
 ; --- Initialize render system ---
 render_init:
@@ -240,6 +242,121 @@ render_restore_backbuffer:
     pop rcx
     pop rsi
     pop rdi
+    ret
+
+; --- Restore only current dirty rectangles from saved backbuffer ---
+; Used during titlebar drag so each mouse move copies/flips just the old and
+; new outline areas instead of the whole framebuffer.
+render_restore_dirty_backbuffer:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+
+    mov r13d, [dirty_count]
+    test r13d, r13d
+    jz .rdb_done
+
+    xor r12d, r12d
+.rdb_loop:
+    cmp r12d, r13d
+    jge .rdb_done
+
+    mov eax, r12d
+    shl eax, 4
+    lea rbx, [dirty_rects + rax]
+    mov edi, [rbx]          ; x
+    mov esi, [rbx + 4]      ; y
+    mov edx, [rbx + 8]      ; w
+    mov ecx, [rbx + 12]     ; h
+
+    ; Clip left/top.
+    test edi, edi
+    jge .clip_left_ok
+    add edx, edi
+    xor edi, edi
+.clip_left_ok:
+    test esi, esi
+    jge .clip_top_ok
+    add ecx, esi
+    xor esi, esi
+.clip_top_ok:
+    test edx, edx
+    jle .rdb_next
+    test ecx, ecx
+    jle .rdb_next
+
+    ; Clip right/bottom.
+    mov eax, [scr_width]
+    sub eax, edi
+    cmp edx, eax
+    jle .clip_right_ok
+    mov edx, eax
+.clip_right_ok:
+    mov eax, [scr_height]
+    sub eax, esi
+    cmp ecx, eax
+    jle .clip_bottom_ok
+    mov ecx, eax
+.clip_bottom_ok:
+    test edx, edx
+    jle .rdb_next
+    test ecx, ecx
+    jle .rdb_next
+
+    ; r8/r9 = dst/src row starts, r10 = pitch, r11d = width in dwords.
+    mov r10, [scr_pitch_q]
+    mov eax, esi
+    imul rax, r10
+    mov r8, [bb_addr]
+    add r8, rax
+    mov r9, BACK_BUFFER_SAVE_ADDR
+    add r9, rax
+    mov eax, edi
+    shl eax, 2
+    add r8, rax
+    add r9, rax
+    mov r11d, edx
+
+.rdb_row:
+    test ecx, ecx
+    jz .rdb_next
+    push rcx
+    mov rdi, r8
+    mov rsi, r9
+    mov ecx, r11d
+    rep movsd
+    pop rcx
+    add r8, r10
+    add r9, r10
+    dec ecx
+    jmp .rdb_row
+
+.rdb_next:
+    inc r12d
+    jmp .rdb_loop
+
+.rdb_done:
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
     ret
 
 section .data

@@ -115,6 +115,7 @@ hid_parse_report_desc_v2:
     mov dword [hp_bit_offset], 0
     mov byte [hp_in_finger], 0
     mov byte [hp_finger_idx], 0
+    mov byte [hp_usage_count], 0
     mov byte [hp_found_fields], 0
     mov byte [hid_parsed_conf_bit_size], 0
 
@@ -252,16 +253,21 @@ hid_parse_report_desc_v2:
 .set_report_id:
     mov [hp_report_id], bx
     ; Report ID presence means first byte of report is the ID
-    ; Reset bit offset to 0 (ID byte is implicit, not counted in bits)
-    ; Actually in HID spec, report ID byte is NOT included in Input field offsets.
-    ; The bit offset starts AFTER the report ID byte.
-    ; We track this by noting the report has an ID.
+    ; Reset bit offset to 0: HID report IDs have independent layouts, and
+    ; the ID byte is implicit, not counted in Input field offsets.
+    mov dword [hp_bit_offset], 0
     mov byte [hid_parsed_has_report_id], 1
     mov [hid_parsed_report_id], bl
     jmp .parse_loop
 
 .set_usage:
     mov [hp_usage], bx
+    movzx eax, byte [hp_usage_count]
+    cmp eax, HP_USAGE_LIST_MAX
+    jae .set_usage_done
+    mov [hp_usage_list + rax * 2], bx
+    inc byte [hp_usage_count]
+.set_usage_done:
     jmp .parse_loop
 
 .process_collection:
@@ -340,6 +346,67 @@ hid_parse_report_desc_v2:
     cmp eax, UP_GENERIC_DESKTOP
     jne .not_generic_desktop
 
+    ; HID descriptors commonly declare Usage X, Usage Y, then one Input with
+    ; Report Count=2. Record each usage at its own field offset.
+    cmp byte [hp_usage_count], 1
+    jbe .generic_single_usage
+
+    xor r11d, r11d
+.generic_usage_loop:
+    cmp r11b, [hp_usage_count]
+    jae .advance_bits
+    cmp r11d, r9d
+    jae .advance_bits
+
+    movzx ecx, word [hp_usage_list + r11 * 2]
+    mov eax, r11d
+    imul eax, r8d
+    mov edi, [hp_bit_offset]
+    add edi, eax
+
+    cmp ecx, USAGE_X
+    je .x_multi_store
+    cmp ecx, USAGE_Y
+    je .y_multi_store
+.generic_usage_next:
+    inc r11d
+    jmp .generic_usage_loop
+
+.x_multi_store:
+    cmp byte [hp_in_finger], 1
+    jne .x_multi_ok
+    cmp byte [hp_finger_idx], 0
+    jne .generic_usage_next
+.x_multi_ok:
+    mov [hid_parsed_x_bit_offset], di
+    mov [hid_parsed_x_bit_size], r8b
+    mov eax, [hp_logical_max]
+    mov [hid_parsed_x_logical_max], eax
+    mov eax, [hp_logical_min]
+    mov [hid_parsed_x_logical_min], eax
+    cmp byte [hp_is_absolute], 1
+    jne .x_multi_relative
+    mov byte [hid_parsed_is_absolute], 1
+.x_multi_relative:
+    or byte [hp_found_fields], 0x02
+    jmp .generic_usage_next
+
+.y_multi_store:
+    cmp byte [hp_in_finger], 1
+    jne .y_multi_ok
+    cmp byte [hp_finger_idx], 0
+    jne .generic_usage_next
+.y_multi_ok:
+    mov [hid_parsed_y_bit_offset], di
+    mov [hid_parsed_y_bit_size], r8b
+    mov eax, [hp_logical_max]
+    mov [hid_parsed_y_logical_max], eax
+    mov eax, [hp_logical_min]
+    mov [hid_parsed_y_logical_min], eax
+    or byte [hp_found_fields], 0x04
+    jmp .generic_usage_next
+
+.generic_single_usage:
     cmp ecx, USAGE_X
     jne .not_x
     ; X axis - only store for first finger (finger_idx==0) or non-finger context
@@ -438,6 +505,7 @@ hid_parse_report_desc_v2:
 .clear_local:
     ; Clear local state (usage) after main items
     mov word [hp_usage], 0
+    mov byte [hp_usage_count], 0
     jmp .parse_loop
 
 .skip_long_item:
@@ -466,10 +534,13 @@ hid_parse_report_desc_v2:
     ja .parse_fail
     mov [hid_parsed_report_bytes], al
 
-    ; Check if we found enough useful fields
-    ; Need at least X and Y
-    test byte [hp_found_fields], 0x06
-    jz .parse_fail
+    ; Check if we found enough useful fields: both X and Y are required.
+    ; Accepting a single axis makes touchpads appear to move only horizontally
+    ; or vertically when a descriptor was only partially parsed.
+    mov al, [hp_found_fields]
+    and al, 0x06
+    cmp al, 0x06
+    jne .parse_fail
 
     mov eax, 1
     jmp .parse_ret
@@ -699,6 +770,12 @@ FN_BEGIN hid_process_touchpad_report, 0, 0, FN_RET_SCALAR
     jc .no_xy
     mov r11d, eax               ; R11 = tip switch
 .no_tip:
+    cmp byte [hid_parsed_cc_bit_size], 0
+    jne .contact_count_ready
+    test r11d, r11d
+    jz .contact_count_ready
+    mov r10d, 1
+.contact_count_ready:
 
     ; --- Extract buttons ---
     xor r12d, r12d              ; default buttons = 0
@@ -724,7 +801,22 @@ FN_BEGIN hid_process_touchpad_report, 0, 0, FN_RET_SCALAR
     mov r12d, r11d
 .has_buttons:
 
+    cmp r10d, 0
+    jne .extract_xy
+    mov byte [hid_abs_prev_valid], 0
+    mov edi, r10d
+    mov esi, r11d
+    call gesture_update
+    cmp byte [gesture_tap_click], 0
+    je .zero_contact_buttons
+    or r12d, 1
+    mov byte [gesture_tap_click], 0
+.zero_contact_buttons:
+    mov [mouse_buttons], r12b
+    jmp .no_xy
+
     ; --- Extract X ---
+.extract_xy:
     mov rsi, rbp
     mov ecx, r13d
     movzx edi, word [hid_parsed_x_bit_offset]
@@ -861,6 +953,9 @@ FN_BEGIN hid_process_touchpad_report, 0, 0, FN_RET_SCALAR
     jmp .clamp_coords
 
 .apply_absolute:
+    cmp byte [hid_parsed_is_touchpad], 1
+    je .apply_absolute_touchpad
+
     ; Scale absolute X to screen width
     ; screen_x = (abs_x - logical_min) * scr_width / (logical_max - logical_min)
     mov eax, [hid_abs_x]
@@ -891,6 +986,47 @@ FN_BEGIN hid_process_touchpad_report, 0, 0, FN_RET_SCALAR
     xor edx, edx
     div ecx
     mov [mouse_y], eax
+    jmp .clamp_coords
+
+.apply_absolute_touchpad:
+    cmp byte [hid_abs_prev_valid], 1
+    je .abs_touchpad_have_prev
+    mov eax, [hid_abs_x]
+    mov [hid_abs_prev_x], eax
+    mov eax, [hid_abs_y]
+    mov [hid_abs_prev_y], eax
+    mov byte [hid_abs_prev_valid], 1
+    jmp .clamp_coords
+
+.abs_touchpad_have_prev:
+    ; Convert absolute touchpad samples into relative cursor deltas. Directly
+    ; mapping the finger position to screen coordinates makes the pointer jump.
+    mov eax, [hid_abs_x]
+    mov ebx, eax
+    sub eax, [hid_abs_prev_x]
+    mov [hid_abs_prev_x], ebx
+    mov ecx, [hid_parsed_x_logical_max]
+    sub ecx, [hid_parsed_x_logical_min]
+    test ecx, ecx
+    jz .abs_touchpad_y
+    imul eax, [scr_width]
+    cdq
+    idiv ecx
+    add [mouse_x], eax
+
+.abs_touchpad_y:
+    mov eax, [hid_abs_y]
+    mov ebx, eax
+    sub eax, [hid_abs_prev_y]
+    mov [hid_abs_prev_y], ebx
+    mov ecx, [hid_parsed_y_logical_max]
+    sub ecx, [hid_parsed_y_logical_min]
+    test ecx, ecx
+    jz .clamp_coords
+    imul eax, [scr_height]
+    cdq
+    idiv ecx
+    add [mouse_y], eax
 
 .clamp_coords:
     ; Clamp X to [0, scr_width-1]
@@ -1166,6 +1302,9 @@ section .data
 ; --- Parser temporary state ---
 hp_usage_page:      dw 0
 hp_usage:           dw 0
+HP_USAGE_LIST_MAX   equ 8
+hp_usage_count:     db 0
+hp_usage_list:      times HP_USAGE_LIST_MAX dw 0
 hp_logical_min:     dd 0
 hp_logical_max:     dd 0
 hp_report_size:     db 0
@@ -1247,6 +1386,9 @@ mouse_scroll_y:             dd 0    ; vertical scroll delta (shared global)
 ; --- Temporary extraction values ---
 hid_abs_x:  dd 0
 hid_abs_y:  dd 0
+hid_abs_prev_x: dd 0
+hid_abs_prev_y: dd 0
+hid_abs_prev_valid: db 0
 hid_rel_x:  dd 0
 hid_rel_y:  dd 0
 hid_f1_avg_y: dd 0

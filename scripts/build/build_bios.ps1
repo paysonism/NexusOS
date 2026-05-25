@@ -24,7 +24,9 @@ else {
 }
 if ($PerfProfile -eq 'Cache32Max') {
     $KernelDefines += '-dNEXUS_CACHE32_MAX'
+    $KernelDefines += '-dNEXUS_SMP'
     $KernelDefines += '-dNEXUS_CACHE32_AP_STARTUP'
+    $KernelDefines += '-dNEXUS_ENABLE_RING3_AP'
 }
 if ($Trace) {
     $KernelDefines += '-dENABLE_TRACE'
@@ -76,7 +78,7 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # 2. Stage 2 Bootloader
 Write-Host "[2/3] Assembling Stage 2..." -ForegroundColor Yellow
-& $NASM @KernelDefines -f bin -o "$BUILD_DIR\stage2.bin" -I "$INCLUDE_DIR\" -I "$SRC_DIR\boot\" "$SRC_DIR\boot\stage2.asm"
+& $NASM -f bin -o "$BUILD_DIR\stage2.bin" -I "$INCLUDE_DIR\" -I "$SRC_DIR\boot\" "$SRC_DIR\boot\stage2.asm"
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # 3. Kernel (Monolithic)

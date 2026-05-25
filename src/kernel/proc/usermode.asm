@@ -46,6 +46,7 @@ section .text
 ; auto-wrapped (FN_BEGIN emits global): global enter_usermode
 ; auto-wrapped (FN_BEGIN emits global): global call_app_l3
 ; auto-wrapped (FN_BEGIN emits global): global call_app_l3_return
+; auto-wrapped (FN_BEGIN emits global): global call_app_l3_packed
 ; auto-wrapped (FN_BEGIN emits global): global l3_prepare_test_callback
 ; auto-wrapped (FN_BEGIN emits global): global l3_runtime_ptr
 ; auto-wrapped (FN_BEGIN emits global): global l3_slot_base
@@ -269,7 +270,9 @@ FN_BEGIN l3_slot_resolve_app_ptr, 0, 0, FN_RET_SCALAR
     ret
 
 ; l3_translate_target
-; RDI = kernel callback target
+; RDI = callback target. This may be either a canonical pointer inside the
+; built-in app blob or a slot-local pointer handed to the kernel by ring-3
+; code through SYS_WM_CREATE / SYS_WM_HANDLERS.
 ; RSI = slot app base
 ; Returns: RAX = translated user target (or original target if no mapping applies)
 FN_BEGIN l3_translate_target, 0, 0, FN_RET_SCALAR
@@ -277,13 +280,53 @@ FN_BEGIN l3_translate_target, 0, 0, FN_RET_SCALAR
     lea r9, [rel app_blob_end]
     mov rax, rdi
     cmp rax, r8
-    jb .translate_done
+    jb .try_slot_local
     cmp rax, r9
-    jae .translate_done
+    jae .try_slot_local
 
     sub rax, r8
     add rax, rsi
+    jmp .translate_done
+
+.try_slot_local:
+    mov r8, [rel l3_app_arena_base_v]
+    mov r9, r8
+    add r9, [rel l3_app_arena_size_v]
+    mov rax, rdi
+    cmp rax, r8
+    jb .translate_original
+    cmp rax, r9
+    jae .translate_original
+    sub rax, r8
+    and rax, APP_SLOT_SIZE - 1
+    cmp rax, [rel app_blob_size_v]
+    jae .translate_original
+    add rax, rsi
+    jmp .translate_done
+
+.translate_original:
+    mov rax, rdi
 .translate_done:
+    ret
+
+; call_app_l3_packed -- Stage 2c thunk for cross-core dispatch.
+; RDI = pointer to a 32-byte packed-args block:
+;       [0] = target function
+;       [8] = arg0 (window ptr)
+;       [16] = arg1
+;       [24] = arg2
+; Unpacks into the regs call_app_l3 expects and tail-calls it.
+;
+; This is the function Stage 2d will hand to process_submit_job so an AP can
+; run the ring-3 transition on behalf of the owning PCB. Lives in usermode.asm
+; so it's adjacent to call_app_l3 and shares its label scope.
+FN_BEGIN call_app_l3_packed, 1, 0, FN_RET_SCALAR
+    mov rsi, [rdi + 8]
+    mov rdx, [rdi + 16]
+    mov rcx, [rdi + 24]
+    mov rdi, [rdi + 0]
+    call call_app_l3
+    FN_END call_app_l3_packed
     ret
 
 ; call_app_l3
@@ -291,6 +334,11 @@ FN_BEGIN l3_translate_target, 0, 0, FN_RET_SCALAR
 ; RSI = arg0 (window ptr)
 ; RDX = arg1
 ; RCX = arg2
+;
+; Note: Stage 2c added the dispatch_app_callback scaffold in process.asm as
+; the future chokepoint for ring-3-on-AP routing. Existing call sites still
+; invoke call_app_l3 directly (inline path); Stage 2d will replace them with
+; dispatch_app_callback once the slot-isolation refactor lands.
 FN_DECL call_app_l3, 0, 0, FN_RET_SCALAR
     push rbp
     mov rbp, rsp
@@ -314,7 +362,7 @@ FN_DECL call_app_l3, 0, 0, FN_RET_SCALAR
     mov rax, [r14 + WIN_OFF_APPDATA]
     sub rax, [rel l3_app_arena_base_v]
     js .slot_zero
-    shr rax, 20
+    shr rax, 21
     cmp eax, MAX_WINDOWS
     jb .slot_ready
 .slot_zero:

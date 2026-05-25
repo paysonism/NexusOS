@@ -19,7 +19,11 @@ WIN_OFF_APPDATA equ 136
 ; while the left mouse button is held after an initial press inside the
 ; window's client area, even if the cursor leaves the window's bounds. Same
 ; calling convention as click_fn. Zero (default) means "no drag handler".
-WIN_OFF_DRAGFN  equ 144
+WIN_OFF_DRAGFN   equ 144
+; Optional right-click callback: fn(win_ptr, client_x, client_y). Fired once
+; on right-button-down in the window's client area. Apps use it for context
+; menus or any other secondary action.
+WIN_OFF_RCLICKFN equ 152
 
 APP_EXPLORER    equ 2
 APP_TERMINAL    equ 3
@@ -29,14 +33,16 @@ APP_PAINT       equ 6
 APP_ABOUT       equ 7
 APP_SECURITY_PROBE equ 8
 APP_TASKMGR     equ 9
+APP_PING        equ 10
+APP_MEDIA       equ 11
 
-APP_SLOT_PARAM_OFF         equ 0x100
+APP_SLOT_PARAM_OFF         equ 0x17C000
 APP_SLOT_PARAM_SZ          equ 256
-APP_SLOT_BMP_FILE_OFF     equ 0x40000
+APP_SLOT_BMP_FILE_OFF     equ 0x17D000
 APP_SLOT_BMP_FILE_SZ      equ 262144
-APP_SLOT_PAINT_CANVAS_OFF equ 0x80000
+APP_SLOT_PAINT_CANVAS_OFF equ 0x1BD000
 APP_SLOT_PAINT_CANVAS_SZ  equ 120000
-APP_SLOT_SAVE_BMP_OFF     equ 0xA0000
+APP_SLOT_SAVE_BMP_OFF     equ 0x1DB000
 APP_SLOT_SAVE_BMP_SZ      equ 131072
 
 %endif

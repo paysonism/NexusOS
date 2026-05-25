@@ -28,14 +28,43 @@ extern perfdiag_init
 extern perfdiag_print_profile
 extern perfdiag_print_memory
 extern perfdiag_print_smp
+extern perfdiag_print_pci_gpu
 extern perfdiag_benchmark
+extern fbperf_init_done
+extern fbperf_pat_msr
+extern fbperf_mtrrcap
+extern fbperf_mtrr_def_type
+extern fbperf_mtrr_var_count
+extern fbperf_mtrr_var
+extern fbperf_fb_pte_value
+extern fbperf_fb_pte_level
+extern fbperf_fb_caching_type
+extern fbperf_wc_plan_pat
+extern fbperf_wc_armed
+extern fbperf_wc_activated
+extern fbperf_cr4
+extern fbperf_cpuid_pat_supported
+extern fbperf_flips_total
+extern fbperf_full_flips
+extern fbperf_rect_flips
+extern fbperf_full_bytes
+extern fbperf_tsc_total
+extern fbperf_tsc_min
+extern fbperf_tsc_max
+extern fbperf_tsc_last
+extern fbperf_bytes_total
+extern fbperf_rect_bytes
 extern trace_dump_serial
+extern memory_init
 
 ; Drivers
 extern mouse_init
 extern usb_hid_init
+extern usb_hid_flush_log
 extern i2c_hid_init
 extern i2c_hid_poll
+extern i2c_hid_debug_dump
+extern i2c_hid_debug_dump_line
 extern battery_init
 extern battery_poll
 extern keyboard_init
@@ -49,6 +78,49 @@ extern usb_poll_mouse
 extern uefi_mouse_poll
 extern usb_mouse_active
 extern usb_no_xhci
+extern rtl8139_init
+extern rtl8139_icmp_ping_gateway
+extern rtl8139_icmp_ping_ics
+extern net_ping_ipv4
+extern pci_gpu_scan
+extern pci_gpu_count
+extern pci_gpu_radeon780m_found
+extern pci_gpu_radeon780m_bdf
+extern pci_gpu_radeon780m_id
+extern pci_gpu_radeon780m_class
+extern pci_gpu_radeon780m_bar0
+extern pci_gpu_radeon780m_cmd
+extern pci_gpu_amd_display_found
+extern pci_gpu_amd_display_bdf
+extern pci_gpu_amd_display_id
+extern pci_gpu_amd_display_class
+extern amd_display_active
+extern amd_display_status
+extern amd_display_bdf
+extern amd_display_id
+extern amd_display_class
+extern amd_display_fb_addr
+extern amd_display_mode_w
+extern amd_display_mode_h
+extern amd_display_mode_pitch
+extern amd_display_mode_bpp
+; --- USB-mouse debug overlay data sources ---
+extern xhci_active, xhci_port_num, xhci_port_speed, xhci_slot_id
+extern init_retry_counter, usb_slot1_id, usb_slot2_active
+extern usb_ep_addr, usb_ep_mps, usb_hid_protocol
+extern usb_dbg_evt, usb_dbg_rpt, usb_dbg_err, usb_dbg_errcode, usb_dbg_report
+extern usb_dbg_stage
+extern usb_dbg_stage_max
+extern xhci_op_base, xhci_max_ports
+extern pci_read_conf_dword, pci_write_conf_dword
+extern xhci_initlog_n, xhci_initlog
+extern xhci_dbg_fp_n, xhci_dbg_fp
+extern xhci_dbg_addrn, xhci_dbg_addrcc, xhci_scratchpad_count, xhci_scratchpad_req
+extern xhci_dbg_adstage, xhci_dbg_adcc1, xhci_dbg_adcc2, xhci_dbg_portsc
+extern xhci_dbg_rststage, xhci_dbg_portsc_pre, xhci_dbg_portsc_post
+extern xhci_dbg_speed_pre, xhci_dbg_speed_post, xhci_dbg_ped_ok, xhci_dbg_ccs_ok
+extern xhci_dbg_slotstate, xhci_dbg_portsc_written, xhci_dbg_portsc_immed
+extern xhci_dbg_portsc_wait, xhci_dbg_reset_polls
 extern i2c_hid_active
 extern xhci_probe
 extern keyboard_read
@@ -63,6 +135,9 @@ extern fps_show
 extern tick_count
 extern uint32_to_str
 extern render_text
+extern smp_core_states
+extern cpu_tsc_per_tick
+extern app_hl_taskmgr_draw
 
 ; GUI
 extern wm_init
@@ -87,16 +162,21 @@ extern wm_window_count
 extern wm_draw_drag_outline
 extern wm_drag_window_id
 extern render_restore_backbuffer
+extern render_restore_dirty_backbuffer
 extern render_mark_dirty
 extern render_save_backbuffer
 extern display_flip_rect
 extern call_app_l3
+extern dispatch_app_callback           ; Stage 2d cross-core chokepoint
 extern bb_addr
+extern fb_addr
 extern scr_pitch
 extern scr_pitch_q
 extern display_flip
 extern wait_vsync
 extern vsync_enabled
+extern fb_native_width
+extern fb_native_height
 
 ; Filesystem
 extern fat16_init
@@ -153,8 +233,15 @@ section .data
 debug_y: dd 40
 global gui_initialized
 gui_initialized db 0
+global main_loop_stage, main_loop_stage_done, main_loop_iters
+main_loop_stage      db 0    ; stage we are about to enter
+main_loop_stage_done db 0    ; last stage that completed
+main_loop_iters      dd 0    ; full iterations of the .infinite loop
 global scene_dirty
 scene_dirty db 1
+rf_last_mouse_x dd 0xFFFFFFFF
+rf_last_mouse_y dd 0xFFFFFFFF
+rf_last_fps     dd 0xFFFFFFFF
 
 section .text
 
@@ -172,8 +259,14 @@ FN_BEGIN debug_print, 0, 0, FN_RET_SCALAR
     push r10
     push r11
     push r12
-    
+
     mov r12, rsi     ; Preserve RSI
+
+    ; Always capture the message in the kernel log ring buffer, regardless of
+    ; whether the framebuffer is available or the GUI has started. This is the
+    ; data source for the F12 overlay and the (future) USB MSC log flush.
+    extern klog_write
+    call klog_write
 
     ; Screen Output
     mov rax, [bb_addr]
@@ -225,6 +318,796 @@ FN_BEGIN debug_print, 0, 0, FN_RET_SCALAR
     pop rcx
     pop rbx
     pop rax
+    ret
+
+; ============================================================================
+; usb_debug_overlay - draw USB-mouse driver diagnostics over the GUI.
+; Rendered straight into the backbuffer; the overlay rect is then flipped to
+; screen every frame so it survives fast-path frames. Debug aid only.
+; ============================================================================
+%define OVL_X   8
+%define OVL_Y   56
+%define OVL_W   760
+%define OVL_H   320
+usb_debug_overlay:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+
+    cmp qword [bb_addr], 0
+    je .uo_done
+
+    ; line 1: controller / mouse-active state
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_l1]
+    call ovl_puts
+    movzx edx, byte [xhci_active]
+    call ovl_putu
+    lea rsi, [s_o_noxhci]
+    call ovl_puts
+    movzx edx, byte [usb_no_xhci]
+    call ovl_putu
+    lea rsi, [s_o_mact]
+    call ovl_puts
+    movzx edx, byte [usb_mouse_active]
+    call ovl_putu
+    lea rsi, [s_o_retry]
+    call ovl_puts
+    mov edx, [init_retry_counter]
+    call ovl_putu
+    lea rsi, [s_o_stage]
+    call ovl_puts
+    movzx edx, byte [usb_dbg_stage]
+    call ovl_putu
+    lea rsi, [s_o_stagemax]
+    call ovl_puts
+    movzx edx, byte [usb_dbg_stage_max]
+    call ovl_putu
+    lea rsi, [s_o_fpn]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_fp_n]
+    call ovl_putu
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov esi, OVL_Y
+    lea rdx, [ovl_buf]
+    mov ecx, 0x0000FF00
+    mov r8d, 0x00101010
+    call render_text
+
+    ; line 2: port / speed / slot
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_port]
+    call ovl_puts
+    movzx edx, byte [xhci_port_num]
+    call ovl_putu
+    lea rsi, [s_o_spd]
+    call ovl_puts
+    movzx edx, byte [xhci_port_speed]
+    call ovl_putu
+    lea rsi, [s_o_slot]
+    call ovl_puts
+    movzx edx, byte [usb_slot1_id]
+    call ovl_putu
+    lea rsi, [s_o_s2]
+    call ovl_puts
+    movzx edx, byte [usb_slot2_active]
+    call ovl_putu
+    lea rsi, [s_o_hwslot]
+    call ovl_puts
+    movzx edx, byte [xhci_slot_id]
+    call ovl_putu
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov esi, OVL_Y + 16
+    lea rdx, [ovl_buf]
+    mov ecx, 0x00FFFFFF
+    mov r8d, 0x00101010
+    call render_text
+
+    ; line 3: endpoint addr / mps / protocol
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_ep]
+    call ovl_puts
+    movzx edx, byte [usb_ep_addr]
+    call ovl_putu
+    lea rsi, [s_o_mps]
+    call ovl_puts
+    movzx edx, word [usb_ep_mps]
+    call ovl_putu
+    lea rsi, [s_o_proto]
+    call ovl_puts
+    movzx edx, byte [usb_hid_protocol]
+    call ovl_putu
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov esi, OVL_Y + 32
+    lea rdx, [ovl_buf]
+    mov ecx, 0x00FFFFFF
+    mov r8d, 0x00101010
+    call render_text
+
+    ; line 4: event / report / error counters
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_evt]
+    call ovl_puts
+    mov edx, [usb_dbg_evt]
+    call ovl_putu
+    lea rsi, [s_o_rpt]
+    call ovl_puts
+    mov edx, [usb_dbg_rpt]
+    call ovl_putu
+    lea rsi, [s_o_err]
+    call ovl_puts
+    mov edx, [usb_dbg_err]
+    call ovl_putu
+    lea rsi, [s_o_ec]
+    call ovl_puts
+    movzx edx, byte [usb_dbg_errcode]
+    call ovl_putu
+    lea rsi, [s_o_adn]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_addrn]
+    call ovl_putu
+    lea rsi, [s_o_adcc]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_addrcc]
+    call ovl_putu
+    lea rsi, [s_o_scr]
+    call ovl_puts
+    movzx edx, word [xhci_scratchpad_count]
+    call ovl_putu
+    lea rsi, [s_o_scr_req]
+    call ovl_puts
+    movzx edx, word [xhci_scratchpad_req]
+    call ovl_putu
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov esi, OVL_Y + 48
+    lea rdx, [ovl_buf]
+    mov ecx, 0x0000FFFF
+    mov r8d, 0x00101010
+    call render_text
+
+    ; line 4b: Address Device sub-stage and PORTSC snapshot (real-HW debug)
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_adst_h]         ; "adSt="
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_adstage]
+    call ovl_putu
+    lea rsi, [s_o_cc1]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_adcc1]
+    call ovl_putu
+    lea rsi, [s_o_cc2]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_adcc2]
+    call ovl_putu
+    lea rsi, [s_o_portsc]
+    call ovl_puts
+    mov edx, [xhci_dbg_portsc]
+    call ovl_puth32
+    lea rsi, [s_o_slotst]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_slotstate]
+    call ovl_putu
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov esi, OVL_Y + 64
+    lea rdx, [ovl_buf]
+    mov ecx, 0x0000FFFF
+    mov r8d, 0x00101010
+    call render_text
+
+    ; line 4c: port-reset granular debug
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_rst_h]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_rststage]
+    call ovl_putu
+    lea rsi, [s_o_ped]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_ped_ok]
+    call ovl_putu
+    lea rsi, [s_o_ccs]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_ccs_ok]
+    call ovl_putu
+    lea rsi, [s_o_sppre]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_speed_pre]
+    call ovl_putu
+    lea rsi, [s_o_sppost]
+    call ovl_puts
+    movzx edx, byte [xhci_dbg_speed_post]
+    call ovl_putu
+    lea rsi, [s_o_pscpre]
+    call ovl_puts
+    mov edx, [xhci_dbg_portsc_pre]
+    call ovl_puth32
+    lea rsi, [s_o_pscpost]
+    call ovl_puts
+    mov edx, [xhci_dbg_portsc_post]
+    call ovl_puth32
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov esi, OVL_Y + 80
+    lea rdx, [ovl_buf]
+    mov ecx, 0x00FF8800
+    mov r8d, 0x00101010
+    call render_text
+
+    ; line 4d: reset-write granular trace - did write take, mid-wait state, polls
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_wrt]
+    call ovl_puts
+    mov edx, [xhci_dbg_portsc_written]
+    call ovl_puth32
+    lea rsi, [s_o_imm]
+    call ovl_puts
+    mov edx, [xhci_dbg_portsc_immed]
+    call ovl_puth32
+    lea rsi, [s_o_wait]
+    call ovl_puts
+    mov edx, [xhci_dbg_portsc_wait]
+    call ovl_puth32
+    lea rsi, [s_o_polls]
+    call ovl_puts
+    mov edx, [xhci_dbg_reset_polls]
+    call ovl_putu
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov esi, OVL_Y + 96
+    lea rdx, [ovl_buf]
+    mov ecx, 0x00FFAA44
+    mov r8d, 0x00101010
+    call render_text
+
+    ; line 5: last raw report bytes (b1/b2 = signed dX/dY)
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_r0]
+    call ovl_puts
+    movzx edx, byte [usb_dbg_report]
+    call ovl_putu
+    lea rsi, [s_o_r1]
+    call ovl_puts
+    movsx edx, byte [usb_dbg_report + 1]
+    call ovl_puti
+    lea rsi, [s_o_r2]
+    call ovl_puts
+    movsx edx, byte [usb_dbg_report + 2]
+    call ovl_puti
+    lea rsi, [s_o_r3]
+    call ovl_puts
+    movzx edx, byte [usb_dbg_report + 3]
+    call ovl_putu
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov esi, OVL_Y + 112
+    lea rdx, [ovl_buf]
+    mov ecx, 0x00FFFF00
+    mov r8d, 0x00101010
+    call render_text
+
+    ; touchpad (I2C-HID) status lines, kept short to avoid overlay clipping.
+    lea rdi, [ovl_buf]
+    xor eax, eax
+    call i2c_hid_debug_dump_line
+    mov edi, OVL_X
+    mov esi, OVL_Y + 128
+    lea rdx, [ovl_buf]
+    mov ecx, 0x0000FF88
+    mov r8d, 0x00101010
+    call render_text
+
+    lea rdi, [ovl_buf]
+    mov eax, 1
+    call i2c_hid_debug_dump_line
+    mov edi, OVL_X
+    mov esi, OVL_Y + 144
+    lea rdx, [ovl_buf]
+    mov ecx, 0x0000FF88
+    mov r8d, 0x00101010
+    call render_text
+
+    lea rdi, [ovl_buf]
+    mov eax, 2
+    call i2c_hid_debug_dump_line
+    mov edi, OVL_X
+    mov esi, OVL_Y + 160
+    lea rdx, [ovl_buf]
+    mov ecx, 0x0000FF88
+    mov r8d, 0x00101010
+    call render_text
+
+    ; --- Crash detector: main-loop liveness ---
+    ; If the main loop hangs, iters stops counting and stage/done tell you
+    ; which call in the loop body is wedged (stage = entering, done = last
+    ; completed). The overlay only refreshes when the loop reaches stage 4,
+    ; so a frozen snapshot here IS the diagnostic.
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_ml_iters]
+    call ovl_puts
+    mov edx, [main_loop_iters]
+    call ovl_putu
+    lea rsi, [s_o_ml_stage]
+    call ovl_puts
+    movzx edx, byte [main_loop_stage]
+    call ovl_putu
+    lea rsi, [s_o_ml_done]
+    call ovl_puts
+    movzx edx, byte [main_loop_stage_done]
+    call ovl_putu
+    lea rsi, [s_o_ml_tick]
+    call ovl_puts
+    mov edx, [tick_count]
+    call ovl_putu
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov esi, OVL_Y + 304
+    lea rdx, [ovl_buf]
+    mov ecx, 0x00FF4040
+    mov r8d, 0x00101010
+    call render_text
+
+    ; lines 8+: PCI xHCI controller inventory (scanned once)
+    ;   map digit = USB speed code per port: 1=Full 2=Low 3=High 4=SS 5=SS+
+    call usb_dbg_pci_scan
+    cmp byte [usb_dbg_xhci_n], 0
+    jne .uo_have_ctrls
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_noctrl]
+    call ovl_puts
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov esi, OVL_Y + 176
+    lea rdx, [ovl_buf]
+    mov ecx, 0x00FF00FF
+    mov r8d, 0x00101010
+    call render_text
+    jmp .uo_initlog
+
+.uo_have_ctrls:
+    mov dword [ovl_ci], 0
+.uo_ctrl_loop:
+    mov eax, [ovl_ci]
+    cmp al, [usb_dbg_xhci_n]
+    jae .uo_initlog
+    cmp eax, 4
+    jae .uo_initlog
+    ; record ptr = usb_dbg_xhci_rec + ci*64
+    shl eax, 6
+    lea r11, [usb_dbg_xhci_rec]
+    add r11, rax
+    mov [ovl_rec], r11
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_ctrl]
+    call ovl_puts
+    mov edx, [ovl_ci]
+    call ovl_putu
+    lea rsi, [s_o_cbus]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    movzx edx, byte [r11 + 0]
+    call ovl_putu
+    lea rsi, [s_o_cdev]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    movzx edx, byte [r11 + 1]
+    call ovl_putu
+    lea rsi, [s_o_cfn]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    movzx edx, byte [r11 + 2]
+    call ovl_putu
+    lea rsi, [s_o_cports]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    movzx edx, byte [r11 + 3]
+    call ovl_putu
+    lea rsi, [s_o_cmap]
+    call ovl_puts
+    ; append per-port speed map
+    mov r11, [ovl_rec]
+    movzx ecx, byte [r11 + 3]
+    xor ebx, ebx
+.uo_cmap:
+    cmp ebx, ecx
+    jge .uo_cmap_done
+    cmp ebx, 24
+    jge .uo_cmap_done
+    movzx eax, byte [r11 + rbx + 4]
+    test eax, eax
+    jz .uo_cmap_empty
+    add al, '0'
+    mov [rdi], al
+    inc rdi
+    jmp .uo_cmap_next
+.uo_cmap_empty:
+    mov byte [rdi], '.'
+    inc rdi
+.uo_cmap_next:
+    inc ebx
+    jmp .uo_cmap
+.uo_cmap_done:
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov eax, [ovl_ci]
+    shl eax, 4
+    add eax, OVL_Y + 176
+    mov esi, eax
+    lea rdx, [ovl_buf]
+    mov ecx, 0x00FF00FF
+    mov r8d, 0x00101010
+    call render_text
+    inc dword [ovl_ci]
+    jmp .uo_ctrl_loop
+
+.uo_initlog:
+    ; xhci_init per-controller progress log
+    ;   stage: 1=pciFound 2=capsRead 3=ownership 4=reset 5=ringsUp 6=running
+    mov dword [ovl_li], 0
+.uo_il_loop:
+    mov eax, [ovl_li]
+    cmp al, [xhci_initlog_n]
+    jae .uo_fplog
+    cmp eax, 8
+    jae .uo_fplog
+    shl eax, 2
+    lea r11, [xhci_initlog]
+    add r11, rax
+    mov [ovl_rec], r11
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_init]
+    call ovl_puts
+    mov edx, [ovl_li]
+    call ovl_putu
+    lea rsi, [s_o_cbus]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    movzx edx, byte [r11 + 0]
+    call ovl_putu
+    lea rsi, [s_o_cdev]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    movzx edx, byte [r11 + 1]
+    call ovl_putu
+    lea rsi, [s_o_cfn]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    movzx edx, byte [r11 + 2]
+    call ovl_putu
+    lea rsi, [s_o_istage]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    movzx edx, byte [r11 + 3]
+    call ovl_putu
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    mov eax, [ovl_li]
+    shl eax, 4
+    add eax, OVL_Y + 240
+    mov esi, eax
+    lea rdx, [ovl_buf]
+    mov ecx, 0x0000FFFF
+    mov r8d, 0x00101010
+    call render_text
+    inc dword [ovl_li]
+    jmp .uo_il_loop
+
+.uo_fplog:
+    ; xhci_find_port snapshots: ports it scanned + speed map it saw + result
+    ;   result: 1=found 0=none 255=never returned
+    mov dword [ovl_li], 0
+.uo_fp_loop:
+    mov eax, [ovl_li]
+    cmp al, [xhci_dbg_fp_n]
+    jae .uo_flip
+    cmp eax, 4
+    jae .uo_flip
+    shl eax, 4
+    lea r11, [xhci_dbg_fp]
+    add r11, rax
+    mov [ovl_rec], r11
+    lea rdi, [ovl_buf]
+    lea rsi, [s_o_fp]
+    call ovl_puts
+    mov edx, [ovl_li]
+    call ovl_putu
+    lea rsi, [s_o_fmp]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    movzx edx, byte [r11 + 4]
+    call ovl_putu
+    lea rsi, [s_o_fr]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    movzx edx, byte [r11 + 5]
+    call ovl_putu
+    lea rsi, [s_o_fmap]
+    call ovl_puts
+    mov r11, [ovl_rec]
+    xor ebx, ebx
+.uo_fpmap:
+    cmp ebx, 10
+    jge .uo_fpmap_done
+    movzx eax, byte [r11 + rbx + 6]
+    test eax, eax
+    jz .uo_fpmap_e
+    add al, '0'
+    mov [rdi], al
+    inc rdi
+    jmp .uo_fpmap_n
+.uo_fpmap_e:
+    mov byte [rdi], '.'
+    inc rdi
+.uo_fpmap_n:
+    inc ebx
+    jmp .uo_fpmap
+.uo_fpmap_done:
+    mov byte [rdi], 0
+    mov edi, OVL_X
+    movzx eax, byte [xhci_initlog_n]
+    add eax, [ovl_li]
+    shl eax, 4
+    add eax, OVL_Y + 256
+    mov esi, eax
+    lea rdx, [ovl_buf]
+    mov ecx, 0x0000FF00
+    mov r8d, 0x00101010
+    call render_text
+    inc dword [ovl_li]
+    jmp .uo_fp_loop
+
+.uo_flip:
+    ; flip the overlay rect to the visible screen
+    mov edi, OVL_X
+    mov esi, OVL_Y
+    mov edx, OVL_W
+    mov ecx, OVL_H
+    call display_flip_rect
+
+.uo_done:
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; rsi = src (null-terminated), rdi = dest cursor -> rdi advanced (no null)
+ovl_puts:
+    push rax
+.l: mov al, [rsi]
+    test al, al
+    jz .e
+    mov [rdi], al
+    inc rsi
+    inc rdi
+    jmp .l
+.e: pop rax
+    ret
+
+; edx = unsigned value, rdi = dest cursor -> appends decimal, rdi advanced
+ovl_putu:
+    push rax
+    push rsi
+    push rdi
+    mov rsi, rdi
+    mov edi, edx
+    call uint32_to_str
+    pop rdi
+.a: cmp byte [rdi], 0
+    je .d
+    inc rdi
+    jmp .a
+.d: pop rsi
+    pop rax
+    ret
+
+; edx = signed value, rdi = dest cursor -> appends signed decimal
+ovl_puti:
+    test edx, edx
+    jns ovl_putu
+    mov byte [rdi], '-'
+    inc rdi
+    neg edx
+    jmp ovl_putu
+
+; edx = u32 value, rdi = dest cursor -> appends 8-char uppercase hex
+ovl_puth32:
+    push rax
+    push rcx
+    mov ecx, 8
+.lp:
+    rol edx, 4
+    mov eax, edx
+    and eax, 0x0F
+    cmp eax, 10
+    jl .dig
+    add eax, 'A' - 10
+    jmp .st
+.dig:
+    add eax, '0'
+.st:
+    mov [rdi], al
+    inc rdi
+    dec ecx
+    jnz .lp
+    pop rcx
+    pop rax
+    ret
+
+; ============================================================================
+; usb_dbg_pci_scan - one-time PCI bus scan for every xHCI controller
+; (class 0x0C0330). Fills usb_dbg_xhci_rec / usb_dbg_xhci_n. No-op after the
+; first call. Enables Memory Space decode so root-port registers are readable.
+; ============================================================================
+usb_dbg_pci_scan:
+    cmp byte [usb_dbg_pci_done], 0
+    jne .ds_ret
+    mov byte [usb_dbg_pci_done], 1
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    xor r12d, r12d                ; controller count
+    xor r8d, r8d                  ; bus
+.ds_bus:
+    cmp r8d, 256
+    jge .ds_done
+    xor r9d, r9d                  ; dev
+.ds_dev:
+    cmp r9d, 32
+    jge .ds_bus_next
+    xor r10d, r10d                ; fn
+.ds_fn:
+    cmp r10d, 8
+    jge .ds_dev_next
+    ; packed config address (reg 0)
+    mov eax, r8d
+    shl eax, 16
+    mov ecx, r9d
+    shl ecx, 11
+    or eax, ecx
+    mov ecx, r10d
+    shl ecx, 8
+    or eax, ecx
+    mov r11d, eax                 ; r11 = packed base
+    call pci_read_conf_dword
+    cmp eax, 0xFFFFFFFF
+    je .ds_fn_next
+    ; class code at reg 0x08, want base=0C sub=03 progIF=30
+    mov eax, r11d
+    or eax, 0x08
+    call pci_read_conf_dword
+    shr eax, 8
+    and eax, 0x00FFFFFF
+    cmp eax, 0x0C0330
+    jne .ds_fn_next
+    cmp r12d, 4
+    jge .ds_fn_next
+    ; record ptr = usb_dbg_xhci_rec + count*64
+    mov eax, r12d
+    shl eax, 6
+    lea r13, [usb_dbg_xhci_rec]
+    add r13, rax
+    mov [r13 + 0], r8b
+    mov [r13 + 1], r9b
+    mov [r13 + 2], r10b
+    mov byte [r13 + 3], 0
+    ; enable Memory Space + Bus Master (command reg 0x04, bits 1+2)
+    mov eax, r11d
+    or eax, 0x04
+    call pci_read_conf_dword
+    mov ecx, eax
+    or ecx, 0x06
+    mov eax, r11d
+    or eax, 0x04
+    call pci_write_conf_dword
+    ; BAR0 (reg 0x10)
+    mov eax, r11d
+    or eax, 0x10
+    call pci_read_conf_dword
+    mov r14d, eax                 ; raw BAR0
+    mov ebx, eax
+    and ebx, 0xFFFFFFF0
+    mov r15, rbx                  ; MMIO base (low 32)
+    test r14d, 0x04               ; 64-bit BAR?
+    jz .ds_bar32
+    mov eax, r11d
+    or eax, 0x14
+    call pci_read_conf_dword
+    shl rax, 32
+    or r15, rax
+.ds_bar32:
+    test r15, r15
+    jz .ds_store
+    ; CAPLENGTH = byte 0, sanity 1..0x40
+    movzx ecx, byte [r15]
+    test ecx, ecx
+    jz .ds_store
+    cmp ecx, 0x40
+    ja .ds_store
+    ; HCSPARAMS1 at +4, MaxPorts = bits[31:24]
+    mov edx, [r15 + 4]
+    shr edx, 24
+    and edx, 0xFF
+    test edx, edx
+    jz .ds_store
+    cmp edx, 60
+    ja .ds_store
+    mov [r13 + 3], dl
+    ; port register base = MMIO + CAPLENGTH + 0x400
+    lea rsi, [r15 + rcx]
+    add rsi, 0x400
+    xor edi, edi                  ; port index
+.ds_port:
+    cmp edi, edx
+    jge .ds_store
+    mov eax, edi
+    shl eax, 4
+    mov eax, [rsi + rax]          ; PORTSC
+    xor ecx, ecx
+    test eax, 1                   ; CCS
+    jz .ds_port_w
+    mov ecx, eax
+    shr ecx, 10
+    and ecx, 0x0F                 ; speed code
+.ds_port_w:
+    mov [r13 + rdi + 4], cl
+    inc edi
+    jmp .ds_port
+.ds_store:
+    inc r12d
+.ds_fn_next:
+    inc r10d
+    jmp .ds_fn
+.ds_dev_next:
+    inc r9d
+    jmp .ds_dev
+.ds_bus_next:
+    inc r8d
+    jmp .ds_bus
+.ds_done:
+    mov [usb_dbg_xhci_n], r12b
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+.ds_ret:
     ret
 
 ; ============================================================================
@@ -340,6 +1223,7 @@ ctx_menu_handle_click:
 
 ; --- Kernel Entry ---
 FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
+    call memory_init
     extern app_blob_init
     call app_blob_init          ; read loaded APPS.BIN pointer before anyone uses it
     call display_init
@@ -366,6 +1250,11 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     ; Enable interrupts early so the boot splash has a PIT tick to time frames
     ; with and a keyboard IRQ to be skipped by.
     sti
+    ; Register the UEFI-provided DATA.IMG ramdisk (if any) BEFORE fat16_init
+    ; so the FS driver's first sector reads go to RAM on real hardware.
+    ; No-op on BIOS boot or when the loader did not find DATA.IMG.
+    extern ramdisk_init
+    call ramdisk_init
     call fat16_init             ; needed to load BOOTANIM.NBA
     call keyboard_init          ; needed so the splash can be skipped by a key
 
@@ -379,9 +1268,23 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     call ioapic_init
     call spi_init
     call spi_hid_init
-    
+    call rtl8139_init
+
+    ; Do not run network self-tests before the GUI. The RTL8156 path probes
+    ; USB ports and can disturb HID devices when no USB NIC is attached.
+    ; Network drivers are still available through their normal lazy paths.
     call usb_hid_init
+    call usb_hid_flush_log
     call i2c_hid_init
+
+    ; rtl8156_init's xhci_flush_events drained the mouse's pending Transfer
+    ; Events along with its own. The 4 initial reads queued by usb_hid_init
+    ; completed before flush, but their completion events were dropped — so
+    ; usb_poll_mouse never sees them and never re-queues, killing the mouse.
+    ; Re-prime the slot1 interrupt ring now that the NIC is done flushing.
+    ; Also restores xhci_slot_id / xhci_int_ep_dci which rtl8156 overwrote.
+    extern usb_hid_requeue_slot1_reads
+    call usb_hid_requeue_slot1_reads
 
     ; SMP work queue must be initialised BEFORE the APs are started: workers
     ; gate on workqueue_ready, so init first guarantees they see a clean queue.
@@ -389,12 +1292,62 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     extern workqueue_selftest
     call workqueue_init
 
-%ifdef NEXUS_CACHE32_MAX
+%ifdef NEXUS_SMP
     call smp_ap_startup
 %endif
     call workqueue_selftest
     call perfdiag_init
+    extern fbperf_init
+    extern fbperf_serial_dump
+    extern fbperf_arm_wc
+    extern fbperf_wc_activate
+    SER 'a'
+    call fbperf_init
+    SER 'b'
+    call fbperf_serial_dump     ; snapshot 1: pre-activation
+    SER 'c'
+
+    ; Single-boot WC arm + activate. Activate returns rax: 0=ok, -1=disarmed,
+    ; -2=not mapped, -3=leaf at PML4. Halt on non-zero so we don't continue blind.
+    ; Define FBPERF_NO_WC at assemble time (`-DFBPERF_NO_WC`) to keep the WB/UC
+    ; baseline for Phase A perf measurement -- skips arm+activate, leaves the
+    ; FB on whatever the firmware mapped (typically WB).
+%ifndef FBPERF_NO_WC
+    call fbperf_arm_wc
+    call fbperf_wc_activate
+%else
+    xor  eax, eax                  ; pretend activate returned 0 so the same
+                                   ; log line/jump structure still works
+%endif
+    mov  r15, rax               ; preserve return code across calls
+    lea  rdi, [s_wcact_tag]
+    call serial_puts
+    mov  rdi, r15
+    call ser_print_hex64
+    call serial_crlf
+    test r15, r15
+    jnz  .wcact_failed
+
+    SER 'd'
+    call fbperf_init            ; refresh page-walk + MSR snapshots after WC patch
+    call fbperf_serial_dump     ; snapshot 2: post-activation (verify wc_activated=1, cache=1)
+    SER 'e'
+    jmp  .wcact_done
+
+.wcact_failed:
+    lea  rdi, [s_wcact_fail]
+    call serial_puts
+    call serial_crlf
+    ; also re-dump so we can see fb_pte_level / addr that caused the fail
+    call fbperf_serial_dump
+.wcact_halt:
+    cli
+    hlt
+    jmp  .wcact_halt
+
+.wcact_done:
     call mouse_init
+    call battery_init           ; probe EC, set bat_layout + state for taskbar
 
     call render_init
     call cursor_init
@@ -408,22 +1361,66 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     call cpu_acct_init
     call render_frame
 
+    ; ---- FBPERF deterministic bench ----
+    ; 64 back-to-back forced full flips. fbperf_flip_full_begin/end inside
+    ; display_flip accumulate TSC + bytes into the same counters the `=`
+    ; overlay shows. Phase A vs Phase B compare these 64 samples directly,
+    ; eliminating the dependency on user workload (cursor circles produce
+    ; mostly dirty-rect blits, which dilute the full-flip signal).
+    extern display_flip
+    mov ecx, 64
+.fbp_bench_loop:
+    push rcx
+    call display_flip
+    pop rcx
+    dec ecx
+    jnz .fbp_bench_loop
+
 .infinite:
+    mov byte [main_loop_stage], 1
     call cpu_acct_idle_end
+    mov byte [main_loop_stage_done], 1
     cmp byte [gui_initialized], 1
     jne .skip_gui
+    mov byte [main_loop_stage], 2
     call render_frame
+    mov byte [main_loop_stage_done], 2
+    mov byte [main_loop_stage], 3
     call usb_poll_mouse
+    extern rtl8156_dhcp_pump
+    call rtl8156_dhcp_pump
+    ; Drive a NIC RX poll each frame so ICMP echo replies (and ARP) land
+    ; promptly even when no syscall is being made. Without this, async ping
+    ; misses replies that arrive between frames.
+    extern net_nic_poll_rx
+    call net_nic_poll_rx
+    mov byte [main_loop_stage_done], 3
+    mov byte [main_loop_stage], 4
+    ; call usb_debug_overlay   ; disabled - debug overlay hidden
+    mov byte [main_loop_stage_done], 4
+    mov byte [main_loop_stage], 5
     call i2c_hid_poll
+    mov byte [main_loop_stage_done], 5
+    mov byte [main_loop_stage], 6
     call battery_poll
+    mov byte [main_loop_stage_done], 6
+    mov byte [main_loop_stage], 7
     call process_mouse
+    mov byte [main_loop_stage_done], 7
+    mov byte [main_loop_stage], 8
     call keyboard_repeat_tick
+    mov byte [main_loop_stage_done], 8
 .drain_kb:
+    mov byte [main_loop_stage], 9
     call process_keyboard
     call keyboard_available
     test eax, eax
     jnz .drain_kb
+    mov byte [main_loop_stage_done], 9
+    mov byte [main_loop_stage], 10
     call serial_poll_command
+    mov byte [main_loop_stage_done], 10
+    inc dword [main_loop_iters]
 .skip_gui:
     call cpu_acct_work_end
     hlt
@@ -443,8 +1440,16 @@ cpu_acct_init:
     or rax, rdx
     mov [acct_last_mark], rax
     mov [acct_work_start], rax
+    mov [acct_tsc_start], rax
     mov rax, [tick_count]
     mov [acct_win_tick], rax
+    mov dword [abs smp_core_states + 24], 0
+    mov rax, [cpu_tsc_per_tick]
+    xor rdx, rdx
+    mov rcx, 10000
+    div rcx
+    mov [abs smp_core_states + 28], eax
+    call cpu_acct_init_aperf
     ret
 
 ; Called at the top of each loop iteration: the time since the previous
@@ -480,11 +1485,16 @@ cpu_acct_work_end:
     sub rax, [acct_win_tick]
     cmp rax, 50
     jl .acct_done
+    push r8
+    push r9
+    push r10
+    mov r8, rax              ; elapsed PIT ticks in this accounting window
+    mov r10, rbx             ; current TSC before RBX is reused below
     mov rax, [acct_busy_acc]
     mov rcx, [acct_idle_acc]
     add rcx, rax
     test rcx, rcx
-    jz .acct_reset
+    jz .acct_clock
     mov rbx, 100
     xor rdx, rdx
     mul rbx                  ; rdx:rax = busy * 100
@@ -494,6 +1504,14 @@ cpu_acct_work_end:
     mov rax, 100
 .acct_store:
     mov [bsp_util], eax
+    mov [abs smp_core_states + 24], eax
+.acct_clock:
+    call cpu_acct_publish_mhz
+.acct_clock_done:
+    mov [acct_tsc_start], r10
+    pop r10
+    pop r9
+    pop r8
 .acct_reset:
     mov qword [acct_busy_acc], 0
     mov qword [acct_idle_acc], 0
@@ -503,6 +1521,96 @@ cpu_acct_work_end:
     pop rdx
     pop rcx
     pop rbx
+    ret
+
+cpu_acct_init_aperf:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    xor eax, eax
+    cpuid
+    cmp eax, 6
+    jb .done
+    mov eax, 6
+    cpuid
+    test ecx, 1
+    jz .done
+    mov ecx, 0xE8                  ; IA32_APERF
+    rdmsr
+    shl rdx, 32
+    or rax, rdx
+    mov [abs smp_core_states + 64], rax
+    mov ecx, 0xE7                  ; IA32_MPERF
+    rdmsr
+    shl rdx, 32
+    or rax, rdx
+    mov [abs smp_core_states + 72], rax
+.done:
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; R8 = elapsed PIT ticks, R10 = current TSC for this accounting window.
+cpu_acct_publish_mhz:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push r9
+    xor eax, eax
+    cpuid
+    cmp eax, 6
+    jb .tsc_fallback
+    mov eax, 6
+    cpuid
+    test ecx, 1
+    jz .tsc_fallback
+    mov ecx, 0xE8                  ; IA32_APERF
+    rdmsr
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    sub rax, [abs smp_core_states + 64]
+    mov [abs smp_core_states + 64], rbx
+    mov r9, rax
+    mov ecx, 0xE7                  ; IA32_MPERF
+    rdmsr
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    sub rax, [abs smp_core_states + 72]
+    mov [abs smp_core_states + 72], rbx
+    mov rcx, rax
+    test rcx, rcx
+    jz .tsc_fallback
+    mov rax, [cpu_tsc_per_tick]
+    xor rdx, rdx
+    mov rbx, 10000
+    div rbx                        ; base TSC MHz
+    mul r9                         ; base MHz * aperf delta
+    xor rdx, rdx
+    div rcx                        ; scale by aperf/mperf
+    mov [abs smp_core_states + 28], eax
+    jmp .done
+.tsc_fallback:
+    mov rax, r10
+    sub rax, [acct_tsc_start]
+    mov r9, r8
+    imul r9, 10000
+    test r9, r9
+    jz .done
+    xor rdx, rdx
+    div r9
+    mov [abs smp_core_states + 28], eax
+.done:
+    pop r9
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
     ret
 
 ; ============================================================================
@@ -517,9 +1625,19 @@ FN_BEGIN serial_poll_command, 0, 0, FN_RET_SCALAR
     push rdx
     push rdi
 
+    ; Cap bytes consumed per call. On real hardware with no UART attached,
+    ; reading the LSR at 0x3FD can return 0xFF (data-ready bit permanently
+    ; set), which would freeze the main loop in an infinite read here.
+    ; 256 bytes is far more than any legitimate burst per ~10ms tick.
+    mov ecx, 256
+
 .poll:
     mov dx, 0x3F8 + 5
     in al, dx
+    ; LSR == 0xFF means no UART present (floating bus / pull-ups).
+    ; Treat as "no data" and bail out so the main loop can keep running.
+    cmp al, 0xFF
+    je .done
     test al, 1
     jz .done
 
@@ -533,16 +1651,22 @@ FN_BEGIN serial_poll_command, 0, 0, FN_RET_SCALAR
     je .arm_control
 
     call serial_forward_input
-    jmp .poll
+    dec ecx
+    jnz .poll
+    jmp .done
 
 .arm_control:
     mov byte [serial_command_armed], 1
-    jmp .poll
+    dec ecx
+    jnz .poll
+    jmp .done
 
 .dispatch_control:
     mov byte [serial_command_armed], 0
     call serial_dispatch_control
-    jmp .poll
+    dec ecx
+    jnz .poll
+    jmp .done
 
 .done:
     pop rdi
@@ -554,7 +1678,7 @@ FN_BEGIN serial_poll_command, 0, 0, FN_RET_SCALAR
 serial_dispatch_control:
     cmp al, '2'
     jb .check_close
-    cmp al, '8'
+    cmp al, '9'
     ja .check_close
     movzx edi, al
     sub edi, '0'
@@ -586,12 +1710,22 @@ serial_dispatch_control:
     je .diag_memory
     cmp al, 's'
     je .diag_smp
+    cmp al, 'v'
+    je .diag_pci_gpu
+    cmp al, '='
+    je .diag_real_boot
     cmp al, 't'
     je .dump_trace
     cmp al, 'g'
     je .svg_dump
     cmp al, 'b'
     je .diag_bench
+    cmp al, 'n'
+    je .net_ping
+    cmp al, 'N'
+    je .net_ping_ics
+    cmp al, 'i'
+    je .net_ping_google
     cmp al, 'x'
     je .close_focused
     cmp al, 'X'
@@ -632,8 +1766,62 @@ serial_dispatch_control:
     call perfdiag_print_smp
     ret
 
+.diag_pci_gpu:
+    call perfdiag_print_pci_gpu
+    ret
+
+.diag_real_boot:
+    call real_boot_diag_dump
+    extern klog_visible
+    mov byte [klog_visible], 1
+    mov byte [scene_dirty], 1
+    ret
+
 .diag_bench:
     call perfdiag_benchmark
+    ret
+
+.net_ping:
+    lea rsi, [rel net_ping_start_msg]
+    call svg_dump_puts
+    call rtl8139_icmp_ping_gateway
+    test eax, eax
+    jz .net_ping_serial_fail
+    lea rsi, [rel net_ping_ok_msg]
+    call svg_dump_puts
+    ret
+.net_ping_serial_fail:
+    lea rsi, [rel net_ping_fail_msg]
+    call svg_dump_puts
+    ret
+
+.net_ping_ics:
+    lea rsi, [rel net_ping_ics_start_msg]
+    call svg_dump_puts
+    call rtl8139_icmp_ping_ics
+    test eax, eax
+    jz .net_ping_ics_serial_fail
+    lea rsi, [rel net_ping_ok_msg]
+    call svg_dump_puts
+    ret
+.net_ping_ics_serial_fail:
+    lea rsi, [rel net_ping_fail_msg]
+    call svg_dump_puts
+    ret
+
+.net_ping_google:
+    lea rsi, [rel net_ping_google_start_msg]
+    call svg_dump_puts
+    mov edi, 0x08080808
+    call net_ping_ipv4
+    cmp rax, -1
+    je .net_ping_google_fail
+    lea rsi, [rel net_ping_ok_msg]
+    call svg_dump_puts
+    ret
+.net_ping_google_fail:
+    lea rsi, [rel net_ping_fail_msg]
+    call svg_dump_puts
     ret
 
 .dump_trace:
@@ -647,7 +1835,1042 @@ serial_dispatch_control:
 ; wallpaper cache (a clean copy of the render with no icons/windows on top),
 ; then streams that image, downsampled to 160x90, over COM1 so a host harness
 ; can diff it against a reference renderer.
-.svg_dump:
+real_boot_diag_dump:
+    push rax
+    push rdx
+    push rsi
+    push rdi
+
+    call pci_gpu_scan
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_begin]
+    call ovl_puts
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_boot]
+    call ovl_puts
+    mov rdx, [abs VBE_INFO_ADDR + VBE_FB_ADDR_OFF]
+    call diag_puth64
+    lea rsi, [s_diag_w]
+    call ovl_puts
+    mov edx, [abs VBE_INFO_ADDR + VBE_WIDTH_OFF]
+    call ovl_putu
+    lea rsi, [s_diag_h]
+    call ovl_puts
+    mov edx, [abs VBE_INFO_ADDR + VBE_HEIGHT_OFF]
+    call ovl_putu
+    lea rsi, [s_diag_pitch]
+    call ovl_puts
+    mov edx, [abs VBE_INFO_ADDR + VBE_PITCH_OFF]
+    call ovl_putu
+    lea rsi, [s_diag_bpp]
+    call ovl_puts
+    mov edx, [abs VBE_INFO_ADDR + VBE_BPP_OFF]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_mem]
+    call ovl_puts
+    mov rdx, [abs VBE_INFO_ADDR + VBE_BACKBUF_OFF]
+    call diag_puth64
+    lea rsi, [s_diag_sz]
+    call ovl_puts
+    mov rdx, [abs VBE_INFO_ADDR + VBE_BACKBUF_SIZE_OFF]
+    call diag_puth64
+    lea rsi, [s_diag_apps]
+    call ovl_puts
+    mov rdx, [abs VBE_INFO_ADDR + VBE_APPS_BASE_OFF]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_disp]
+    call ovl_puts
+    mov rdx, [fb_addr]
+    call diag_puth64
+    lea rsi, [s_diag_bb]
+    call ovl_puts
+    mov rdx, [bb_addr]
+    call diag_puth64
+    lea rsi, [s_diag_w]
+    call ovl_puts
+    mov edx, [scr_width]
+    call ovl_putu
+    lea rsi, [s_diag_h]
+    call ovl_puts
+    mov edx, [scr_height]
+    call ovl_putu
+    lea rsi, [s_diag_pitch]
+    call ovl_puts
+    mov edx, [scr_pitch]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_native]
+    call ovl_puts
+    mov edx, [fb_native_width]
+    call ovl_putu
+    lea rsi, [s_diag_x]
+    call ovl_puts
+    mov edx, [fb_native_height]
+    call ovl_putu
+    lea rsi, [s_diag_vsync]
+    call ovl_puts
+    movzx edx, byte [vsync_enabled]
+    call ovl_putu
+    lea rsi, [s_diag_fps]
+    call ovl_puts
+    mov edx, [last_fps]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_pci]
+    call ovl_puts
+    movzx edx, byte [pci_gpu_count]
+    call ovl_putu
+    lea rsi, [s_diag_780m]
+    call ovl_puts
+    movzx edx, byte [pci_gpu_radeon780m_found]
+    call ovl_putu
+    lea rsi, [s_diag_amd]
+    call ovl_puts
+    movzx edx, byte [pci_gpu_amd_display_found]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_780m_line]
+    call ovl_puts
+    mov edx, [pci_gpu_radeon780m_bdf]
+    call ovl_puth32
+    lea rsi, [s_diag_id]
+    call ovl_puts
+    mov edx, [pci_gpu_radeon780m_id]
+    call ovl_puth32
+    lea rsi, [s_diag_class]
+    call ovl_puts
+    mov edx, [pci_gpu_radeon780m_class]
+    call ovl_puth32
+    lea rsi, [s_diag_cmd]
+    call ovl_puts
+    mov edx, [pci_gpu_radeon780m_cmd]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_780m_bar]
+    call ovl_puts
+    mov rdx, [pci_gpu_radeon780m_bar0]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_amd_line]
+    call ovl_puts
+    mov edx, [pci_gpu_amd_display_bdf]
+    call ovl_puth32
+    lea rsi, [s_diag_id]
+    call ovl_puts
+    mov edx, [pci_gpu_amd_display_id]
+    call ovl_puth32
+    lea rsi, [s_diag_class]
+    call ovl_puts
+    mov edx, [pci_gpu_amd_display_class]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_amddisp]
+    call ovl_puts
+    movzx edx, byte [amd_display_active]
+    call ovl_putu
+    lea rsi, [s_diag_status]
+    call ovl_puts
+    mov edx, [amd_display_status]
+    call ovl_putu
+    lea rsi, [s_diag_bdf]
+    call ovl_puts
+    mov edx, [amd_display_bdf]
+    call ovl_puth32
+    lea rsi, [s_diag_id]
+    call ovl_puts
+    mov edx, [amd_display_id]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_amdmode]
+    call ovl_puts
+    mov edx, [amd_display_mode_w]
+    call ovl_putu
+    lea rsi, [s_diag_x]
+    call ovl_puts
+    mov edx, [amd_display_mode_h]
+    call ovl_putu
+    lea rsi, [s_diag_pitch]
+    call ovl_puts
+    mov edx, [amd_display_mode_pitch]
+    call ovl_putu
+    lea rsi, [s_diag_bpp]
+    call ovl_puts
+    mov edx, [amd_display_mode_bpp]
+    call ovl_putu
+    lea rsi, [s_diag_fb]
+    call ovl_puts
+    mov rdx, [amd_display_fb_addr]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_loop]
+    call ovl_puts
+    mov edx, [main_loop_iters]
+    call ovl_putu
+    lea rsi, [s_o_ml_stage]
+    call ovl_puts
+    movzx edx, byte [main_loop_stage]
+    call ovl_putu
+    lea rsi, [s_o_ml_done]
+    call ovl_puts
+    movzx edx, byte [main_loop_stage_done]
+    call ovl_putu
+    lea rsi, [s_o_ml_tick]
+    call ovl_puts
+    mov edx, [tick_count]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_input]
+    call ovl_puts
+    movzx edx, byte [kb_numlock]
+    call ovl_putu
+    lea rsi, [s_diag_usbkb]
+    call ovl_puts
+    movzx edx, byte [usb_hid_protocol]
+    call ovl_putu
+    lea rsi, [s_diag_usbkb2]
+    call ovl_puts
+    movzx edx, byte [usb_hid_protocol2]
+    call ovl_putu
+    lea rsi, [s_diag_xhci]
+    call ovl_puts
+    movzx edx, byte [xhci_active]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; ---- FBPERF block ----
+    lea rdi, [ovl_buf]
+    lea rsi, [s_fbp_hdr]
+    call ovl_puts
+    movzx edx, byte [fbperf_init_done]
+    call ovl_putu
+    lea rsi, [s_fbp_patok]
+    call ovl_puts
+    mov edx, [fbperf_cpuid_pat_supported]
+    call ovl_putu
+    lea rsi, [s_fbp_cr4]
+    call ovl_puts
+    mov rdx, [fbperf_cr4]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_fbp_pat]
+    call ovl_puts
+    mov rdx, [fbperf_pat_msr]
+    call diag_puth64
+    lea rsi, [s_fbp_mtrrcap]
+    call ovl_puts
+    mov edx, [fbperf_mtrrcap]
+    call ovl_puth32
+    lea rsi, [s_fbp_mtrrdef]
+    call ovl_puts
+    mov edx, [fbperf_mtrr_def_type]
+    call ovl_puth32
+    lea rsi, [s_fbp_mtrrn]
+    call ovl_puts
+    mov edx, [fbperf_mtrr_var_count]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_fbp_pteline]
+    call ovl_puts
+    mov edx, [fbperf_fb_pte_level]
+    call ovl_putu
+    lea rsi, [s_fbp_pteval]
+    call ovl_puts
+    mov rdx, [fbperf_fb_pte_value]
+    call diag_puth64
+    lea rsi, [s_fbp_caching]
+    call ovl_puts
+    mov edx, [fbperf_fb_caching_type]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_fbp_wcplan]
+    call ovl_puts
+    mov rdx, [fbperf_wc_plan_pat]
+    call diag_puth64
+    lea rsi, [s_fbp_wcarm]
+    call ovl_puts
+    movzx edx, byte [fbperf_wc_armed]
+    call ovl_putu
+    lea rsi, [s_fbp_wcact]
+    call ovl_puts
+    movzx edx, byte [fbperf_wc_activated]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; perf counters
+    lea rdi, [ovl_buf]
+    lea rsi, [s_fbp_flips]
+    call ovl_puts
+    mov rdx, [fbperf_flips_total]
+    call diag_puth64
+    lea rsi, [s_fbp_full]
+    call ovl_puts
+    mov rdx, [fbperf_full_flips]
+    call diag_puth64
+    lea rsi, [s_fbp_rect]
+    call ovl_puts
+    mov rdx, [fbperf_rect_flips]
+    call diag_puth64
+    lea rsi, [s_fbp_fbytes]
+    call ovl_puts
+    mov rdx, [fbperf_full_bytes]
+    call diag_puth64
+    lea rsi, [s_fbp_rbytes]
+    call ovl_puts
+    mov rdx, [fbperf_rect_bytes]
+    call diag_puth64
+    lea rsi, [s_fbp_tbytes]
+    call ovl_puts
+    mov rdx, [fbperf_bytes_total]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_fbp_tsctot]
+    call ovl_puts
+    mov rdx, [fbperf_tsc_total]
+    call diag_puth64
+    lea rsi, [s_fbp_tscmin]
+    call ovl_puts
+    mov rdx, [fbperf_tsc_min]
+    call diag_puth64
+    lea rsi, [s_fbp_tscmax]
+    call ovl_puts
+    mov rdx, [fbperf_tsc_max]
+    call diag_puth64
+    lea rsi, [s_fbp_tsclast]
+    call ovl_puts
+    mov rdx, [fbperf_tsc_last]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; per-MTRR rows (16 bytes each: qword base, qword mask)
+    push rbx
+    push rcx
+    xor ecx, ecx
+.fbp_mtrr_loop:
+    cmp ecx, [fbperf_mtrr_var_count]
+    jae .fbp_mtrr_done
+    mov rax, rcx
+    shl rax, 4                              ; *16 bytes per entry
+    lea rbx, [fbperf_mtrr_var]
+    add rbx, rax
+    push rcx
+    push rbx
+    lea rdi, [ovl_buf]
+    lea rsi, [s_fbp_mtrri]
+    call ovl_puts
+    mov edx, ecx
+    call ovl_putu
+    pop rbx
+    push rbx
+    lea rsi, [s_fbp_mtrri_b]
+    call ovl_puts
+    mov rdx, [rbx]
+    call diag_puth64
+    lea rsi, [s_fbp_mtrri_m]
+    call ovl_puts
+    pop rbx
+    mov rdx, [rbx + 8]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+    pop rcx
+    inc ecx
+    jmp .fbp_mtrr_loop
+.fbp_mtrr_done:
+    pop rcx
+    pop rbx
+
+    ; Save rbx/rcx around DCN+EC additions (we clobber them).
+    push rbx
+    push rcx
+    ; ---- DCN probe (read-only) ----
+    extern amd_dcn_probe
+    extern amd_dcn_bar0
+    extern amd_dcn_mmio_ok
+    extern amd_dcn_pte_value
+    extern amd_dcn_pte_level
+    extern amd_dcn_pat_index
+    extern amd_dcn_cache_type
+    extern amd_dcn_reg0000
+    extern amd_dcn_reg0004
+    extern amd_dcn_reg0008
+    extern amd_dcn_reg000C
+    extern amd_dcn_cfg_base
+    extern amd_dcn_cmd_pre
+    extern amd_dcn_cmd_post
+    extern amd_dcn_uc_ok
+    extern amd_dcn_uc_r0000
+    extern amd_dcn_uc_r0004
+    extern amd_dcn_uc_r0008
+    extern amd_dcn_uc_r000C
+    extern amd_dcn_uc_walk_pte
+    extern amd_dcn_uc_walk_lvl
+    extern amd_dcn_dmub_diag_ok
+    extern amd_dcn_dmub_cntl
+    extern amd_dcn_dmub_cntl2
+    extern amd_dcn_dmub_sec_cntl
+    extern amd_dcn_dmub_scratch0
+    extern amd_dcn_dmub_scratch1
+    extern amd_dcn_dmub_scratch2
+    extern amd_dcn_dmub_scratch3
+    extern amd_dcn_dmub_scratch7
+    extern amd_dcn_dmub_scratch14
+    extern amd_dcn_dmub_scratch15
+    extern amd_dcn_dmub_boot_bits
+    extern amd_dcn_dmub_inbox1_base
+    extern amd_dcn_dmub_inbox1_size
+    extern amd_dcn_dmub_inbox1_rptr
+    extern amd_dcn_dmub_inbox1_wptr
+    extern amd_dcn_dmub_outbox1_base
+    extern amd_dcn_dmub_outbox1_size
+    extern amd_dcn_dmub_outbox1_rptr
+    extern amd_dcn_dmub_outbox1_wptr
+    extern amd_dcn_dmub_gpint_in
+    extern amd_dcn_dmub_gpint_out
+    extern amd_dcn_dmub_inst_fault
+    extern amd_dcn_dmub_data_fault
+    extern amd_dcn_dmub_undef_fault
+    extern amd_dcn_dmub_timer
+    extern amd_dcn_dmub_fb_base_reg
+    extern amd_dcn_dmub_fb_offset_reg
+    extern amd_dcn_dmub_state_flags
+    extern amd_dcn_dmub_rings_arm
+    extern amd_dcn_dmub_ring_status
+    extern amd_dcn_dmub_ring_sys_phys
+    extern amd_dcn_dmub_ring_fb_addr
+    extern amd_dcn_dmub_ring_inbox_fb
+    extern amd_dcn_dmub_ring_outbox_fb
+    extern amd_dcn_dmub_fb_base_phys
+    extern amd_dcn_dmub_fb_offset_phys
+    extern amd_dcn_dmub_gpint_status
+    extern amd_dcn_dmub_gpint_req
+    extern amd_dcn_dmub_gpint_response
+    extern amd_dcn_dmub_gpint_dataout_after
+    extern amd_dcn_dmub_gpint_polls_left
+    extern amd_dcn_dmub_gpint_tick_start
+    extern amd_dcn_dmub_gpint_tick_end
+    extern amd_dcn_dmub_cmd_status
+    extern amd_dcn_dmub_cmd_rptr0
+    extern amd_dcn_dmub_cmd_wptr0
+    extern amd_dcn_dmub_cmd_rptr1
+    extern amd_dcn_dmub_cmd_wptr1
+    extern amd_dcn_dmub_cmd_q0
+    extern amd_dcn_dmub_cmd_q1
+    extern amd_dcn_dmub_cmd_tick_start
+    extern amd_dcn_dmub_cmd_tick_end
+    call amd_dcn_probe
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dcn_hdr]
+    call ovl_puts
+    mov rdx, [amd_dcn_bar0]
+    call diag_puth64
+    lea rsi, [s_dcn_ok]
+    call ovl_puts
+    movzx edx, byte [amd_dcn_mmio_ok]
+    call ovl_putu
+    lea rsi, [s_dcn_lvl]
+    call ovl_puts
+    mov edx, [amd_dcn_pte_level]
+    call ovl_putu
+    lea rsi, [s_dcn_pat]
+    call ovl_puts
+    mov edx, [amd_dcn_pat_index]
+    call ovl_putu
+    lea rsi, [s_dcn_cache]
+    call ovl_puts
+    mov edx, [amd_dcn_cache_type]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dcn_pte]
+    call ovl_puts
+    mov rdx, [amd_dcn_pte_value]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; UC alias install verification + sparse-offset MMIO sample
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dcn_uc_walk]
+    call ovl_puts
+    mov edx, [amd_dcn_uc_walk_lvl]
+    call ovl_putu
+    lea rsi, [s_dcn_uc_walk_p]
+    call ovl_puts
+    mov rdx, [amd_dcn_uc_walk_pte]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dcn_uc_hdr]
+    call ovl_puts
+    movzx edx, byte [amd_dcn_uc_ok]
+    call ovl_putu
+    lea rsi, [s_dcn_uc_r0]
+    call ovl_puts
+    mov edx, [amd_dcn_uc_r0000]
+    call ovl_puth32
+    lea rsi, [s_dcn_uc_r4]
+    call ovl_puts
+    mov edx, [amd_dcn_uc_r0004]
+    call ovl_puth32
+    lea rsi, [s_dcn_uc_r8]
+    call ovl_puts
+    mov edx, [amd_dcn_uc_r0008]
+    call ovl_puth32
+    lea rsi, [s_dcn_uc_rC]
+    call ovl_puts
+    mov edx, [amd_dcn_uc_r000C]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; ---- DMCUB/DMUB read-only status (DCN3.1.4 offsets) ----
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_hdr]
+    call ovl_puts
+    movzx edx, byte [amd_dcn_dmub_diag_ok]
+    call ovl_putu
+    lea rsi, [s_dmub_cntl]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cntl]
+    call ovl_puth32
+    lea rsi, [s_dmub_cntl2]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cntl2]
+    call ovl_puth32
+    lea rsi, [s_dmub_sec]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_sec_cntl]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_scr0]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_scratch0]
+    call ovl_puth32
+    lea rsi, [s_dmub_bits]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_boot_bits]
+    call ovl_puth32
+    lea rsi, [s_dmub_scr7]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_scratch7]
+    call ovl_puth32
+    lea rsi, [s_dmub_timer]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_timer]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_state]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_state_flags]
+    call ovl_puth32
+    lea rsi, [s_dmub_s1]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_scratch1]
+    call ovl_puth32
+    lea rsi, [s_dmub_s14]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_scratch14]
+    call ovl_puth32
+    lea rsi, [s_dmub_s15]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_scratch15]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_fbraw]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_fb_base_reg]
+    call ovl_puth32
+    lea rsi, [s_dmub_fboffraw]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_fb_offset_reg]
+    call ovl_puth32
+    lea rsi, [s_dmub_fbbase]
+    call ovl_puts
+    mov rdx, [amd_dcn_dmub_fb_base_phys]
+    call diag_puth64
+    lea rsi, [s_dmub_fboff]
+    call ovl_puts
+    mov rdx, [amd_dcn_dmub_fb_offset_phys]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_ring]
+    call ovl_puts
+    movzx edx, byte [amd_dcn_dmub_rings_arm]
+    call ovl_putu
+    lea rsi, [s_dmub_rstat]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_ring_status]
+    call ovl_puth32
+    lea rsi, [s_dmub_rphys]
+    call ovl_puts
+    mov rdx, [amd_dcn_dmub_ring_sys_phys]
+    call diag_puth64
+    lea rsi, [s_dmub_rfb]
+    call ovl_puts
+    mov rdx, [amd_dcn_dmub_ring_fb_addr]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_ring2]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_ring_inbox_fb]
+    call ovl_puth32
+    lea rsi, [s_dmub_outfb]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_ring_outbox_fb]
+    call ovl_puth32
+    lea rsi, [s_dmub_gpstat]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_gpint_status]
+    call ovl_puth32
+    lea rsi, [s_dmub_gpreq]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_gpint_req]
+    call ovl_puth32
+    lea rsi, [s_dmub_gpresp]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_gpint_response]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_gp2]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_gpint_dataout_after]
+    call ovl_puth32
+    lea rsi, [s_dmub_gppolls]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_gpint_polls_left]
+    call ovl_putu
+    lea rsi, [s_dmub_gpstart]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_gpint_tick_start]
+    call ovl_putu
+    lea rsi, [s_dmub_gpend]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_gpint_tick_end]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_cmd]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cmd_status]
+    call ovl_puth32
+    lea rsi, [s_dmub_cmd_r0]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cmd_rptr0]
+    call ovl_puth32
+    lea rsi, [s_dmub_cmd_w0]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cmd_wptr0]
+    call ovl_puth32
+    lea rsi, [s_dmub_cmd_r1]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cmd_rptr1]
+    call ovl_puth32
+    lea rsi, [s_dmub_cmd_w1]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cmd_wptr1]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_cmd2]
+    call ovl_puts
+    mov rdx, [amd_dcn_dmub_cmd_q0]
+    call diag_puth64
+    lea rsi, [s_dmub_cmd_q1]
+    call ovl_puts
+    mov rdx, [amd_dcn_dmub_cmd_q1]
+    call diag_puth64
+    lea rsi, [s_dmub_gpstart]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cmd_tick_start]
+    call ovl_putu
+    lea rsi, [s_dmub_gpend]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cmd_tick_end]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_inb]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_inbox1_base]
+    call ovl_puth32
+    lea rsi, [s_dmub_size]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_inbox1_size]
+    call ovl_puth32
+    lea rsi, [s_dmub_rptr]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_inbox1_rptr]
+    call ovl_puth32
+    lea rsi, [s_dmub_wptr]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_inbox1_wptr]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_outb]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_outbox1_base]
+    call ovl_puth32
+    lea rsi, [s_dmub_size]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_outbox1_size]
+    call ovl_puth32
+    lea rsi, [s_dmub_rptr]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_outbox1_rptr]
+    call ovl_puth32
+    lea rsi, [s_dmub_wptr]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_outbox1_wptr]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_gpint]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_gpint_in]
+    call ovl_puth32
+    lea rsi, [s_dmub_out]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_gpint_out]
+    call ovl_puth32
+    lea rsi, [s_dmub_ifault]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_inst_fault]
+    call ovl_puth32
+    lea rsi, [s_dmub_dfault]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_data_fault]
+    call ovl_puth32
+    lea rsi, [s_dmub_ufault]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_undef_fault]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dcn_cfg]
+    call ovl_puts
+    mov edx, [amd_dcn_cfg_base]
+    call ovl_puth32
+    lea rsi, [s_dcn_cmd_pre]
+    call ovl_puts
+    mov edx, [amd_dcn_cmd_pre]
+    call ovl_puth32
+    lea rsi, [s_dcn_cmd_post]
+    call ovl_puts
+    mov edx, [amd_dcn_cmd_post]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dcn_r0]
+    call ovl_puts
+    mov edx, [amd_dcn_reg0000]
+    call ovl_puth32
+    lea rsi, [s_dcn_r4]
+    call ovl_puts
+    mov edx, [amd_dcn_reg0004]
+    call ovl_puth32
+    lea rsi, [s_dcn_r8]
+    call ovl_puts
+    mov edx, [amd_dcn_reg0008]
+    call ovl_puth32
+    lea rsi, [s_dcn_rC]
+    call ovl_puts
+    mov edx, [amd_dcn_reg000C]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; ---- DCN IP-block enumeration (Task B) ----
+    ; One dword sample per 4KB page across the 1MB UC mapping. Emit only
+    ; non-zero entries, 4 per line, format "IP+xxxxx=hhhhhhhh".
+    push r12
+    push r13
+    extern amd_dcn_ip_table
+    extern amd_dcn_ip_count
+    extern amd_dcn_bl_table
+    extern amd_dcn_bl_count
+    extern amd_dcn_bl_base
+    extern amd_dcn_bl_stride
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dcn_ip_hdr]
+    call ovl_puts
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    xor r12d, r12d                       ; index
+    xor r13d, r13d                       ; per-line counter
+    lea rdi, [ovl_buf]
+.ip_dump_loop:
+    mov ecx, [amd_dcn_ip_count]
+    cmp r12d, ecx
+    jae .ip_dump_flush
+    lea rbx, [amd_dcn_ip_table]
+    mov eax, [rbx + r12*4]
+    test eax, eax
+    jz  .ip_dump_next
+    ; emit "IP+xxxxx=hhhhhhhh "
+    lea rsi, [s_dcn_ip_pfx]
+    call ovl_puts
+    mov edx, r12d
+    shl edx, 12                          ; offset = idx * 0x1000
+    call ovl_puth32
+    lea rsi, [s_dcn_eq]
+    call ovl_puts
+    mov edx, [rbx + r12*4]
+    call ovl_puth32
+    lea rsi, [s_dcn_sp]
+    call ovl_puts
+    inc r13d
+    cmp r13d, 4
+    jb  .ip_dump_next
+    mov byte [rdi], 0
+    call diag_emit_line
+    lea rdi, [ovl_buf]
+    xor r13d, r13d
+.ip_dump_next:
+    inc r12d
+    jmp .ip_dump_loop
+.ip_dump_flush:
+    test r13d, r13d
+    jz  .ip_dump_done
+    mov byte [rdi], 0
+    call diag_emit_line
+.ip_dump_done:
+
+    ; DCN BL register sweep disabled: DCN 3.1+/3.5 has no CPU-accessible
+    ; BL_PWM register. Backlight is owned by DMUB firmware via the inbox
+    ; ring (cmd.panel_cntl) — confirmed in drm/amd/display/dc/resource/
+    ; dcn35/dcn35_resource.c which reuses dcn31_panel_cntl. Brightness
+    ; will be controlled either via EC scratch byte (see acpi_ec_dump_mid)
+    ; or by sending a DMUB packet.
+    pop r13
+    pop r12
+
+    ; ---- ACPI EC RAM dump (low + high zones) ----
+    extern acpi_ec_dump_zone
+    extern acpi_ec_dump_ok
+    extern acpi_ec_dump_low
+    extern acpi_ec_dump_high
+    call acpi_ec_dump_zone
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_ec_hdr]
+    call ovl_puts
+    movzx edx, byte [acpi_ec_dump_ok]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; Low zone (0x00..0x1F) as 32 hex bytes
+    lea rdi, [ovl_buf]
+    lea rsi, [s_ec_low]
+    call ovl_puts
+    lea rbx, [acpi_ec_dump_low]
+    mov ecx, 32
+    call diag_emit_hexbytes
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; Mid zone (0x20..0x6F) — 80 bytes
+    extern acpi_ec_dump_mid
+    lea rdi, [ovl_buf]
+    lea rsi, [s_ec_mid]
+    call ovl_puts
+    lea rbx, [acpi_ec_dump_mid]
+    mov ecx, 80
+    call diag_emit_hexbytes
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; High zone (0x70..0x8F)
+    lea rdi, [ovl_buf]
+    lea rsi, [s_ec_high]
+    call ovl_puts
+    lea rbx, [acpi_ec_dump_high]
+    mov ecx, 32
+    call diag_emit_hexbytes
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    pop rcx
+    pop rbx
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_end]
+    call ovl_puts
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rax
+    ret
+
+; diag_emit_hexbytes - write ECX bytes from [RBX] into [RDI] as two-hex-digit
+; chars (no separators). RDI advanced. Clobbers RAX, RCX, RBX, RDX.
+diag_emit_hexbytes:
+.hbloop:
+    test ecx, ecx
+    jz .hbdone
+    movzx eax, byte [rbx]
+    mov edx, eax
+    shr edx, 4
+    and edx, 0x0F
+    cmp edx, 10
+    jl .hb_h1d
+    add edx, 'A'-10
+    jmp .hb_h1s
+.hb_h1d:
+    add edx, '0'
+.hb_h1s:
+    mov [rdi], dl
+    inc rdi
+    mov edx, eax
+    and edx, 0x0F
+    cmp edx, 10
+    jl .hb_h2d
+    add edx, 'A'-10
+    jmp .hb_h2s
+.hb_h2d:
+    add edx, '0'
+.hb_h2s:
+    mov [rdi], dl
+    inc rdi
+    inc rbx
+    dec ecx
+    jmp .hbloop
+.hbdone:
+    ret
+
+diag_emit_line:
+    push rsi
+    lea rsi, [ovl_buf]
+    call debug_print
+    lea rsi, [ovl_buf]
+    call svg_dump_puts
+    mov al, 13
+    call svg_dump_putc
+    mov al, 10
+    call svg_dump_putc
+    pop rsi
+    ret
+
+diag_puth64:
+    push rax
+    push rcx
+    mov ecx, 16
+.h64_loop:
+    rol rdx, 4
+    mov rax, rdx
+    and eax, 0x0F
+    cmp eax, 10
+    jl .h64_digit
+    add eax, 'A' - 10
+    jmp .h64_store
+.h64_digit:
+    add eax, '0'
+.h64_store:
+    mov [rdi], al
+    inc rdi
+    dec ecx
+    jnz .h64_loop
+    pop rcx
+    pop rax
+    ret
+
+serial_dispatch_control.svg_dump:
     SER 'G'
     mov byte [desktop_bg_theme], 1       ; glass ribbons
     mov byte [wallpaper_selected], 1     ; probe needs the SVG path, not solid fill
@@ -659,16 +2882,16 @@ serial_dispatch_control:
     mov byte [scene_dirty], 1
     ret
 
-.close_focused:
+serial_dispatch_control.close_focused:
     mov rdi, [wm_focused_window]
     cmp rdi, -1
-    je .control_done
+    je serial_dispatch_control.control_done
     sub rsp, 8
     call wm_close_window
     add rsp, 8
     mov byte [scene_dirty], 1
 
-.control_done:
+serial_dispatch_control.control_done:
     ret
 
 ; ============================================================================
@@ -854,6 +3077,11 @@ svg_dump_dec:
 svg_dump_hdr db "[SVGDUMP]", 10, 0
 svg_dump_dim db "DIM ", 0
 svg_dump_ftr db "[SVGEND]", 10, 0
+net_ping_start_msg db "[NETPING START]", 10, 0
+net_ping_ics_start_msg db "[NETPING ICS START]", 10, 0
+net_ping_google_start_msg db "[NETPING GOOGLE START]", 10, 0
+net_ping_ok_msg db "[NETPING OK]", 10, 0
+net_ping_fail_msg db "[NETPING FAIL]", 10, 0
 
 serial_forward_input:
     cmp al, 0
@@ -890,7 +3118,7 @@ serial_forward_input:
     or edx, 0x01000000
     mov rsi, rax
     mov rdi, r9
-    call call_app_l3
+    call dispatch_app_callback
 .input_dispatch_done:
     mov byte [scene_dirty], 1
 
@@ -912,11 +3140,15 @@ FN_BEGIN process_mouse, 0, 0, FN_RET_SCALAR
     mov edi, [mouse_x]
     mov esi, [mouse_y]
     movzx edx, byte [mouse_buttons]
+    mov al, [process_mouse_last_buttons]
+    mov [process_mouse_prev_buttons], al
     mov [process_mouse_last_buttons], dl
     ; If context menu is visible and left button just pressed, handle it
     ; before anything else can swallow the click.
     test dl, 1
     jz .pm_no_ctx_consume
+    test byte [process_mouse_prev_buttons], 1
+    jnz .pm_no_ctx_consume
     cmp byte [ctx_menu_visible], 0
     je .pm_no_ctx_consume
     call ctx_menu_handle_click
@@ -936,6 +3168,8 @@ FN_BEGIN process_mouse, 0, 0, FN_RET_SCALAR
     jnz .pm_set_dirty
     test dl, 1
     jz .pm_check_rclick
+    test byte [process_mouse_prev_buttons], 1
+    jnz .pm_no_click
     push rdi
     push rsi
     call tb_handle_submenu_click
@@ -976,10 +3210,11 @@ FN_BEGIN process_mouse, 0, 0, FN_RET_SCALAR
 .pm_check_rclick:
     test dl, 2
     jz .pm_no_click
+    test byte [process_mouse_prev_buttons], 2
+    jnz .pm_no_click
     call tb_handle_rclick
     test eax, eax
     jnz .pm_rclick_done
-    call app_show_context_menu
 .pm_rclick_done:
     mov byte [scene_dirty], 1
     ret
@@ -1010,6 +3245,68 @@ FN_BEGIN process_keyboard, 0, 0, FN_RET_SCALAR
     jz .pk_done
     mov bl, al
     mov cl, ah
+
+    ; --- klog overlay hotkeys ---
+    ; The minus key '-' is the always-available global toggle. Checked here
+    ; (before window-focus forwarding) so it works at any time: boot, desktop,
+    ; while a window has focus, while typing in notepad, etc. The trade-off is
+    ; that you cannot type a literal '-' inside apps -- that is intentional per
+    ; user request ("use - for opening logs at any moment").
+    ; F12 and backtick remain as alternates.
+    cmp cl, '='
+    je .pk_real_boot_diag
+    cmp cl, '-'
+    je .pk_klog_toggle
+    cmp cl, '`'
+    je .pk_klog_toggle
+    cmp cl, '~'
+    je .pk_klog_toggle
+    cmp cl, KEY_F12
+    je .pk_klog_toggle
+    jmp .pk_not_toggle
+.pk_klog_toggle:
+    extern klog_toggle
+    call klog_toggle
+    mov byte [scene_dirty], 1
+    ret
+.pk_not_toggle:
+    ; F11 always flushes+reboots (works if Fn-lock is on).
+    cmp cl, KEY_F11
+    jne .pk_not_f11
+    extern klog_flush_and_reboot
+    call klog_flush_and_reboot          ; does not return
+.pk_not_f11:
+    ; While the overlay is up, Up/Down scroll it and the key is consumed
+    ; (do not forward to the focused window).
+    extern klog_visible
+    cmp byte [klog_visible], 0
+    je .pk_overlay_closed
+    ; Enter (ASCII 13) flushes+reboots while overlay is visible.
+    cmp cl, 13
+    jne .pk_ovl_chk_up
+    extern klog_flush_and_reboot
+    call klog_flush_and_reboot          ; does not return
+.pk_ovl_chk_up:
+    extern klog_scroll
+    cmp bl, 0xC8                       ; Up arrow -> older lines
+    jne .pk_ovl_chk_down
+    mov edi, 4
+    call klog_scroll
+    mov byte [scene_dirty], 1
+    ret
+.pk_ovl_chk_down:
+    cmp bl, 0xD0                       ; Down arrow -> newer lines
+    jne .pk_overlay_consume
+    mov edi, -4
+    call klog_scroll
+    mov byte [scene_dirty], 1
+    ret
+.pk_overlay_consume:
+    ; Any other key while overlay is open is dropped to avoid acting on the
+    ; world you can't see.
+    mov byte [scene_dirty], 1
+    ret
+.pk_overlay_closed:
     cmp byte [kb_numlock], 0
     jne .pk_numlock_on
     cmp bl, 0xC8
@@ -1038,10 +3335,16 @@ FN_BEGIN process_keyboard, 0, 0, FN_RET_SCALAR
     mov rsi, rax
     mov rdi, r9
     mov edx, r15d
-    call call_app_l3
+    call dispatch_app_callback
 .pk_forward_done:
     mov byte [scene_dirty], 1
 .pk_done:
+    ret
+.pk_real_boot_diag:
+    call real_boot_diag_dump
+    extern klog_visible
+    mov byte [klog_visible], 1
+    mov byte [scene_dirty], 1
     ret
 .pk_key_up:
     mov eax, [mouse_y]
@@ -1112,7 +3415,6 @@ FN_BEGIN process_keyboard, 0, 0, FN_RET_SCALAR
     call tb_handle_rclick
     test eax, eax
     jnz .pk_kr_done
-    call app_show_context_menu
 .pk_kr_done:
     mov byte [scene_dirty], 1
     ret
@@ -1121,21 +3423,65 @@ FN_BEGIN process_keyboard, 0, 0, FN_RET_SCALAR
 ; Render one frame
 ; ============================================================================
 render_frame:
+    ; If the F12 klog overlay is up, it owns the whole screen this frame.
+    ; Draw it directly into the backbuffer, full-flush, and skip desktop
+    ; rendering entirely. The cursor still gets drawn on top so the user
+    ; can dismiss menus, etc.
+    extern klog_visible
+    cmp byte [klog_visible], 0
+    je .rf_no_overlay
+    extern klog_render_overlay
+    call klog_render_overlay
+    call render_mark_full
+    call render_flush
+    mov edi, [mouse_x]
+    mov esi, [mouse_y]
+    call cursor_draw
+    ret
+.rf_no_overlay:
+    extern wallpaper_render_active
+    cmp byte [wallpaper_render_active], 0
+    je .rf_no_wallpaper_render
+    extern wm_poll_wallpaper_render
+    call wm_poll_wallpaper_render
+    cmp byte [wallpaper_render_active], 0
+    je .rf_no_wallpaper_render
+    jmp .rf_wallpaper_busy_present
+.rf_no_wallpaper_render:
+    call taskmgr_live_refresh
+    ; Caret blink previously dirtied the whole scene every 300ms, forcing a
+    ; full desktop repaint 3x/sec even when idle. That alone burned ~30% of a
+    ; core on real hardware. Track the phase for any code that wants to read
+    ; it, but do NOT mark the scene dirty here.
     mov rax, [tick_count]
     xor edx, edx
     mov ecx, 30
     div ecx
     and al, 1
-    cmp al, [ui_blink_phase]
-    je .rf_blink_unchanged
     mov [ui_blink_phase], al
-    mov byte [scene_dirty], 1
-.rf_blink_unchanged:
     cmp qword [wm_drag_window_id], -1
     jne .rf_draw_drag
     cmp byte [scene_dirty], 0
-    je .rf_fast_path
+    je .rf_maybe_fast_path
+    jmp .rf_full_path
+.rf_maybe_fast_path:
+    ; True idle: nothing dirty, no drag. Skip the entire fast path (vsync
+    ; wait + FPS region blit + cursor redraw) unless the mouse moved or the
+    ; FPS counter changed.
+    mov eax, [mouse_x]
+    cmp eax, [rf_last_mouse_x]
+    jne .rf_fast_path
+    mov eax, [mouse_y]
+    cmp eax, [rf_last_mouse_y]
+    jne .rf_fast_path
+    mov eax, [last_fps]
+    cmp eax, [rf_last_fps]
+    jne .rf_fast_path
+    ret
+.rf_full_path:
     call wm_draw_desktop
+    cmp byte [wallpaper_render_active], 0
+    jne .rf_wallpaper_busy_after_draw
     call tb_draw
     call tb_draw_submenu
     call ctx_menu_draw
@@ -1153,6 +3499,48 @@ render_frame:
     mov edi, [mouse_x]
     mov esi, [mouse_y]
     call cursor_draw
+    mov eax, [mouse_x]
+    mov [rf_last_mouse_x], eax
+    mov eax, [mouse_y]
+    mov [rf_last_mouse_y], eax
+    mov eax, [last_fps]
+    mov [rf_last_fps], eax
+    ret
+.rf_wallpaper_busy_after_draw:
+    mov byte [scene_dirty], 1
+    ret
+.rf_wallpaper_busy_present:
+    ; The wallpaper AP owns the app callback lock while SVG rasterization is
+    ; active, so do not call wm_draw_desktop/wm_draw_window here. Present a
+    ; compositor-only frame from the last completed desktop snapshot: taskbar,
+    ; menus, drag outline, FPS, and cursor still update while app content waits.
+    call render_restore_backbuffer
+    call tb_draw
+    call tb_draw_submenu
+    call ctx_menu_draw
+    cmp qword [wm_drag_window_id], -1
+    je .rf_busy_no_drag
+    call wm_draw_drag_outline
+.rf_busy_no_drag:
+    call .rf_update_fps
+    call .rf_draw_fps_text
+    cmp byte [vsync_enabled], 1
+    jne .fr_skip_busy_vs
+    call wait_vsync
+.fr_skip_busy_vs:
+    call cursor_hide
+    call render_mark_full
+    call render_flush
+    mov edi, [mouse_x]
+    mov esi, [mouse_y]
+    call cursor_draw
+    mov eax, [mouse_x]
+    mov [rf_last_mouse_x], eax
+    mov eax, [mouse_y]
+    mov [rf_last_mouse_y], eax
+    mov eax, [last_fps]
+    mov [rf_last_fps], eax
+    mov byte [scene_dirty], 1
     ret
 .rf_fast_path:
     call .rf_update_fps
@@ -1171,13 +3559,23 @@ render_frame:
     mov edi, [mouse_x]
     mov esi, [mouse_y]
     call cursor_draw
+    mov eax, [mouse_x]
+    mov [rf_last_mouse_x], eax
+    mov eax, [mouse_y]
+    mov [rf_last_mouse_y], eax
+    mov eax, [last_fps]
+    mov [rf_last_fps], eax
     ret
 .rf_draw_drag:
-    call render_restore_backbuffer
+    call render_restore_dirty_backbuffer
     call wm_draw_drag_outline
     call .rf_update_fps
     call .rf_draw_fps_text
-    call render_mark_full
+    mov edi, FPS_REGION_X
+    mov esi, FPS_REGION_Y
+    mov edx, FPS_REGION_W
+    mov ecx, FPS_REGION_H
+    call render_mark_dirty
     cmp byte [vsync_enabled], 1
     jne .fr_skip_drag_vs
     call wait_vsync
@@ -1236,9 +3634,268 @@ render_frame:
     jnz .rfr_row
     ret
 
+; Task Manager displays live counters, so keep it repainting while open even
+; when no input event has dirtied the desktop. Throttle to ~10Hz to avoid
+; forcing a full desktop redraw every render-frame tick.
+taskmgr_live_refresh:
+    push rax
+    push rbx
+    push rcx
+    mov rcx, [tick_count]
+    mov rax, rcx
+    sub rax, [taskmgr_last_refresh_tick]
+    cmp rax, 10
+    jb .done
+    mov [taskmgr_last_refresh_tick], rcx
+    mov rbx, WINDOW_POOL_ADDR
+    xor ecx, ecx
+.scan:
+    cmp ecx, MAX_WINDOWS
+    jae .done
+    test qword [rbx + WIN_OFF_FLAGS], WF_ACTIVE
+    jz .next
+    test qword [rbx + WIN_OFF_FLAGS], WF_VISIBLE
+    jz .next
+    test qword [rbx + WIN_OFF_FLAGS], WF_MINIMIZED
+    jnz .next
+    mov rax, app_hl_taskmgr_draw
+    cmp [rbx + WIN_OFF_DRAWFN], rax
+    jne .next
+    mov byte [scene_dirty], 1
+    jmp .done
+.next:
+    add rbx, WINDOW_STRUCT_SIZE
+    inc ecx
+    jmp .scan
+.done:
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
 section .data
 szFPSPrefix db "FPS:", 0
 fps_str     times 16 db 0
+
+; Real-hardware iGPU bring-up diagnostics. '=' appends these lines to the klog
+; and opens the existing full-screen klog viewer; no USB/file write required.
+s_diag_begin     db "IGPUDBG:BEGIN v1", 0
+s_diag_end       db "IGPUDBG:END", 0
+s_diag_boot      db "BOOT fb=", 0
+s_diag_mem       db "MEM backbuf=", 0
+s_diag_disp      db "DISP fb=", 0
+s_diag_native    db "NATIVE ", 0
+s_diag_pci       db "PCI gpuCount=", 0
+s_diag_780m_line db "PCI780M bdf=", 0
+s_diag_780m_bar  db "PCI780M bar0=", 0
+s_diag_amd_line  db "PCIAMD bdf=", 0
+s_diag_amddisp   db "AMDDISP active=", 0
+s_diag_amdmode   db "AMDMODE ", 0
+s_diag_loop      db "LOOP iters=", 0
+s_diag_input     db "INPUT numlock=", 0
+s_diag_w         db " w=", 0
+s_diag_h         db " h=", 0
+s_diag_x         db "x", 0
+s_diag_pitch     db " pitch=", 0
+s_diag_bpp       db " bpp=", 0
+s_diag_sz        db " size=", 0
+s_diag_apps      db " apps=", 0
+s_diag_bb        db " bb=", 0
+s_diag_vsync     db " vsync=", 0
+s_diag_fps       db " fps=", 0
+s_diag_780m      db " 780m=", 0
+s_diag_amd       db " amd=", 0
+s_diag_id        db " id=", 0
+s_diag_class     db " class=", 0
+s_diag_cmd       db " cmd=", 0
+s_diag_status    db " status=", 0
+s_diag_bdf       db " bdf=", 0
+s_diag_fb        db " fb=", 0
+s_diag_usbkb     db " usbKb=", 0
+s_diag_usbkb2    db " usbKb2=", 0
+s_diag_xhci      db " xhci=", 0
+
+s_fbp_hdr        db "FBPERF init=", 0
+s_fbp_patok      db " patSup=", 0
+s_fbp_cr4        db " cr4=", 0
+s_fbp_pat        db "FBPERF PAT=", 0
+s_fbp_mtrrcap    db " mtrrCap=", 0
+s_fbp_mtrrdef    db " mtrrDef=", 0
+s_fbp_mtrrn      db " varN=", 0
+s_fbp_pteline    db "FBPERF leafLvl=", 0
+s_fbp_pteval     db " leafVal=", 0
+s_fbp_caching    db " cache=", 0
+s_fbp_wcplan     db "FBPERF wcPlanPAT=", 0
+s_fbp_wcarm      db " armed=", 0
+s_fbp_wcact      db " activated=", 0
+s_fbp_mtrri      db "FBPERF mtrr#", 0
+s_fbp_mtrri_b    db " base=", 0
+s_fbp_mtrri_m    db " mask=", 0
+s_wcact_tag      db "[FBPERF] wc_activate rax=", 0
+s_wcact_fail     db "[FBPERF] WC activation FAILED -- halting (see codes in fbperf.asm)", 0
+s_fbp_flips      db "FBPERF flips=", 0
+s_fbp_full       db " full=", 0
+s_fbp_rect       db " rect=", 0
+s_fbp_fbytes     db " fullB=", 0
+s_fbp_rbytes     db " rectB=", 0
+s_fbp_tbytes     db " totB=", 0
+s_fbp_tsctot     db "FBPERF tscTot=", 0
+s_fbp_tscmin     db " tscMin=", 0
+s_fbp_tscmax     db " tscMax=", 0
+s_fbp_tsclast    db " tscLast=", 0
+
+; --- DCN read-only probe labels ---
+s_dcn_hdr     db "DCN bar0=", 0
+s_dcn_ok      db " mmio=", 0
+s_dcn_lvl     db " pteLvl=", 0
+s_dcn_pat     db " patIdx=", 0
+s_dcn_cache   db " cache=", 0
+s_dcn_pte     db "DCN pte=", 0
+s_dcn_r0      db "DCN r00=", 0
+s_dcn_r4      db " r04=", 0
+s_dcn_r8      db " r08=", 0
+s_dcn_rC      db " r0C=", 0
+s_dcn_cfg     db "DCN cfg=", 0
+s_dcn_cmd_pre db " cmdPre=", 0
+s_dcn_cmd_post db " cmdPost=", 0
+s_dcn_uc_hdr  db "DCN UC ok=", 0
+s_dcn_uc_r0   db " r0000=", 0
+s_dcn_uc_r4   db " r0004=", 0
+s_dcn_uc_r8   db " r1000=", 0
+s_dcn_uc_rC   db " r3000=", 0
+s_dcn_uc_walk db "DCN UC walkLvl=", 0
+s_dcn_uc_walk_p db " walkPte=", 0
+s_dcn_ip_hdr  db "DCN IP table (off:val, non-zero only):", 0
+s_dcn_ip_pfx  db "IP+", 0
+s_dcn_eq      db "=", 0
+s_dcn_sp      db " ", 0
+s_dcn_bl_hdr  db "DCN BL hunt @BAR0+0x", 0
+s_dcn_bl_pfx  db "BL+", 0
+s_dmub_hdr    db "DMUB ok=", 0
+s_dmub_cntl   db " cntl=", 0
+s_dmub_cntl2  db " cntl2=", 0
+s_dmub_sec    db " sec=", 0
+s_dmub_scr0   db "DMUB scratch0=", 0
+s_dmub_bits   db " bits=", 0
+s_dmub_scr7   db " scratch7=", 0
+s_dmub_timer  db " timer=", 0
+s_dmub_state  db "DMUB state=", 0
+s_dmub_s1     db " scratch1=", 0
+s_dmub_s14    db " scratch14=", 0
+s_dmub_s15    db " scratch15=", 0
+s_dmub_fbraw  db "DMUB fbBaseReg=", 0
+s_dmub_fboffraw db " fbOffReg=", 0
+s_dmub_fbbase db " fbBase=", 0
+s_dmub_fboff  db " fbOff=", 0
+s_dmub_ring   db "DMUB ring arm=", 0
+s_dmub_rstat  db " status=", 0
+s_dmub_rphys  db " sys=", 0
+s_dmub_rfb    db " fb=", 0
+s_dmub_ring2  db "DMUB ring inFb=", 0
+s_dmub_outfb  db " outFb=", 0
+s_dmub_gpstat db " gpStat=", 0
+s_dmub_gpreq  db " gpReq=", 0
+s_dmub_gpresp db " gpResp=", 0
+s_dmub_gp2    db "DMUB gp2 dataOut=", 0
+s_dmub_gppolls db " polls=", 0
+s_dmub_gpstart db " t0=", 0
+s_dmub_gpend  db " t1=", 0
+s_dmub_cmd    db "DMUB cmd stat=", 0
+s_dmub_cmd_r0 db " r0=", 0
+s_dmub_cmd_w0 db " w0=", 0
+s_dmub_cmd_r1 db " r1=", 0
+s_dmub_cmd_w1 db " w1=", 0
+s_dmub_cmd2   db "DMUB cmd q0=", 0
+s_dmub_cmd_q1 db " q1=", 0
+s_dmub_inb    db "DMUB inb1 base=", 0
+s_dmub_outb   db "DMUB outb1 base=", 0
+s_dmub_size   db " size=", 0
+s_dmub_rptr   db " rptr=", 0
+s_dmub_wptr   db " wptr=", 0
+s_dmub_gpint  db "DMUB gpint in=", 0
+s_dmub_out    db " out=", 0
+s_dmub_ifault db " iflt=", 0
+s_dmub_dfault db " dflt=", 0
+s_dmub_ufault db " uflt=", 0
+
+; --- ACPI EC RAM labels ---
+s_ec_hdr      db "EC dumpOk=", 0
+s_ec_low      db "EC[00..1F]=", 0
+s_ec_mid      db "EC[20..6F]=", 0
+s_ec_high     db "EC[70..8F]=", 0
+
+; --- USB-mouse debug overlay scratch + labels ---
+ovl_buf     times 192 db 0
+s_o_l1      db "xhci=", 0
+s_o_noxhci  db "  noXHCI=", 0
+s_o_mact    db "  mouseAct=", 0
+s_o_retry   db "  retry=", 0
+s_o_stage   db "  STAGE=", 0
+s_o_stagemax db " max=", 0
+s_o_fpn     db " fpCalls=", 0
+s_o_hwslot  db "  hwSlot=", 0
+s_o_port    db "port=", 0
+s_o_spd     db "  speed=", 0
+s_o_slot    db "  slot1=", 0
+s_o_s2      db "  slot2act=", 0
+s_o_ep      db "epAddr=", 0
+s_o_mps     db "  maxpkt=", 0
+s_o_proto   db "  hidProto=", 0
+s_o_evt     db "xferEvt=", 0
+s_o_rpt     db "  reports=", 0
+s_o_err     db "  errs=", 0
+s_o_ec      db "  errCode=", 0
+s_o_adn     db "  adN=", 0
+s_o_adcc    db " adCC=", 0
+s_o_scr     db " scratch=", 0
+s_o_scr_req db "/", 0
+s_o_adst_h  db "adSt=", 0
+s_o_cc1     db "  cc1=", 0
+s_o_cc2     db "  cc2=", 0
+s_o_portsc  db "  PORTSC=", 0
+s_o_slotst  db "  slotSt=", 0
+s_o_rst_h   db "rstSt=", 0
+s_o_ped     db "  PED=", 0
+s_o_ccs     db "  CCS=", 0
+s_o_sppre   db "  spPre=", 0
+s_o_sppost  db "  spPost=", 0
+s_o_pscpre  db "  pscPre=", 0
+s_o_pscpost db "  pscPost=", 0
+s_o_wrt     db "wrt=", 0
+s_o_imm     db "  imm=", 0
+s_o_wait    db "  wait=", 0
+s_o_polls   db "  pls=", 0
+s_o_r0      db "report b0=", 0
+s_o_r1      db "  dX=", 0
+s_o_r2      db "  dY=", 0
+s_o_r3      db "  b3=", 0
+s_o_noctrl  db "PCI scan: no xHCI controller found", 0
+s_o_ctrl    db "xHCI#", 0
+s_o_cbus    db " bus=", 0
+s_o_cdev    db " dev=", 0
+s_o_cfn     db " fn=", 0
+s_o_cports  db " ports=", 0
+s_o_cmap    db " map=", 0
+s_o_init    db "init#", 0
+s_o_istage  db " stage=", 0
+s_o_fp      db "findPort#", 0
+s_o_ml_iters db "ML iters=", 0
+s_o_ml_stage db "  stage=", 0
+s_o_ml_done  db "  done=", 0
+s_o_ml_tick  db "  tick=", 0
+s_o_fmp     db " ports=", 0
+s_o_fr      db " result=", 0
+s_o_fmap    db " sees=", 0
+
+ovl_ci      dd 0
+ovl_li      dd 0
+ovl_rec     dq 0
+; PCI xHCI inventory: scanned once. Up to 4 controllers, 64-byte records:
+;  +0 bus  +1 dev  +2 fn  +3 maxports  +4..: per-port speed code (0 = empty)
+global usb_dbg_pci_done
+usb_dbg_pci_done:  db 0
+usb_dbg_xhci_n:    db 0
+usb_dbg_xhci_rec:  times 4*64 db 0
 
 ; BSP CPU utilization accounting (see cpu_acct_* routines above).
 global bsp_util
@@ -1248,8 +3905,11 @@ acct_work_start  dq 0
 acct_busy_acc    dq 0
 acct_idle_acc    dq 0
 acct_win_tick    dq 0
+acct_tsc_start   dq 0
+taskmgr_last_refresh_tick dq 0
 
 section .bss
 serial_command_armed resb 1
 ui_blink_phase resb 1
 process_mouse_last_buttons resb 1
+process_mouse_prev_buttons resb 1

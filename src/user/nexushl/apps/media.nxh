@@ -1,0 +1,77 @@
+# Media Player — image and video viewer for NexusOS native formats.
+#
+# The pixel blit happens kernel-side (src/kernel/gui/media_viewer.asm) so
+# .launch_media registers `app_media_draw` (kernel asm) as the window's
+# draw fn instead of the auto-generated `app_hl_media_draw` below. This app
+# stub only owns keyboard input — Esc closes, Space could later toggle
+# playback once the kernel renderer learns a paused state.
+#
+# Pixel decoding is dispatched by a codec table in media_viewer.asm. To add
+# a format, follow docs/media-formats.md → "Adding a new codec".
+
+use gui
+use media
+
+app "Media Player" { stack = 4096; }
+
+# Per-instance UI state. The file bytes themselves live at
+# slot + APP_SLOT_BMP_FILE_OFF — they are loaded by kernel_open_file_in_media
+# before the first draw, so this app never owns the file buffer.
+state {
+    mp_paused: 4;
+    mp_frame: 4;
+    mp_last_tick: 8;
+}
+
+# Draw is intentionally a no-op stub: the actual draw fn registered on the
+# window is the kernel's `app_media_draw`. NexusHL still requires every app
+# to define `fn draw` because the compiler emits a slot symbol for it.
+fn draw(win) {
+    return;
+}
+
+fn click(win, cx, cy) {
+    let wh = lq(win + WIN_H);
+    let ww = lq(win + WIN_W);
+    let bar_y = wh - UI_TITLEBAR - UI_BORDER - 26;
+    if cy < bar_y { return; }
+
+    let app_base = lq(win + WIN_APPDATA);
+    let file = app_base + APP_SLOT_BMP_FILE_OFF;
+    let frames = lw(file + 12);
+    if frames <= 0 { return; }
+
+    if cx < 32 {
+        let p = lw(&mp_paused);
+        if p == 0 { sw(&mp_paused, 1); return; }
+        sw(&mp_paused, 0);
+        return;
+    }
+
+    let track_x = 34;
+    let track_w = ww - UI_BORDER * 2 - 48;
+    if track_w <= 0 { return; }
+    if cx < track_x { return; }
+    if cx >= track_x + track_w { return; }
+    let f = (cx - track_x) * frames / track_w;
+    if f < 0 { sw(&mp_frame, 0); }
+    else {
+        if f >= frames { sw(&mp_frame, frames - 1); }
+        else { sw(&mp_frame, f); }
+    }
+    sw(&mp_paused, 1);
+    return;
+}
+
+fn key(win, k) {
+    let ch = (k >> 8) & 0xFF;
+    # Space toggles a pause flag that future kernel renderer revisions can
+    # honor. The current renderer always advances from tick_count, so the
+    # flag is a no-op today — kept for the upcoming pause-aware blitter.
+    if ch == 32 {
+        let p = lw(&mp_paused);
+        if p == 0 { sw(&mp_paused, 1); return; }
+        sw(&mp_paused, 0);
+        return;
+    }
+}

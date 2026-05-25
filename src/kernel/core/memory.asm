@@ -24,6 +24,10 @@ FN_BEGIN memory_init, 0, 0, FN_RET_SCALAR
     push r13
     push r14
 
+    movzx r12, word [abs E820_COUNT_ADDR]
+    mov r13, E820_MAP_ADDR
+    mov qword [total_usable_pages], 0
+
     ; Clear the entire bitmap (mark all pages as USED initially)
     mov rdi, PAGE_BITMAP_ADDR
     mov al, 0xFF             ; All bits set = all pages used
@@ -58,6 +62,13 @@ FN_BEGIN memory_init, 0, 0, FN_RET_SCALAR
     mov rax, KERNEL_LOAD_ADDR
 
 .process_range:
+    ; Track total usable RAM above the kernel load floor before clipping out
+    ; fixed kernel/GUI/app arenas. Task Manager uses this to show real used
+    ; memory instead of only allocator-managed page consumption.
+    mov rdx, rbx
+    shr rdx, 12
+    add [total_usable_pages], rdx
+
     ; Skip pages used by kernel and fixed system structures.
     cmp rax, SYSTEM_RESERVED_END
     jge .mark_free
@@ -262,3 +273,5 @@ global free_page_count
 free_page_count: dq 0
 global boot_free_pages
 boot_free_pages: dq 0
+global total_usable_pages
+total_usable_pages: dq 0

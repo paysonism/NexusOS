@@ -236,8 +236,9 @@ def main():
     with open(OUT, 'wb') as f:
         f.write(b'NBA1')
         f.write(struct.pack('<IIII', W, H, FRAMES, FPS))
+        poster = render_frame(FRAMES - 1, particles)
         for i in range(FRAMES):
-            f.write(render_frame(i, particles))
+            f.write(poster if i == 0 else render_frame(i, particles))
             if i % 5 == 0:
                 sys.stdout.write('.'); sys.stdout.flush()
     sz = os.path.getsize(OUT)

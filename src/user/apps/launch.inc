@@ -98,6 +98,18 @@ app_set_window_drag:
     pop rax
     ret
 
+; RAX = window ID, R10 = right-click handler. Same calling convention as click:
+;   rclick_fn(rsi=win_ptr, rdx=client_x, rcx=client_y).
+; Fired once on right-button-down inside a window's client area. Pass 0 to
+; detach. Apps use this for context menus or custom secondary actions.
+app_set_window_rclick:
+    push rax
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    mov qword [rax + WIN_OFF_RCLICKFN], r10
+    pop rax
+    ret
+
 ; RAX = window ID. Preserve RAX.
 ; The NexusHL notepad callbacks read state from the window's L3 slot copy of
 ; the app blob. ALL per-instance notepad state must be written through this
@@ -176,6 +188,7 @@ app_reset_explorer_slot:
     mov byte [rbx + exp_rename_active - app_blob_start], 0
     mov byte [rbx + exp_newfolder_active - app_blob_start], 0
     mov byte [rbx + exp_newfolder_done_msg - app_blob_start], 0
+    mov byte [rbx + exp_prop_visible - app_blob_start], 0
     mov dword [rbx + exp_rename_cursor - app_blob_start], 0
     mov dword [rbx + exp_newfolder_cursor - app_blob_start], 0
     mov byte [rbx + exp_rename_buf - app_blob_start], 0
@@ -216,6 +229,10 @@ app_launch:
     je .launch_security_probe
     cmp rdi, APP_TASKMGR
     je .launch_taskmgr
+    cmp rdi, APP_PING
+    je .launch_ping
+    cmp rdi, APP_MEDIA
+    je .launch_media
     mov rax, -1
     ret
 
@@ -230,6 +247,7 @@ app_launch:
     mov byte [exp_rename_active], 0
     mov byte [exp_newfolder_active], 0
     mov byte [exp_newfolder_done_msg], 0
+    mov byte [exp_prop_visible], 0
     lea rdi, [rel szExplorerTitle]
     mov rsi, 120
     mov rdx, 80
@@ -254,6 +272,8 @@ app_launch:
     mov r10, app_hl_explorer_click
     mov r11, app_hl_explorer_key
     call app_set_window_handlers
+    mov r10, app_hl_explorer_rclick
+    call app_set_window_rclick
     SER 'e'
     jmp .done
 
@@ -369,7 +389,7 @@ app_launch:
     mov rsi, 300
     mov rdx, 180
     mov rcx, 380
-    mov r8, 280
+    mov r8, 340
     mov r9, app_hl_settings_draw
     SER '{'
     sub rsp, 8
@@ -495,6 +515,45 @@ app_launch:
     SER 'm'
     jmp .done
 
+.launch_media:
+    ; The Media Player's draw fn is the kernel asm renderer (codec dispatch
+    ; in media_viewer.asm), not the auto-generated app_hl_media_draw stub.
+    ; Click/key still route through the nxh handlers so future UI work can
+    ; live in media.nxh without touching this glue.
+    lea rdi, [rel szMediaTitle]
+    mov rsi, 180
+    mov rdx, 120
+    mov rcx, 480
+    mov r8, 340
+    lea r9, [rel app_media_draw]
+    sub rsp, 8
+    call wm_create_window_ex
+    add rsp, 8
+    cmp rax, -1
+    je .done
+    call app_refresh_window_slot
+    mov r10, app_hl_media_click
+    mov r11, app_hl_media_key
+    call app_set_window_handlers
+    jmp .done
+
+.launch_ping:
+    lea rdi, [rel szPingTitle]
+    mov rsi, 220
+    mov rdx, 90
+    mov rcx, 480
+    mov r8, 360
+    mov r9, app_hl_ping_draw
+    sub rsp, 8
+    call wm_create_window_ex
+    add rsp, 8
+    cmp rax, -1
+    je .done
+    mov r10, app_hl_ping_click
+    mov r11, app_hl_ping_key
+    call app_set_window_handlers
+    jmp .done
+
 .done:
     ret
 
@@ -505,16 +564,50 @@ app_launch:
 ; ============================================================================
 global app_open_file
 app_open_file:
-    ; Check extension at entry+8 (3 bytes); BMP files: extension = "BMP"
+    ; Extension routing. The 3-byte field at entry+8 holds the 8.3 extension,
+    ; already upper-cased and space-padded by FAT16. Match against the known
+    ; media extensions first; everything else opens in Notepad.
+    ;
+    ;   "BMP" → legacy BMP viewer (kept for back-compat)
+    ;   "NIC" → Media Player (native still image)
+    ;   "NBA" → Media Player (native animation)
+    ;
+    ; Adding a new media format = one new compare block here that jumps to
+    ; app_open_file_in_media, plus a codec row in media_viewer.asm.
     cmp byte [rdi + 8], 'B'
-    jne .open_not_bmp
+    jne .not_bmp
     cmp byte [rdi + 9], 'M'
-    jne .open_not_bmp
+    jne .not_bmp
     cmp byte [rdi + 10], 'P'
-    jne .open_not_bmp
+    jne .not_bmp
     jmp app_open_file_in_bmpview
-.open_not_bmp:
+.not_bmp:
+    cmp byte [rdi + 8], 'N'
+    jne .not_native_media
+    cmp byte [rdi + 9], 'I'
+    jne .check_nba
+    cmp byte [rdi + 10], 'C'
+    jne .not_native_media
+    jmp app_open_file_in_media
+.check_nba:
+    cmp byte [rdi + 9], 'B'
+    jne .not_native_media
+    cmp byte [rdi + 10], 'A'
+    jne .not_native_media
+    jmp app_open_file_in_media
+.not_native_media:
     jmp app_open_file_in_notepad
+
+; ============================================================================
+; app_open_file_in_media - thin user-mode wrapper. Routes to a kernel helper
+; via SYS_OPEN_FILE_NP semantics — see kernel_open_file_in_media below for
+; why the heavy lifting must run in kernel context (real fat16 globals).
+; RDI = dir entry pointer
+; ============================================================================
+global app_open_file_in_media
+app_open_file_in_media:
+    SYS_OPEN_FILE_MEDIA rdi
+    ret
 
 ; ============================================================================
 ; app_open_file_in_notepad - thin user-mode wrapper.
@@ -719,6 +812,14 @@ app_command_name_to_id:
     call app_str_eq_ci
     test eax, eax
     jnz .acnti_security
+    lea rsi, [szAppNamePing]
+    call app_str_eq_ci
+    test eax, eax
+    jnz .acnti_ping
+    lea rsi, [szAppNameMedia]
+    call app_str_eq_ci
+    test eax, eax
+    jnz .acnti_media
     xor eax, eax
     ret
 .acnti_explorer:
@@ -741,6 +842,12 @@ app_command_name_to_id:
     ret
 .acnti_security:
     mov eax, APP_SECURITY_PROBE
+    ret
+.acnti_ping:
+    mov eax, APP_PING
+    ret
+.acnti_media:
+    mov eax, APP_MEDIA
     ret
 
 ; Case-insensitive ASCII strcmp. RDI=a, RSI=b, EAX=1 on match.
@@ -1024,6 +1131,28 @@ kernel_open_file_in_notepad:
     push r15
 
     mov r12, rdi                      ; dir entry ptr
+    ; Notepad is a text editor. Keep known binary media formats out of its
+    ; parser even if a caller bypasses Explorer's type-aware Open With list.
+    cmp byte [r12 + 8], 'B'
+    jne .kop_not_bmp
+    cmp byte [r12 + 9], 'M'
+    jne .kop_not_bmp
+    cmp byte [r12 + 10], 'P'
+    je .kop_fail
+.kop_not_bmp:
+    cmp byte [r12 + 8], 'N'
+    jne .kop_not_media
+    cmp byte [r12 + 9], 'I'
+    jne .kop_check_nba
+    cmp byte [r12 + 10], 'C'
+    je .kop_fail
+    jmp .kop_not_media
+.kop_check_nba:
+    cmp byte [r12 + 9], 'B'
+    jne .kop_not_media
+    cmp byte [r12 + 10], 'A'
+    je .kop_fail
+.kop_not_media:
 
     ; Launch a fresh Notepad. app_seed_notepad_slot resets the slot to a
     ; pristine "Hello" baseline; we then overwrite slot state with file data.
@@ -1207,6 +1336,119 @@ kernel_open_file_in_notepad:
 .kop_fail:
     mov rax, -1
     pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; ============================================================================
+; kernel_open_file_in_media - runs in kernel context. Launches Media Player
+; for an arbitrary FAT16 entry (NIC, NBA, or any future codec) and reads the
+; file bytes into the new window's slot at APP_SLOT_BMP_FILE_OFF — the same
+; offset `app_media_draw` probes for the magic on every frame.
+;
+; Mirrors kernel_open_file_in_notepad: the heavy lifting must run in kernel
+; mode so the real fat16_* helpers (not user-mode syscall macros) can be
+; called, and so the slot we write into is the *new* Media Player window's
+; slot, not the caller's (a long-standing bug in the legacy BMP opener).
+;
+; RDI = slot-cached dir entry pointer
+; Returns RAX = window id, or -1 on launch failure / read failure.
+; ============================================================================
+global kernel_open_file_in_media
+kernel_open_file_in_media:
+    push rbx
+    push r12
+    push r13
+    push r14
+
+    mov r12, rdi                      ; dir entry ptr
+
+    ; Launch a fresh Media Player window via the normal dispatch.
+    mov rdi, APP_MEDIA
+    sub rsp, 8
+    call app_launch
+    add rsp, 8
+    cmp rax, -1
+    je .kom_fail
+    mov r13, rax                      ; new window id
+
+    ; Cascade window position so the viewer doesn't cover the explorer.
+    mov rax, r13
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    mov qword [rax + WIN_OFF_X], 200
+    mov rbx, r13
+    imul rbx, 24
+    add rbx, 100
+    mov [rax + WIN_OFF_Y], rbx
+
+    ; Resolve the new window's slot base.
+    mov edi, r13d
+    call l3_slot_base
+    mov r14, rax                      ; slot base
+
+    ; Zero the slot's media buffer header so a failed read doesn't leave
+    ; an old codec magic lingering from a previous tenant of this slot.
+    lea rdi, [r14 + APP_SLOT_BMP_FILE_OFF]
+    xor eax, eax
+    mov ecx, 64                       ; just the header region is enough
+    rep stosd
+
+    ; Read file bytes into the slot's media buffer.
+    lea rdi, [r14 + APP_SLOT_BMP_FILE_OFF]
+    mov rsi, rdi
+    mov rdi, r12
+    mov edx, APP_SLOT_BMP_FILE_SZ
+    call fat16_read_file
+    cmp eax, -1
+    je .kom_fail
+    mov ebx, eax
+
+    ; APP_SLOT_BMP_FILE_SZ intentionally caps the synchronous load so opening
+    ; a large NBA file does not stall the desktop. Clamp the in-slot header's
+    ; frame_count to the complete frames actually loaded; BOOTANIM.NBA then
+    ; shows a stable first-frame preview instead of the renderer walking past
+    ; the slot buffer and painting white/garbage.
+    cmp dword [r14 + APP_SLOT_BMP_FILE_OFF], 0x3141424E ; 'NBA1'
+    jne .kom_loaded
+    cmp ebx, 20
+    jbe .kom_nba_no_frames
+    mov eax, [r14 + APP_SLOT_BMP_FILE_OFF + 4]
+    test eax, eax
+    jz .kom_nba_no_frames
+    mov ecx, [r14 + APP_SLOT_BMP_FILE_OFF + 8]
+    test ecx, ecx
+    jz .kom_nba_no_frames
+    imul eax, ecx
+    shl eax, 2
+    test eax, eax
+    jz .kom_nba_no_frames
+    mov ecx, eax                      ; frame bytes
+    mov eax, ebx
+    sub eax, 20
+    xor edx, edx
+    div ecx                           ; eax = complete loaded frames
+    test eax, eax
+    jz .kom_nba_no_frames
+    cmp eax, [r14 + APP_SLOT_BMP_FILE_OFF + 12]
+    jae .kom_loaded
+    mov [r14 + APP_SLOT_BMP_FILE_OFF + 12], eax
+    jmp .kom_loaded
+.kom_nba_no_frames:
+    mov dword [r14 + APP_SLOT_BMP_FILE_OFF + 12], 0
+.kom_loaded:
+
+    mov rax, r13
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+.kom_fail:
+    mov rax, -1
     pop r14
     pop r13
     pop r12

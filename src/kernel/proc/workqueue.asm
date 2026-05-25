@@ -90,6 +90,18 @@ extern serial_puts
 extern serial_crlf
 extern ser_print_hex64
 extern smp_alive_cores              ; defined in arch/apic.asm (.data)
+extern tick_count
+extern cpu_tsc_per_tick
+
+; SMP_CORE_STATE offsets used by Task Manager:
+;   +24 dd current utilization percent
+;   +28 dd current MHz
+;   +32 dq busy-cycle accumulator
+;   +40 dq idle/scan-cycle accumulator
+;   +48 dq last TSC mark
+;   +56 dq last published tick
+;   +64 dq previous APERF
+;   +72 dq previous MPERF
 
 ; --- Job slot layout: 64 bytes, one cache line -----------------------------
 WQ_OFF_STATUS  equ 0                ; dd  - lifecycle state (WQ_* below)
@@ -98,8 +110,23 @@ WQ_OFF_ARG     equ 16               ; dq  - single argument, passed in RDI
 WQ_OFF_RESULT  equ 24               ; dq  - RAX returned by the job
 WQ_OFF_RUNS    equ 32               ; dd  - diagnostics: 1 once a worker ran it
 WQ_OFF_PRIO    equ 36               ; dd  - job priority (WQ_PRIO_* below)
+; Stage 2a: optional per-job placement + accounting fields.
+;   target_core: -1 means "any AP can run it" (the legacy behaviour).
+;                A non-negative value means only that core's worker may claim
+;                the slot. Used so app-bound work lands on the app's home core.
+;   proc_id    : 0 means "do not bill" (kernel-internal job). A non-zero value
+;                names a process_t.id; the worker that runs the job lock-adds
+;                its TSC delta into PROCESS_POOL[proc_id].cpu_time_cycles.
+WQ_OFF_TARGET  equ 40               ; dd  - target core index, or -1 = any
+WQ_OFF_PROC    equ 44               ; dd  - process id to bill, or 0 = none
 WQ_JOB_SIZE    equ 64
 WQ_MAX_JOBS    equ 32
+
+WQ_TARGET_ANY  equ -1               ; submit_to "no preference"
+
+; PCB layout we touch from the worker (must track process_t in structs.inc).
+WQ_PCB_STRIDE    equ 512
+WQ_PCB_TIME_OFF  equ 0xC8            ; process_t.cpu_time_cycles
 
 ; --- status word values ---
 WQ_FREE        equ 0                ; slot unused
@@ -147,6 +174,34 @@ FN_BEGIN workqueue_init, 0, 0, FN_RET_VOID
 ; If no AP is alive the job is executed inline so the result is ready on return.
 ; ----------------------------------------------------------------------------
 FN_BEGIN workqueue_submit, 3, 0, FN_RET_HANDLE
+    ; Default placement: any AP, no billing. Forward to workqueue_submit_to.
+    push r8
+    push r9
+    mov r8d, WQ_TARGET_ANY
+    xor r9d, r9d
+    call workqueue_submit_to
+    pop r9
+    pop r8
+    FN_END workqueue_submit
+    ret
+
+; ----------------------------------------------------------------------------
+; workqueue_submit_to(RDI = func, RSI = arg, RDX = priority,
+;                     R8d = target_core (-1 = any),
+;                     R9d = proc_id to bill (0 = none)) -> RAX = handle
+;
+; Like workqueue_submit but records a target core and an owning process. Used
+; for app-bound work in Stage 2a: the BSP submits a job tied to an app's
+; home_core and its PCB id, and only that core's worker will claim it. The
+; runtime is billed to that process's cpu_time_cycles, so task manager can
+; show per-app CPU usage as soon as any app work is routed through this
+; entry point.
+;
+; If no AP is alive the job still executes inline (same as plain submit) and
+; billing is skipped; the BSP is core 0 and we never bill it.
+; ----------------------------------------------------------------------------
+global workqueue_submit_to
+workqueue_submit_to:
     push rbx
     push rcx
     push rdx
@@ -154,8 +209,11 @@ FN_BEGIN workqueue_submit, 3, 0, FN_RET_HANDLE
     push rdi
     push r8
     push r9
-    mov r8, rdi                     ; r8 = func pointer
-    mov r9d, edx                    ; r9d = priority (survives the cmpxchg)
+    push r10
+    push r11
+    mov r10, rdi                    ; r10 = func pointer
+    mov r11d, edx                   ; r11d = priority
+    ; r8d = target_core, r9d = proc_id   (incoming, survive the cmpxchg)
     xor ecx, ecx                    ; ecx = candidate slot index
 .scan:
     cmp ecx, WQ_MAX_JOBS
@@ -164,18 +222,19 @@ FN_BEGIN workqueue_submit, 3, 0, FN_RET_HANDLE
     imul eax, WQ_JOB_SIZE
     mov rbx, workqueue_jobs
     add rbx, rax                    ; rbx = &slot[ecx]
-    ; Atomically claim a FREE slot: FREE -> BUILDING. While BUILDING the slot
-    ; is invisible to workers (they only look for PENDING).
-    mov eax, WQ_FREE                ; cmpxchg compares against EAX
+    ; Atomically claim a FREE slot: FREE -> BUILDING.
+    mov eax, WQ_FREE
     mov edx, WQ_BUILDING
     lock cmpxchg [rbx + WQ_OFF_STATUS], edx
-    jne .next                       ; slot was not FREE, try the next one
+    jne .next
     ; --- slot claimed ---
-    mov [rbx + WQ_OFF_FUNC], r8
+    mov [rbx + WQ_OFF_FUNC], r10
     mov [rbx + WQ_OFF_ARG], rsi
     mov qword [rbx + WQ_OFF_RESULT], 0
     mov dword [rbx + WQ_OFF_RUNS], 0
-    mov [rbx + WQ_OFF_PRIO], r9d
+    mov [rbx + WQ_OFF_PRIO], r11d
+    mov [rbx + WQ_OFF_TARGET], r8d
+    mov [rbx + WQ_OFF_PROC], r9d
     ; smp_alive_cores counts the BSP, so a value >= 2 means at least one AP is
     ; available to run the job. Otherwise execute it inline right here.
     mov eax, [smp_alive_cores]
@@ -185,7 +244,7 @@ FN_BEGIN workqueue_submit, 3, 0, FN_RET_HANDLE
     mov dword [rbx + WQ_OFF_STATUS], WQ_RUNNING
     mov rdi, rsi                    ; arg
     push rbx                        ; preserve slot ptr across the call
-    call r8
+    call r10
     pop rbx
     mov [rbx + WQ_OFF_RESULT], rax
     mov dword [rbx + WQ_OFF_RUNS], 1
@@ -204,6 +263,8 @@ FN_BEGIN workqueue_submit, 3, 0, FN_RET_HANDLE
 .full:
     mov eax, WQ_INVALID
 .ret:
+    pop r11
+    pop r10
     pop r9
     pop r8
     pop rdi
@@ -211,7 +272,6 @@ FN_BEGIN workqueue_submit, 3, 0, FN_RET_HANDLE
     pop rdx
     pop rcx
     pop rbx
-    FN_END workqueue_submit
     ret
 
 ; ----------------------------------------------------------------------------
@@ -274,6 +334,46 @@ FN_BEGIN workqueue_wait, 1, 0, FN_RET_SCALAR
     ret
 
 ; ----------------------------------------------------------------------------
+; workqueue_wait_timeout(RDI = handle, RSI = tick budget)
+;   -> RAX = result (or 0 if timed out), RDX = 0 normal / 1 timeout
+;
+; Like workqueue_wait but bails after `tick budget` PIT ticks. On timeout the
+; slot is NOT reaped - it stays in RUNNING state owned by whichever AP picked
+; it up. That AP is presumed dead, so the slot leaks; with WQ_MAX_JOBS=32 and
+; a wedged routing path we lose 32 slots before submit starts failing, at
+; which point dispatch_app_callback falls back to inline anyway. The leak is
+; the price we pay for not freezing the whole OS on a broken AP.
+; ----------------------------------------------------------------------------
+extern tick_count
+global workqueue_wait_timeout
+workqueue_wait_timeout:
+    push rbx
+    push rcx
+    mov rbx, [tick_count]
+    add rbx, rsi                    ; rbx = deadline tick
+.spin:
+    call workqueue_done
+    test eax, eax
+    jnz .ok
+    mov rcx, [tick_count]
+    cmp rcx, rbx
+    jae .timeout
+    pause
+    jmp .spin
+.ok:
+    call workqueue_reap
+    xor edx, edx
+    pop rcx
+    pop rbx
+    ret
+.timeout:
+    xor eax, eax
+    mov edx, 1
+    pop rcx
+    pop rbx
+    ret
+
+; ----------------------------------------------------------------------------
 ; wq_lock(RDI = pointer to a lock word) - acquire a spinlock.
 ; Test-and-test-and-set: spin reading the word (cheap, cache-shared) and only
 ; attempt the bus-locked cmpxchg once it looks free. Preserves every register;
@@ -322,6 +422,18 @@ wq_unlock:
 global smp_worker_loop
 smp_worker_loop:
     mov r14, rdi                    ; r14 = per-core state record
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov [r14 + 48], rax
+    mov rax, [tick_count]
+    mov [r14 + 56], rax
+    mov rax, [cpu_tsc_per_tick]
+    xor rdx, rdx
+    mov rcx, 10000
+    div rcx
+    mov [r14 + 28], eax
+    call wq_core_init_aperf
 .wait_ready:
     ; Do not touch the queue until the BSP has run workqueue_init.
     mov rax, workqueue_ready
@@ -345,6 +457,16 @@ smp_worker_loop:
     add r13, rax                    ; r13 = &slot[r12]
     cmp dword [r13 + WQ_OFF_STATUS], WQ_PENDING
     jne .find_next
+    ; Stage 2a: respect target_core. WQ_TARGET_ANY (-1) matches any core;
+    ; otherwise the slot is only eligible for the core whose index in
+    ; [r14 + 4] matches WQ_OFF_TARGET. This is what lets the BSP pin an
+    ; app's work to the app's home_core.
+    mov edx, [r13 + WQ_OFF_TARGET]
+    cmp edx, WQ_TARGET_ANY
+    je .target_ok
+    cmp edx, [r14 + 4]
+    jne .find_next
+.target_ok:
     mov edx, [r13 + WQ_OFF_PRIO]
     cmp edx, r15d
     jle .find_next                  ; not strictly higher - keep current best
@@ -368,10 +490,65 @@ smp_worker_loop:
     jne .scan                       ; another core won it - re-sweep
     ; --- this core owns slot r12 ---
     mov dword [r14 + 0], 2              ; SMP state: RUNNING/busy
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov rcx, rax
+    sub rax, [r14 + 48]
+    add [r14 + 40], rax
+    mov [r14 + 48], rcx
     mov rax, [r13 + WQ_OFF_FUNC]
     mov rdi, [r13 + WQ_OFF_ARG]
     call rax                        ; run the job; result in RAX
     mov r15, rax                    ; preserve result across the recompute
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    sub rax, [r14 + 48]
+    add [r14 + 32], rax
+    mov [r14 + 48], rbx
+    ; Stage 2a: bill these cycles to the owning process, if any. We re-load
+    ; the slot's WQ_OFF_PROC here rather than caching it because R13 is still
+    ; valid and a re-read is cheap. A proc_id of 0 (kernel-internal job) or
+    ; out-of-range is silently skipped.
+    mov edx, [r13 + WQ_OFF_PROC]
+    test edx, edx
+    jz .no_billing
+    cmp edx, MAX_PROCESSES
+    jae .no_billing
+    mov rcx, rdx
+    imul rcx, WQ_PCB_STRIDE
+    add rcx, PROCESS_POOL
+    lock add [rcx + WQ_PCB_TIME_OFF], rax
+.no_billing:
+    mov rax, [tick_count]
+    sub rax, [r14 + 56]
+    cmp rax, 50
+    jb .publish_result
+    mov r8, rax                     ; elapsed PIT ticks
+    mov rax, [r14 + 32]
+    mov rcx, [r14 + 40]
+    add rcx, rax
+    test rcx, rcx
+    jz .publish_clock
+    mov r9, 100
+    xor rdx, rdx
+    mul r9
+    div rcx
+    cmp rax, 100
+    jbe .store_util
+    mov rax, 100
+.store_util:
+    mov [r14 + 24], eax
+.publish_clock:
+    call wq_core_publish_mhz
+.reset_acct:
+    mov qword [r14 + 32], 0
+    mov qword [r14 + 40], 0
+    mov rax, [tick_count]
+    mov [r14 + 56], rax
+.publish_result:
     mov eax, r12d
     imul eax, WQ_JOB_SIZE
     mov r13, workqueue_jobs
@@ -383,8 +560,132 @@ smp_worker_loop:
     mov dword [r14 + 0], 3              ; SMP state: PARKED/available
     jmp .scan
 .idle:
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    sub rax, [r14 + 48]
+    add [r14 + 40], rax
+    mov [r14 + 48], rbx
+    mov rax, [tick_count]
+    sub rax, [r14 + 56]
+    cmp rax, 50
+    jb .idle_pause
+    mov r8, rax
+    mov rax, [r14 + 32]
+    mov rcx, [r14 + 40]
+    add rcx, rax
+    test rcx, rcx
+    jz .idle_clock
+    mov r9, 100
+    xor rdx, rdx
+    mul r9
+    div rcx
+    cmp rax, 100
+    jbe .idle_store_util
+    mov rax, 100
+.idle_store_util:
+    mov [r14 + 24], eax
+.idle_clock:
+    call wq_core_publish_mhz
+.idle_reset:
+    mov qword [r14 + 32], 0
+    mov qword [r14 + 40], 0
+    mov rax, [tick_count]
+    mov [r14 + 56], rax
+.idle_pause:
     pause                           ; idle hint - nothing claimable this sweep
     jmp .scan
+
+wq_core_init_aperf:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    xor eax, eax
+    cpuid
+    cmp eax, 6
+    jb .done
+    mov eax, 6
+    cpuid
+    test ecx, 1
+    jz .done
+    mov ecx, 0xE8                  ; IA32_APERF
+    rdmsr
+    shl rdx, 32
+    or rax, rdx
+    mov [r14 + 64], rax
+    mov ecx, 0xE7                  ; IA32_MPERF
+    rdmsr
+    shl rdx, 32
+    or rax, rdx
+    mov [r14 + 72], rax
+.done:
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; R8 = elapsed PIT ticks for the accounting window.
+wq_core_publish_mhz:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push r9
+    xor eax, eax
+    cpuid
+    cmp eax, 6
+    jb .tsc_fallback
+    mov eax, 6
+    cpuid
+    test ecx, 1
+    jz .tsc_fallback
+    mov ecx, 0xE8                  ; IA32_APERF
+    rdmsr
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    sub rax, [r14 + 64]            ; aperf delta
+    mov [r14 + 64], rbx
+    mov r9, rax
+    mov ecx, 0xE7                  ; IA32_MPERF
+    rdmsr
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    sub rax, [r14 + 72]            ; mperf delta
+    mov [r14 + 72], rbx
+    mov rcx, rax
+    test rcx, rcx
+    jz .tsc_fallback
+    mov rax, [cpu_tsc_per_tick]
+    xor rdx, rdx
+    mov rbx, 10000
+    div rbx                        ; base TSC MHz
+    mul r9                         ; base MHz * aperf delta
+    xor rdx, rdx
+    div rcx                        ; scale by aperf/mperf
+    mov [r14 + 28], eax
+    jmp .done
+.tsc_fallback:
+    mov rax, [r14 + 32]
+    add rax, [r14 + 40]
+    mov r9, r8
+    imul r9, 10000
+    test r9, r9
+    jz .done
+    xor rdx, rdx
+    div r9
+    mov [r14 + 28], eax
+.done:
+    pop r9
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
 
 ; ----------------------------------------------------------------------------
 ; wq_test_job(RDI = x) -> RAX = x*x + 1. A pure, ABI-clean job used only by the

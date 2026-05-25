@@ -133,6 +133,7 @@ boot_anim_wait_ticks:
 ; Blit a single BGRA frame centered in the back buffer.
 ; rsi = frame data ptr, edi = width, edx = height
 boot_anim_blit:
+    push rbp
     push rbx
     push rcx
     push rdx
@@ -142,55 +143,80 @@ boot_anim_blit:
     push r9
     push r10
     push r11
+    push r12
+    push r13
+    push r14
+    push r15
 
     mov r10d, edi              ; frame width
     mov r11d, edx              ; frame height
+    mov r12d, [rel boot_anim_scale]
+    test r12d, r12d
+    jnz .scale_ok
+    mov r12d, 1
+.scale_ok:
 
-    ; dest_x = (scr_width  - w) / 2
+    ; dest_x = (scr_width - w*scale) / 2
     mov eax, [scr_width]
-    sub eax, r10d
+    mov ecx, r10d
+    imul ecx, r12d
+    sub eax, ecx
     shr eax, 1
     mov r8d, eax               ; dest_x
 
-    ; dest_y = (scr_height - h) / 2
+    ; dest_y = (scr_height - h*scale) / 2
     mov eax, [scr_height]
-    sub eax, r11d
+    mov ecx, r11d
+    imul ecx, r12d
+    sub eax, ecx
     shr eax, 1
     mov r9d, eax               ; dest_y
 
     mov rbx, [bb_addr]
     test rbx, rbx
     jz .out
-    mov rcx, [scr_pitch_q]
+    mov rbp, [scr_pitch_q]
 
     ; Base dest pointer = bb_addr + dest_y * pitch + dest_x*4
     mov rax, r9
-    imul rax, rcx
+    imul rax, rbp
     add rbx, rax
     mov eax, r8d
     shl eax, 2
     add rbx, rax
 
-    mov edx, r11d              ; row counter
+    mov r13d, r11d             ; source row counter
 .row_loop:
-    test edx, edx
+    test r13d, r13d
     jz .out
-    ; Copy one row: r10 pixels = r10*4 bytes from rsi to rbx
+    mov r14d, r12d             ; vertical scale counter
+.vscale_loop:
     mov rdi, rbx
     push rsi
-    push rcx
     mov ecx, r10d              ; pixel count
-    rep movsd                   ; copies ecx dwords from [rsi] to [rdi]
-    pop rcx
+.pixel_loop:
+    lodsd
+    mov r15d, r12d             ; horizontal scale counter
+.hscale_loop:
+    stosd
+    dec r15d
+    jnz .hscale_loop
+    loop .pixel_loop
     pop rsi
-    add rsi, r10                ; advance src by w*4
-    add rsi, r10
-    add rsi, r10
-    add rsi, r10
-    add rbx, rcx                ; next dest row
-    dec edx
+    add rbx, rbp               ; next dest row
+    dec r14d
+    jnz .vscale_loop
+
+    mov eax, r10d              ; advance source by w*4
+    shl eax, 2
+    add rsi, rax
+    dec r13d
     jmp .row_loop
 .out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
     pop r11
     pop r10
     pop r9
@@ -200,6 +226,7 @@ boot_anim_blit:
     pop rdx
     pop rcx
     pop rbx
+    pop rbp
     ret
 
 ; --- boot_anim_clear_bb ---
@@ -287,17 +314,47 @@ boot_anim_play:
     mov ecx,  [rbx + 12]       ; frame_count
     mov edx,  [rbx + 16]       ; fps
 
-    ; Sanity: width <= scr_width, height <= scr_height, frame_count > 0
+    ; Sanity: non-zero dimensions and frame_count/fps > 0
+    test r14d, r14d
+    jz .ret
+    test r15d, r15d
+    jz .ret
     test ecx, ecx
     jz .ret
     test edx, edx
     jz .ret
+
+    ; Integer scale = min(scr_width/(w*2), scr_height/(h*2)), clamped to 1..4.
+    ; This keeps the 16:9 animation readable on native panels without clipping.
     mov eax, [scr_width]
-    cmp r14d, eax
-    ja .ret
+    xor edx, edx
+    mov edi, r14d
+    shl edi, 1
+    div edi
+    test eax, eax
+    jnz .scale_w_ok
+    mov eax, 1
+.scale_w_ok:
+    mov edi, eax
+
     mov eax, [scr_height]
-    cmp r15d, eax
-    ja .ret
+    xor edx, edx
+    mov esi, r15d
+    shl esi, 1
+    div esi
+    test eax, eax
+    jnz .scale_h_ok
+    mov eax, 1
+.scale_h_ok:
+    cmp edi, eax
+    jbe .scale_min_ok
+    mov edi, eax
+.scale_min_ok:
+    cmp edi, 4
+    jbe .scale_cap_ok
+    mov edi, 4
+.scale_cap_ok:
+    mov [rel boot_anim_scale], edi
 
     ; ticks_per_frame = max(1, 100 / fps)
     mov eax, 100
@@ -375,3 +432,4 @@ alignb 8
 boot_anim_tpf       resd 1
 boot_anim_frames    resd 1
 boot_anim_stride    resd 1
+boot_anim_scale     resd 1

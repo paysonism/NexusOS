@@ -17,12 +17,41 @@ need to change code without losing track of responsibility boundaries.
    supporting HID layers.
 5. `src/kernel/fs`
    FAT16 cache, directory enumeration, reads, writes, and directory switching.
+   Block I/O goes through `drivers/ata.asm`, which transparently redirects
+   any LBA inside the registered ramdisk window (see [ramdisk.md](ramdisk.md))
+   to RAM. On real hardware the volume lives entirely in `\EFI\BOOT\DATA.IMG`
+   loaded by the UEFI loader; on QEMU UEFI the same path is used, and on
+   QEMU BIOS the legacy IDE drive is read directly.
 6. `src/kernel/gui`
    Desktop, taskbar, renderer, cursor, and the kernel-resident window manager.
 7. `src/kernel/proc`
    Ring-3 callback trampoline, syscall boundary, and process/runtime state.
 8. `src/user`
    Built-in user-facing apps and usermode helpers.
+
+## Network stack
+
+Networking is split so new cards do not need protocol code:
+
+- `src/include/net_driver.inc` documents the NIC driver ABI and ops table.
+- `src/kernel/drivers/*` owns hardware probing, MAC discovery, frame TX, and
+  non-blocking RX pumping only.
+- `src/kernel/net/nic.asm` owns driver registration, active NIC selection, and
+  generic `net_nic_*` calls used by every protocol.
+- `src/kernel/net/ip.asm`, `udp.asm`, `tcp.asm`, `dns.asm`, `arp.asm`,
+  `dhcp.asm`, and `icmp.asm` own packet formats and transport/application
+  protocols.
+
+DNS resolution is exposed through `SYS_NET_DNS_A` and the NexusHL
+`net_dns_a()` wrapper. DHCP records option 6 as the resolver address; the
+resolver falls back to the DHCP server identifier only when option 6 is absent.
+DNS itself does not call NIC drivers directly: it builds DNS messages, sends
+them through `net_udp_send_ipv4`, and consumes UDP receive payloads via
+`net_dns_rx_udp`.
+
+Current RTL drivers still contain legacy ARP/DHCP/ICMP bodies while those paths
+are being lifted out. New code should call `net_nic_tx_frame`,
+`net_nic_poll_rx`, and `net_nic_mac`; it should not call RTL symbols directly.
 
 ## Ring boundaries
 

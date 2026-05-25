@@ -7,6 +7,8 @@ bits 64
 %include "constants.inc"
 
 extern tick_count
+extern usb_hid_protocol
+extern usb_hid_protocol2
 KB_REPEAT_DELAY     equ 40      ; ticks before first repeat (~400ms at 100Hz)
 KB_REPEAT_RATE      equ 5       ; ticks between repeats (~50ms)
 
@@ -41,8 +43,17 @@ keyboard_handler:
     push rcx
     push rdx
 
-    ; Read scancode from data port
+    ; Always drain the i8042 output buffer to keep IRQ1 deasserting, but if a
+    ; USB HID keyboard is active the BIOS legacy USB->PS/2 SMM emulation
+    ; mirrors USB keystrokes here with the wrong keymap (Del->'.', extended
+    ; prefixes stripped, no release for held keys). Discard those bytes so
+    ; only the USB HID path produces events.
     in al, 0x60
+    cmp byte [usb_hid_protocol], 1
+    je .done
+    cmp byte [usb_hid_protocol2], 1
+    je .done
+    ; (al already loaded)
     movzx eax, al
     push rax
     mov dx, 0x3F8

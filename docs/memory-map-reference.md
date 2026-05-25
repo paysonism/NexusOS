@@ -39,9 +39,9 @@ Primary source: `C:\Users\user\Documents\new\src\include\constants.inc`
 | `0x4200000` | Frosted-bloom wallpaper cache | `src/kernel/gui/window.asm` |
 | `0x4C00000` | Saved backbuffer / drag/restore region | `src/kernel/gui/render.asm` |
 
-In the `Cache32Max` profile, the GUI composition region is treated as the
-L3/LLC arena from `0x1000000` to `0x1700000`. XHCI and FAT16 cold buffers are
-moved outside this range.
+The GUI composition region starts at `0x1000000`; the boot backbuffer occupies
+`0x1000000..0x1900000`. XHCI, FAT16, and network-driver DMA buffers live above
+that range so device DMA cannot overwrite rendered pixels or mouse reports.
 
 ## Ring-3 App Arenas and Runtime
 
@@ -66,27 +66,38 @@ These addresses are reserved by the USB stack and should not be repurposed
 without auditing `src/kernel/drivers/xhci.asm`, `src/kernel/drivers/usb_hid.asm`,
 and `src/kernel/drivers/hid_parser.asm`.
 
-Under `NEXUS_CACHE32_MAX`, this region moves to `0x1900000..0x19F0000` so it
-does not overlap the GUI LLC arena.
+| Address | Meaning |
+|---|---|
+| `0x1900000` | XHCI DCBAA |
+| `0x1910000` | XHCI command ring |
+| `0x1920000` | XHCI ERST |
+| `0x1930000` | XHCI event ring |
+| `0x1940000` | XHCI scratchpad region |
+| `0x1950000` | XHCI device context slot 1 |
+| `0x1960000` | XHCI input context |
+| `0x1970000` | XHCI control ring |
+| `0x1980000` | XHCI interrupt ring |
+| `0x1990000` | XHCI control-buffer region |
+| `0x19A0000` | XHCI mouse buffer slot 1 |
+| `0x19B0000` | XHCI device context slot 2 |
+| `0x19C0000` | XHCI interrupt ring slot 2 |
+| `0x19D0000` | XHCI mouse buffer slot 2 |
+| `0x19E0000` | XHCI control ring slot 2 |
+| `0x19F0000` | End of XHCI reserved region |
+
+## Network Driver DMA Regions
 
 | Address | Meaning |
 |---|---|
-| `0x900000` | XHCI DCBAA |
-| `0x910000` | XHCI command ring |
-| `0x920000` | XHCI ERST |
-| `0x930000` | XHCI event ring |
-| `0x940000` | XHCI scratchpad region |
-| `0x950000` | XHCI device context slot 1 |
-| `0x960000` | XHCI input context |
-| `0x970000` | XHCI control ring |
-| `0x980000` | XHCI interrupt ring |
-| `0x990000` | XHCI control-buffer region |
-| `0x9A0000` | XHCI mouse buffer slot 1 |
-| `0x9B0000` | XHCI device context slot 2 |
-| `0x9C0000` | XHCI interrupt ring slot 2 |
-| `0x9D0000` | XHCI mouse buffer slot 2 |
-| `0x9E0000` | XHCI control ring slot 2 |
-| `0x9F0000` | End of XHCI reserved region |
+| `0x1B00000` | RTL8139 RX buffer |
+| `0x1B04000` | RTL8139 TX buffer |
+| `0x1B10000` | RTL8156 bulk-IN ring |
+| `0x1B20000` | RTL8156 bulk-OUT ring |
+| `0x1B30000` | RTL8156 RX buffer |
+| `0x1B40000` | RTL8156 TX buffer |
+| `0x1B50000` | RTL8156 scratch buffer |
+| `0x1B60000` | RTL8156 xHCI device context |
+| `0x1B70000` | RTL8156 xHCI control ring |
 
 ## FAT16 Driver Scratch Regions
 

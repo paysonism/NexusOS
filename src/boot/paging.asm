@@ -11,9 +11,8 @@ PAGE_PRESENT    equ 0x01
 PAGE_WRITABLE   equ 0x02
 PAGE_USER       equ 0x04     ; User-accessible (ring 3)
 PAGE_LARGE      equ 0x80     ; 2MB page (PS bit in PD entry)
-MAX_WINDOWS     equ 8
 APP_USER_PDE0   equ (APP_DATA_ADDR / 0x200000)
-APP_USER_PDE_COUNT equ ((MAX_WINDOWS * APP_SLOT_SIZE + 0x1FFFFF) / 0x200000)
+APP_USER_PDE_COUNT equ ((APP_SLOT_COUNT * APP_SLOT_SIZE + 0x1FFFFF) / 0x200000)
 
 setup_paging:
     ; Clear page table area (24KB: 0x70000 - 0x75FFF)

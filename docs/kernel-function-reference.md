@@ -248,6 +248,8 @@ State globals:
 
 `display_set_mode`
 - Changes display mode/resolution state.
+- On AMD display hardware, routes through the AMD display provider and only
+  accepts the native firmware/GOP mode in this phase.
 
 State globals:
 - `fb_addr`
@@ -258,6 +260,16 @@ State globals:
 - `last_vsync_tick`
 - `vsync_enabled`
 - `fps_show`
+
+### `src/kernel/drivers/amd_display.asm`
+
+`amd_display_init`
+- Claims AMD Radeon 780M / AMD display PCI hardware and latches the boot
+  framebuffer as the active native mode.
+
+`amd_display_set_mode`
+- AMD display mode-setting entrypoint. Accepts the native 32bpp firmware/GOP
+  mode and rejects unsafe non-native switches.
 
 ### `src/kernel/drivers/keyboard.asm`
 

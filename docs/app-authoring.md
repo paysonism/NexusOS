@@ -59,6 +59,15 @@ Handlers run in ring 3 through the trampoline in
   `RDI` points to the shadow window struct in the app slot arena.
 - Click handler:
   `RDI` is the shadow window pointer, `RSI` is mouse X, `RDX` is mouse Y.
+- Right-click handler:
+  `RDI` is the shadow window pointer, `RSI` is mouse X, `RDX` is mouse Y.
+  The WM dispatches it once on right-button-down in the client area. Apps use
+  it for context menus or any other secondary action; there is no global
+  fallback menu.
+- Drag handler:
+  `RDI` is the shadow window pointer, `RSI` is mouse X, `RDX` is mouse Y.
+  The WM dispatches it while the left button is held after an initial client
+  press, only when the cursor position changes.
 - Key handler:
   `RDI` is the shadow window pointer, `RSI` is the key value.
 
@@ -116,6 +125,45 @@ Display settings are exposed through syscalls, not kernel externs:
 | Reinitialize cursor after a mode switch | `SYS_CURSOR_INIT` |
 | Read desktop background theme | `SYS_DESKTOP_BG` |
 | Set desktop background theme | `SYS_DESKTOP_SET_BG theme_id` |
+
+## Launching apps with parameters
+
+Any app can spawn another app — and pass it a string — through `SYS_APP_OPEN`
+(syscall 23). The command line is parsed as `"<app> <params>"`:
+
+- `<app>` is matched (case-insensitive) against the name table in
+  `app_command_name_to_id` (`launch.inc`). Current names: `explorer`,
+  `terminal`, `notepad`, `settings`, `paint`, `about`, `security` /
+  `securityprobe`, `ping`.
+- Everything after the first whitespace/comma is copied verbatim (up to
+  `APP_SLOT_PARAM_SZ - 1` = 255 bytes) into the new window's L3 slot at
+  `slot_base + APP_SLOT_PARAM_OFF` (`0x17C000`).
+
+Notepad gets special treatment: if a param is present it is treated as a FAT16
+path and the file is loaded. Every other app receives the raw string.
+
+The terminal accepts an optional `open ` prefix, so `open ping 8.8.8.8` and
+`ping 8.8.8.8` are equivalent at the shell.
+
+### Reading params from a NexusHL app
+
+The launched window's `WIN_APPDATA` pointer gives you the slot base; params
+live 0x17C000 bytes in. Seed your input field once, on first init only, so
+later user edits aren't clobbered. Example from `ping.nxh`:
+
+```
+fn seed_ip_from_launch_params(win) {
+    let app_base = lq(win + WIN_APPDATA);
+    if app_base == 0 { return 0; }
+    let p = app_base + 0x17C000;       # APP_SLOT_PARAM_OFF
+    if lb(p) == 0 { return 0; }
+    # ...validate + copy into ip_buf...
+}
+```
+
+Gate the seed behind an `ip_init` flag (or equivalent) in your `state {}`
+block — `draw()` and `key()` fire many times per second; you only want to
+consume the param once.
 
 ## Recommended workflow
 
