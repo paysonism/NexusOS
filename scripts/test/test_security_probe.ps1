@@ -7,7 +7,17 @@ $SerialHost = '127.0.0.1'
 $SerialPort = 5555
 
 function Stop-QemuIfRunning {
-    Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force
+    try {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        $client.Connect('127.0.0.1', 4444)
+        $stream = $client.GetStream()
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes("quit`r`n")
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush()
+        $client.Close()
+        Start-Sleep -Milliseconds 500
+    } catch {}
+    Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
 function Assert-Text {
@@ -86,17 +96,17 @@ try {
     Write-Host '[security] Compiled app present in APPS.BIN PASS' -ForegroundColor Green
 
     Assert-Text 'F1 app blob copy cap is guarded' 'src\kernel\proc\usermode.asm' 'L3_APP_BLOB_COPY_CAP\s+equ\s+L3_SHADOW_WIN_OFF[\s\S]*?%error[\s\S]*?cmp\s+rcx,\s*L3_APP_BLOB_COPY_CAP[\s\S]*?rep\s+movsb'
-    Assert-Text 'F2 FAT16 read uses scratch copy' 'src\kernel\fs\fat16.asm' 'fat16_read_file:[\s\S]*?mov\s+rsi,\s*FAT16_FILE_BUF[\s\S]*?rep\s+movsb'
+    Assert-Text 'F2 FAT16 read uses scratch copy' 'src\kernel\fs\fat16.asm' '(fat16_read_file:|FN_BEGIN\s+fat16_read_file)[\s\S]*?mov\s+rsi,\s*FAT16_FILE_BUF[\s\S]*?rep\s+movsb'
     Assert-Text 'F3 FAT16 write pads final partial cluster' 'src\kernel\fs\fat16.asm' 'wf_write_partial_cluster:[\s\S]*?mov\s+rdi,\s*FAT16_FILE_BUF[\s\S]*?rep\s+stosb[\s\S]*?rep\s+movsb[\s\S]*?call\s+ata_write_sectors'
     Assert-Text 'F4 HID parser guards multi-byte item reads' 'src\kernel\drivers\hid_parser.asm' 'lea\s+rax,\s*\[rsi \+ 4\][\s\S]*?cmp\s+rax,\s*rbp[\s\S]*?movzx\s+eax,\s*byte\s+\[rsi \+ 3\][\s\S]*?lea\s+rax,\s*\[rsi \+ 2\][\s\S]*?\.skip_long_item:'
-    Assert-Text 'F5 HID extraction enforces report length' 'src\kernel\drivers\hid_parser.asm' 'hid_extract_field_checked:[\s\S]*?cmp\s+r8d,\s*1[\s\S]*?cmp\s+r8d,\s*32[\s\S]*?cmp\s+edx,\s*eax[\s\S]*?hid_process_touchpad_report:[\s\S]*?mov\s+r13d,\s*ecx[\s\S]*?call\s+hid_extract_field_checked'
+    Assert-Text 'F5 HID extraction enforces report length' 'src\kernel\drivers\hid_parser.asm' '(hid_extract_field_checked:|FN_BEGIN\s+hid_extract_field_checked)[\s\S]*?cmp\s+r8d,\s*1[\s\S]*?cmp\s+r8d,\s*32[\s\S]*?cmp\s+edx,\s*eax[\s\S]*?(hid_process_touchpad_report:|FN_BEGIN\s+hid_process_touchpad_report)[\s\S]*?mov\s+r13d,\s*ecx[\s\S]*?call\s+hid_extract_field_checked'
     Assert-Text 'F6 USB descriptor parser validates lengths' 'src\kernel\drivers\usb_hid.asm' 'usb_find_endpoint:[\s\S]*?cmp\s+byte\s+\[rsi\],\s*4[\s\S]*?cmp\s+eax,\s*2[\s\S]*?cmp\s+r8d,\s*ecx[\s\S]*?\.check_interface:[\s\S]*?cmp\s+byte\s+\[rsi \+ rdx\],\s*8[\s\S]*?\.check_endpoint:[\s\S]*?cmp\s+byte\s+\[rsi \+ rdx\],\s*7'
     Assert-Text 'F7 syscall close checks slot ownership' 'src\kernel\proc\syscall.asm' '\.sc_wm_close:[\s\S]*?cmp\s+rdi,\s*MAX_WINDOWS[\s\S]*?WIN_OFF_APPDATA[\s\S]*?jne\s+\.sc_wm_close_reject'
 
     Write-Host '[security] Booting UEFI and launching app ID 8...' -ForegroundColor Yellow
     $job = Start-Job -ScriptBlock {
         param($RootPath)
-        powershell -ExecutionPolicy Bypass -File (Join-Path $RootPath 'scripts\run\run_uefi.ps1') -Headless
+        powershell -ExecutionPolicy Bypass -File (Join-Path $RootPath 'scripts\run\run_uefi.ps1') -Headless -NoPassthrough -SerialTcp
     } -ArgumentList $Root
 
     try {

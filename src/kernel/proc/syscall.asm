@@ -20,6 +20,7 @@ WIN_OFF_KEYFN       equ 120
 WIN_OFF_CLICKFN     equ 128
 WIN_OFF_APPDATA     equ 136
 WIN_OFF_DRAGFN      equ 144
+WIN_OFF_RCLICKFN    equ 152
 DIR_ENTRY_SIZE      equ 32
 %ifdef NEXUS_CACHE32_MAX
 FAT16_ROOT_CACHE    equ 0x1A11000
@@ -27,11 +28,11 @@ FAT16_ROOT_CACHE    equ 0x1A11000
 FAT16_ROOT_CACHE    equ 0xD11000
 %endif
 FAT16_ROOT_CACHE_SZ equ 16384
-L3_DIR_ENTRY_CACHE_OFF equ 0xFA000
+L3_DIR_ENTRY_CACHE_OFF equ 0x1D1000
 L3_DIR_ENTRY_CACHE_SZ  equ FAT16_ROOT_CACHE_SZ
 SYSCALL_MAX_STR_LEN equ 256
 APP_MIN_ID          equ 2
-APP_MAX_ID          equ 8
+APP_MAX_ID          equ 11
 APP_OPEN_CMD_MAX    equ 256
 SYSCALL_ENTRY_SIZE  equ 16
 SYSCALL_HANDLER_OFF equ 0
@@ -42,6 +43,7 @@ SYSCALL_KIND_OFF    equ 9
 ; Variables moved to the end of file to avoid segment clobbering in monolithic build.
 
 extern debug_print
+extern scene_dirty
 extern fat16_file_count
 extern fat16_get_entry
 extern fat16_change_dir
@@ -56,6 +58,7 @@ extern wm_create_window_ex
 extern wm_close_window
 extern app_launch
 extern kernel_open_file_in_notepad
+extern kernel_open_file_in_media
 extern kernel_open_app_command
 extern display_set_mode
 extern cursor_init
@@ -64,9 +67,18 @@ extern fps_show
 extern display_stretch
 extern fb_native_width
 extern fb_native_height
+extern amd_display_active
+extern amd_display_status
+extern amd_display_bdf
+extern amd_display_id
+extern amd_display_class
+extern amd_display_bar0
+extern amd_display_cmd
 extern desktop_bg_theme
 extern wallpaper_selected
 extern wallpaper_cache_valid
+extern wallpaper_cache_presented
+extern wallpaper_render_active
 extern render_rect
 extern render_text
 extern scr_width
@@ -84,9 +96,12 @@ extern trace_syscall
 extern last_fps
 extern free_page_count
 extern boot_free_pages
+extern total_usable_pages
 extern cpu_tsc_per_tick
 extern cpuid_logical_count
 extern bsp_util
+extern smp_core_states
+extern madt_enabled_cpu_count
 extern xml_parse
 extern xml_root
 extern xml_tag
@@ -109,6 +124,18 @@ extern fill_circle
 extern fill_triangle
 extern blend_pixel
 extern blend_span
+extern blend_span_argb
+extern blend_span_argb_screen
+extern blend_span_argb_multiply
+extern raster_select_syscall_target
+extern raster_select_default_target
+extern raster_sc_release_target
+extern net_ping_ipv4
+extern net_info
+extern net_dhcp_configure
+extern net_dhcp_start
+extern net_tcp_connect_ipv4
+extern rtl8156_dhcp_state
 
 L3_RT_ENTRY          equ 0
 L3_RT_ARG0           equ 8
@@ -119,44 +146,62 @@ L3_RT_KERNEL_RSP     equ 32
 section .text
 
 FN_BEGIN syscall_init, 0, 0, FN_RET_VOID
+    ; BSP path: do the per-CPU MSR setup, then print the LSTAR target so the
+    ; serial log records where syscall_entry actually lives.
+    call syscall_init_this_cpu
+    push rdi
+    push rax
+    lea rax, [rel syscall_entry]
+    SER 'L'
+    mov rdi, rax
+    call ser_print_hex64
+    SER 13
+    SER 10
+    pop rax
+    pop rdi
+    FN_END syscall_init
+    ret
+
+; ----------------------------------------------------------------------------
+; syscall_init_this_cpu - program the SYSCALL/SYSRET MSRs on the calling CPU.
+; EFER, STAR, LSTAR, and FMASK are all per-CPU MSRs, so every core that will
+; ever take a SYSCALL must run this once. The BSP calls it via syscall_init;
+; each AP calls it from ap_long_mode_init (apic.asm) so an app callback
+; dispatched to an AP in Stage 2c lands in syscall_entry just like on the BSP.
+;
+; Preserves every caller-visible register (rax/rcx/rdx clobbered internally
+; for wrmsr; we save and restore them).
+; ----------------------------------------------------------------------------
+FN_BEGIN syscall_init_this_cpu, 0, 0, FN_RET_VOID
     push rax
     push rcx
     push rdx
 
     mov ecx, IA32_EFER
     rdmsr
-    or eax, 1
+    or eax, 1                      ; SCE: enable SYSCALL/SYSRET
     wrmsr
 
     mov ecx, IA32_STAR
     xor eax, eax
-    mov edx, 0x001B0008
+    mov edx, 0x001B0008            ; kernel CS=0x08, user CS base=0x1B
     wrmsr
 
     mov ecx, IA32_LSTAR
     lea rax, [rel syscall_entry]
-    push rax
-    push rdi
-    SER 'L'
-    mov rdi, rax
-    call ser_print_hex64
-    SER 13
-    SER 10
-    pop rdi
-    pop rax
     mov rdx, rax
     shr rdx, 32
     wrmsr
 
     mov ecx, IA32_FMASK
-    mov eax, 0x00057700
+    mov eax, 0x00057700            ; mask IF, DF, AC etc on entry
     xor edx, edx
     wrmsr
 
     pop rdx
     pop rcx
     pop rax
-    FN_END syscall_init
+    FN_END syscall_init_this_cpu
     ret
 
 ; auto-wrapped (FN_BEGIN emits global): global syscall_entry
@@ -173,7 +218,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jc .slot_from_global
     cmp rdx, [rel l3_app_arena_size_v]
     jae .slot_from_global
-    shr rdx, 20
+    shr rdx, 21
     mov ebx, edx
     jmp .slot_ok_entry
 .slot_from_global:
@@ -215,7 +260,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jc .slot_zero_stack
     cmp rax, [rel l3_app_arena_size_v]
     jae .slot_zero_stack
-    shr rax, 20
+    shr rax, 21
     jmp .slot_ok_stack
 .slot_zero_stack:
     xor eax, eax
@@ -489,13 +534,19 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jc .sc_wm_create_reject
     cmp eax, SCREEN_HEIGHT
     ja .sc_wm_create_reject
-    mov rdi, [rsp + ALL_RDI]
-    mov rsi, [rsp + ALL_RSI]
-    mov rdx, [rsp + ALL_RDX]
-    mov r10, [rsp + ALL_R10]
-    mov r8,  [rsp + ALL_R8]
-    mov r9,  [rsp + ALL_R9]
-    mov rcx, r10
+    ; Remap user args (x, y, w, h, title, drawfn) to wm_create_window_ex's
+    ; signature (rdi=title, rsi=x, rdx=y, rcx=w, r8=h, r9=drawfn). The
+    ; validation above reads ALL_RDX as width / ALL_R10 as height, so the
+    ; user-facing order must keep dimensions in slots 2-3; title sits at
+    ; slot 4 (FN_KIND_CSTRING in the syscall table). Before this remap, w
+    ; was being passed as title and h as width — every call failed the
+    ; min-width check inside wm_create_window_ex.
+    mov rdi, [rsp + ALL_R8]      ; title
+    mov rsi, [rsp + ALL_RDI]     ; x
+    mov rdx, [rsp + ALL_RSI]     ; y
+    mov rcx, [rsp + ALL_RDX]     ; w
+    mov r8,  [rsp + ALL_R10]     ; h
+    mov r9,  [rsp + ALL_R9]      ; drawfn
     call wm_create_window_ex
     mov [rsp + ALL_RAX], rax
     jmp .done
@@ -542,6 +593,10 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     pop rdi
     test eax, eax
     jz .sc_wm_handlers_reject
+    ; sc_validate_callback_target uses RSI as the range length, so reload the
+    ; original handler pointers from the saved syscall frame before storing.
+    mov rsi, [rsp + ALL_RSI]
+    mov rdx, [rsp + ALL_RDX]
     mov rax, rdi
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
@@ -555,6 +610,29 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov [rsp + ALL_RAX], rax
     jmp .done
 .sc_wm_handlers_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_wm_set_user_arg:
+    ; rdi = win_id, rsi = 8-byte opaque value to stash at WIN_OFF_USER_ARG.
+    ; Bounds check win_id and require ACTIVE. Ownership is deliberately not
+    ; checked: the creator of a new window (different slot from the new
+    ; window's slot, since wm_create_window_ex allocates a fresh slot per
+    ; window) needs to be able to pass a small opaque arg into the new
+    ; window. The arg is just 8 bytes of scratch readable by the new
+    ; window's drawfn — no pointer authority is granted.
+    cmp rdi, MAX_WINDOWS
+    jae .sc_wm_set_user_arg_reject
+    mov rax, rdi
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    test qword [rax + WIN_OFF_FLAGS], WF_ACTIVE
+    jz .sc_wm_set_user_arg_reject
+    mov [rax + 160], rsi              ; WIN_OFF_USER_ARG
+    xor eax, eax
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_wm_set_user_arg_reject:
     mov qword [rsp + ALL_RAX], -1
     jmp .done
 
@@ -776,7 +854,16 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 
 .sc_sysinfo:
     ; rdi = selector, rsi = arg (e.g. core index). Returns a scalar in rax.
+    ; Selectors 100..199 are reserved for fbperf (framebuffer perf/debug).
     xor eax, eax
+    cmp rdi, 100
+    jb  .si_legacy
+    cmp rdi, 199
+    ja  .si_legacy
+    extern fbperf_get
+    call fbperf_get
+    jmp .si_store
+.si_legacy:
     cmp rdi, 0
     je .si_fps
     cmp rdi, 1
@@ -790,7 +877,23 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     cmp rdi, 5
     je .si_core_util
     cmp rdi, 6
-    je .si_cpu_mhz          ; per-core speed: uniform clock, reuse MHz path
+    je .si_core_mhz
+    cmp rdi, 16
+    je .si_gpu_provider
+    cmp rdi, 17
+    je .si_gpu_bdf
+    cmp rdi, 18
+    je .si_gpu_id
+    cmp rdi, 19
+    je .si_gpu_class
+    cmp rdi, 20
+    je .si_gpu_bar0_lo
+    cmp rdi, 21
+    je .si_gpu_bar0_hi
+    cmp rdi, 22
+    je .si_gpu_cmd
+    cmp rdi, 23
+    je .si_gpu_active
     jmp .si_store
 .si_fps:
     mov eax, [last_fps]
@@ -800,7 +903,14 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     shl rax, 2              ; 4 KB pages -> KB
     jmp .si_store
 .si_ram_max:
+    ; total_usable_pages includes fixed kernel/GUI/app arenas reserved before
+    ; the allocator starts, so apps can report actual used RAM instead of 0
+    ; until the first dynamic page allocation.
+    mov rax, [total_usable_pages]
+    test rax, rax
+    jnz .si_ram_max_have
     mov rax, [boot_free_pages]
+.si_ram_max_have:
     shl rax, 2
     jmp .si_store
 .si_cpu_mhz:
@@ -811,14 +921,52 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     div rcx
     jmp .si_store
 .si_cores:
+    mov eax, [madt_enabled_cpu_count]
+    test eax, eax
+    jnz .si_store
     mov eax, [cpuid_logical_count]
     jmp .si_store
 .si_core_util:
-    ; Core 0 (BSP) runs the GUI; report its measured utilization. The work
-    ; queue APs are parked when idle, so they report 0.
-    test rsi, rsi
+    cmp rsi, SMP_MAX_CORES
+    jae .si_store
+    mov rax, rsi
+    imul rax, SMP_CORE_STATE_SIZE
+    mov eax, [smp_core_states + rax + 24]
+    jmp .si_store
+.si_core_mhz:
+    cmp rsi, SMP_MAX_CORES
+    jae .si_cpu_mhz
+    mov rax, rsi
+    imul rax, SMP_CORE_STATE_SIZE
+    mov eax, [smp_core_states + rax + 28]
+    test eax, eax
     jnz .si_store
-    mov eax, [bsp_util]
+    jmp .si_cpu_mhz
+.si_gpu_provider:
+    mov eax, [amd_display_status]
+    jmp .si_store
+.si_gpu_bdf:
+    mov eax, [amd_display_bdf]
+    jmp .si_store
+.si_gpu_id:
+    mov eax, [amd_display_id]
+    jmp .si_store
+.si_gpu_class:
+    mov eax, [amd_display_class]
+    jmp .si_store
+.si_gpu_bar0_lo:
+    mov eax, [amd_display_bar0]
+    jmp .si_store
+.si_gpu_bar0_hi:
+    mov rax, [amd_display_bar0]
+    shr rax, 32
+    jmp .si_store
+.si_gpu_cmd:
+    mov eax, [amd_display_cmd]
+    jmp .si_store
+.si_gpu_active:
+    movzx eax, byte [amd_display_active]
+    jmp .si_store
 .si_store:
     mov [rsp + ALL_RAX], rax
     jmp .done
@@ -829,6 +977,15 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jmp .done
 
 .sc_desktop_set_bg:
+    cmp byte [wallpaper_render_active], 0
+    jne .sc_desktop_set_bg_busy
+    cmp byte [wallpaper_selected], 0
+    je .sc_desktop_set_bg_accept
+    cmp byte [wallpaper_cache_valid], 1
+    jne .sc_desktop_set_bg_busy
+    cmp byte [wallpaper_cache_presented], 1
+    jne .sc_desktop_set_bg_busy
+.sc_desktop_set_bg_accept:
     mov rax, rdi
     shr rax, 32
     jnz .sc_desktop_set_bg_reject
@@ -840,11 +997,32 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     ; the next frame. This is the only path that triggers the SVG renderer.
     mov byte [wallpaper_selected], 1
     mov byte [wallpaper_cache_valid], 0
+    mov byte [wallpaper_cache_presented], 0
+    mov byte [scene_dirty], 1
     xor eax, eax
     mov [rsp + ALL_RAX], rax
     jmp .done
+.sc_desktop_set_bg_busy:
+    mov qword [rsp + ALL_RAX], -2
+    jmp .done
 .sc_desktop_set_bg_reject:
     mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_desktop_bg_busy:
+    xor eax, eax
+    cmp byte [wallpaper_render_active], 0
+    jne .sc_desktop_bg_busy_yes
+    cmp byte [wallpaper_selected], 0
+    je .sc_desktop_bg_busy_store
+    cmp byte [wallpaper_cache_valid], 1
+    jne .sc_desktop_bg_busy_yes
+    cmp byte [wallpaper_cache_presented], 1
+    je .sc_desktop_bg_busy_store
+.sc_desktop_bg_busy_yes:
+    mov eax, 1
+.sc_desktop_bg_busy_store:
+    mov [rsp + ALL_RAX], rax
     jmp .done
 
 .sc_fs_delete:
@@ -902,10 +1080,49 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jz .sc_open_file_np_reject
     mov rdi, [rsp + ALL_RDI]
     call sc_dir_entry_handle_to_kernel
+    ; Notepad is only for text-like files. If a stale UI path asks Notepad to
+    ; open known media, route to Media Player at the syscall boundary.
+    cmp byte [rdi + 8], 'B'
+    jne .sc_open_file_np_not_bmp
+    cmp byte [rdi + 9], 'M'
+    jne .sc_open_file_np_not_bmp
+    cmp byte [rdi + 10], 'P'
+    je .sc_open_file_np_media
+.sc_open_file_np_not_bmp:
+    cmp byte [rdi + 8], 'N'
+    jne .sc_open_file_np_text
+    cmp byte [rdi + 9], 'I'
+    jne .sc_open_file_np_check_nba
+    cmp byte [rdi + 10], 'C'
+    je .sc_open_file_np_media
+    jmp .sc_open_file_np_text
+.sc_open_file_np_check_nba:
+    cmp byte [rdi + 9], 'B'
+    jne .sc_open_file_np_text
+    cmp byte [rdi + 10], 'A'
+    je .sc_open_file_np_media
+.sc_open_file_np_text:
     call kernel_open_file_in_notepad
     mov [rsp + ALL_RAX], rax
     jmp .done
+.sc_open_file_np_media:
+    call kernel_open_file_in_media
+    mov [rsp + ALL_RAX], rax
+    jmp .done
 .sc_open_file_np_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_open_file_media:
+    call sc_validate_dir_entry_handle
+    test eax, eax
+    jz .sc_open_file_media_reject
+    mov rdi, [rsp + ALL_RDI]
+    call sc_dir_entry_handle_to_kernel
+    call kernel_open_file_in_media
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_open_file_media_reject:
     mov qword [rsp + ALL_RAX], -1
     jmp .done
 
@@ -1121,22 +1338,28 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 
 .sc_draw_line:
     ; rdi=x0, rsi=y0, rdx=x1, r10=y1, r8=color
+    mov edi, r15d
+    call raster_select_syscall_target
     mov edi, [rsp + ALL_RDI]
     mov esi, [rsp + ALL_RSI]
     mov edx, [rsp + ALL_RDX]
     mov ecx, [rsp + ALL_R10]
     mov r8d, [rsp + ALL_R8]
     call draw_line
+    call raster_sc_release_target
     mov qword [rsp + ALL_RAX], 0
     jmp .done
 
 .sc_fill_circle:
     ; rdi=cx, rsi=cy, rdx=r, r10=color
+    mov edi, r15d
+    call raster_select_syscall_target
     mov edi, [rsp + ALL_RDI]
     mov esi, [rsp + ALL_RSI]
     mov edx, [rsp + ALL_RDX]
     mov ecx, [rsp + ALL_R10]
     call fill_circle
+    call raster_sc_release_target
     mov qword [rsp + ALL_RAX], 0
     jmp .done
 
@@ -1147,9 +1370,12 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     call sc_validate_user_io_range
     test eax, eax
     jz .sc_fill_triangle_reject
+    mov edi, r15d
+    call raster_select_syscall_target
     mov rdi, [rsp + ALL_RDI]
     mov esi, [rsp + ALL_RSI]
     call fill_triangle
+    call raster_sc_release_target
     mov qword [rsp + ALL_RAX], 0
     jmp .done
 .sc_fill_triangle_reject:
@@ -1158,20 +1384,26 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 
 .sc_blend_pixel:
     ; rdi = x, rsi = y, rdx = color
+    mov edi, r15d
+    call raster_select_syscall_target
     mov edi, [rsp + ALL_RDI]
     mov esi, [rsp + ALL_RSI]
     mov edx, [rsp + ALL_RDX]
     call blend_pixel
+    call raster_sc_release_target
     mov qword [rsp + ALL_RAX], 0
     jmp .done
 
 .sc_blend_span:
     ; rdi = x, rsi = y, rdx = len, r10 = color
+    mov edi, r15d
+    call raster_select_syscall_target
     mov edi, [rsp + ALL_RDI]
     mov esi, [rsp + ALL_RSI]
     mov edx, [rsp + ALL_RDX]
     mov ecx, [rsp + ALL_R10]
     call blend_span
+    call raster_sc_release_target
     mov qword [rsp + ALL_RAX], 0
     jmp .done
 
@@ -1187,11 +1419,14 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     call sc_validate_user_range
     test eax, eax
     jz .sc_blend_span_argb_done
+    mov edi, r15d
+    call raster_select_syscall_target
     mov edi, [rsp + ALL_RDI]
     mov esi, [rsp + ALL_RSI]
     mov edx, [rsp + ALL_RDX]
     mov rcx, [rsp + ALL_R10]
     call blend_span_argb
+    call raster_sc_release_target
 .sc_blend_span_argb_done:
     mov qword [rsp + ALL_RAX], 0
     jmp .done
@@ -1208,11 +1443,14 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     call sc_validate_user_range
     test eax, eax
     jz .sc_blend_span_argb_screen_done
+    mov edi, r15d
+    call raster_select_syscall_target
     mov edi, [rsp + ALL_RDI]
     mov esi, [rsp + ALL_RSI]
     mov edx, [rsp + ALL_RDX]
     mov rcx, [rsp + ALL_R10]
     call blend_span_argb_screen
+    call raster_sc_release_target
 .sc_blend_span_argb_screen_done:
     mov qword [rsp + ALL_RAX], 0
     jmp .done
@@ -1229,13 +1467,272 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     call sc_validate_user_range
     test eax, eax
     jz .sc_blend_span_argb_multiply_done
+    mov edi, r15d
+    call raster_select_syscall_target
     mov edi, [rsp + ALL_RDI]
     mov esi, [rsp + ALL_RSI]
     mov edx, [rsp + ALL_RDX]
     mov rcx, [rsp + ALL_R10]
     call blend_span_argb_multiply
+    call raster_sc_release_target
 .sc_blend_span_argb_multiply_done:
     mov qword [rsp + ALL_RAX], 0
+    jmp .done
+
+.sc_net_ping4:
+    ; Reject re-entrant calls — the kernel rtl8156 ping path is not safe
+    ; to call concurrently. App that double-clicks while a previous ping is
+    ; in flight gets -2 back, not a fresh syscall that races shared state.
+    cmp byte [sc_net_ping_busy], 0
+    jne .sc_net_ping4_busy
+    mov byte [sc_net_ping_busy], 1
+    mov rax, rdi
+    shr rax, 32
+    jnz .sc_net_ping4_reject
+    mov edi, edi
+    ; SYSCALL masks IF on entry. Blocking network paths use tick_count for
+    ; RX/timeout waits, so let the timer run while the NIC dispatcher waits.
+    sti
+    call net_ping_ipv4
+    push rax
+    cli
+    pop rax
+    mov [rsp + ALL_RAX], rax
+    mov byte [sc_net_ping_busy], 0
+    call usb_hid_requeue_slot1_reads
+    jmp .done
+.sc_net_ping4_reject:
+    mov byte [sc_net_ping_busy], 0
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+.sc_net_ping4_busy:
+    mov qword [rsp + ALL_RAX], -2
+    jmp .done
+
+.sc_net_info:
+    ; rdi = selector. Returns scalar in rax (zero for unknown selectors).
+    xor eax, eax
+    cmp rdi, 0
+    je .ni_active
+    cmp rdi, 1
+    je .ni_bound
+    cmp rdi, 2
+    je .ni_ip
+    cmp rdi, 3
+    je .ni_router
+    cmp rdi, 4
+    je .ni_server
+    cmp rdi, 5
+    je .ni_guest
+    cmp rdi, 6
+    je .ni_nexthop
+    cmp rdi, 7
+    je .ni_dhcp_state
+    cmp rdi, 8
+    je .ni_last_ttl
+    cmp rdi, 9
+    je .ni_dns
+    jmp .ni_store
+.ni_active:
+.ni_bound:
+.ni_ip:
+.ni_router:
+.ni_server:
+.ni_guest:
+.ni_nexthop:
+.ni_dhcp_state:
+.ni_last_ttl:
+.ni_dns:
+    call net_info
+.ni_store:
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+.sc_net_dhcp_renew:
+    ; Force a fresh DHCP DISCOVER/REQUEST cycle. Returns 1 on bound, 0 on fail.
+    ; Trace markers: [d1] enter, [d2] have nic, [d3] after configure, [d4] requeue
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, '['
+    out dx, al
+    mov al, 'd'
+    out dx, al
+    mov al, '1'
+    out dx, al
+    mov al, ']'
+    out dx, al
+    pop rdx
+    pop rax
+    ; DHCP waits on xHCI completions and tick_count timeouts; IF is masked
+    ; by syscall entry, so open a small interrupt window around the wait.
+    sti
+    call net_dhcp_configure
+    push rax
+    cli
+    pop rax
+    test eax, eax
+    jz .dhcp_no_nic
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, '['
+    out dx, al
+    mov al, 'd'
+    out dx, al
+    mov al, '2'
+    out dx, al
+    mov al, ']'
+    out dx, al
+    pop rdx
+    pop rax
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, '['
+    out dx, al
+    mov al, 'd'
+    out dx, al
+    mov al, '3'
+    out dx, al
+    mov al, ']'
+    out dx, al
+    pop rdx
+    pop rax
+    ; rtl8156_wait_completion drained any HID transfer events queued during
+    ; the DHCP exchange. Re-prime the mouse interrupt ring so the cursor
+    ; doesn't freeze after the user clicks the DHCP button.
+    extern usb_hid_requeue_slot1_reads
+    call usb_hid_requeue_slot1_reads
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, '['
+    out dx, al
+    mov al, 'd'
+    out dx, al
+    mov al, '4'
+    out dx, al
+    mov al, ']'
+    out dx, al
+    pop rdx
+    pop rax
+    mov rdi, 2
+    call net_info
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.dhcp_no_nic:
+    mov qword [rsp + ALL_RAX], 0
+    jmp .done
+
+.sc_net_dhcp_start:
+    ; Kick off async DHCP. Returns 0 immediately. Caller polls
+    ; NI_DHCP_STATE for progress.
+    ; Backend selection is handled by net_dhcp_start. Keep this syscall as a
+    ; stable app-facing shim while NIC-specific work stays behind net/nic.asm.
+    ; The active backend may do synchronous fallback work before returning.
+    ; Keep timer interrupts live for that bounded network wait.
+    sti
+    call net_dhcp_start
+    push rax
+    cli
+    pop rax
+    test eax, eax
+    jz .dhcp_start_no_nic
+    mov qword [rsp + ALL_RAX], 0
+    jmp .done
+.dhcp_start_no_nic:
+    mov byte [rtl8156_dhcp_state], 4   ; FAILED
+    mov qword [rsp + ALL_RAX], 0
+    jmp .done
+
+.sc_net_tcp_connect4:
+    ; rdi = IPv4 A.B.C.D, rsi = destination port, rdx = source port.
+    ; This currently performs the TCP open SYN path: resolve next-hop MAC via
+    ; generic ARP, then queue one TCP SYN through generic IPv4/NIC dispatch.
+    cmp byte [sc_net_tcp_busy], 0
+    jne .sc_net_tcp_busy
+    mov byte [sc_net_tcp_busy], 1
+    mov rax, rdi
+    shr rax, 32
+    jnz .sc_net_tcp_reject
+    mov rax, rsi
+    shr rax, 16
+    jnz .sc_net_tcp_reject
+    mov rax, rdx
+    shr rax, 16
+    jnz .sc_net_tcp_reject
+    mov edi, [rsp + ALL_RDI]
+    mov si, [rsp + ALL_RSI]
+    mov dx, [rsp + ALL_RDX]
+    sti
+    call net_tcp_connect_ipv4
+    push rax
+    cli
+    pop rax
+    mov [rsp + ALL_RAX], rax
+    mov byte [sc_net_tcp_busy], 0
+    jmp .done
+.sc_net_tcp_reject:
+    mov byte [sc_net_tcp_busy], 0
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+.sc_net_tcp_busy:
+    mov qword [rsp + ALL_RAX], -2
+    jmp .done
+
+.sc_net_ping4_tick:
+    ; Async ping. Returns RTT (us) on success, 0 if still pending, -1 on
+    ; timeout/no-link, -2 if another ping is in flight. Caller polls per
+    ; frame so the GUI never freezes during the wait.
+    mov rax, rdi
+    shr rax, 32
+    jnz .sc_net_ping4_tick_bad
+    mov edi, edi
+    sti
+    extern net_ping4_tick
+    call net_ping4_tick
+    push rax
+    cli
+    pop rax
+    mov [rsp + ALL_RAX], rax
+    ; While the ping is still in flight (0 = pending, -2 = busy), keep the
+    ; scene marked dirty so the WM redraws and the app's draw() pumps the
+    ; tick again next frame. Without this, scene_dirty clears after the
+    ; first tick and the state machine stalls.
+    cmp rax, 0
+    je .sc_net_ping4_tick_mark
+    cmp rax, -2
+    jne .done
+.sc_net_ping4_tick_mark:
+    mov byte [scene_dirty], 1
+    jmp .done
+.sc_net_ping4_tick_bad:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+.sc_net_dns_a:
+    ; rdi = app-owned hostname C-string. Returns IPv4 A.B.C.D or 0 on failure.
+    cmp byte [sc_net_dns_busy], 0
+    jne .sc_net_dns_busy
+    call sc_validate_user_cstring
+    test eax, eax
+    jz .sc_net_dns_reject
+    mov byte [sc_net_dns_busy], 1
+    mov rdi, [rsp + ALL_RDI]
+    sti
+    call net_dns_query_a
+    push rax
+    cli
+    pop rax
+    mov [rsp + ALL_RAX], rax
+    mov byte [sc_net_dns_busy], 0
+    jmp .done
+.sc_net_dns_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+.sc_net_dns_busy:
+    mov qword [rsp + ALL_RAX], -2
     jmp .done
 
 .sc_app_done:
@@ -1474,6 +1971,16 @@ syscall_table:
     SYSCALL_ENTRY syscall_entry.sc_blend_span_argb_screen, 4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR)
     SYSCALL_ENTRY syscall_entry.sc_blend_span_argb_multiply, 4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR)
     SYSCALL_ENTRY syscall_entry.sc_sysinfo,          2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_net_ping4,        1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_net_info,         1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_net_dhcp_renew,   0, 0
+    SYSCALL_ENTRY syscall_entry.sc_net_dhcp_start,   0, 0
+    SYSCALL_ENTRY syscall_entry.sc_net_tcp_connect4,  3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_net_dns_a,        1, SC_KIND1(FN_KIND_PTR)
+    SYSCALL_ENTRY syscall_entry.sc_net_ping4_tick,   1, SC_KIND1(FN_KIND_SCALAR)
+    SYSCALL_ENTRY syscall_entry.sc_desktop_bg_busy,   0, 0
+    SYSCALL_ENTRY syscall_entry.sc_open_file_media,   1, SC_KIND1(FN_KIND_HANDLE)
+    SYSCALL_ENTRY syscall_entry.sc_wm_set_user_arg,   2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR)
 syscall_table_end:
 syscall_table_count equ (syscall_table_end - syscall_table) / SYSCALL_ENTRY_SIZE
 
@@ -1486,6 +1993,9 @@ FN_BEGIN test_syscall_proc, 0, 0, FN_RET_VOID
 section .data
 global syscall_count
 syscall_count: dq 0
+sc_net_ping_busy: db 0
+sc_net_tcp_busy: db 0
+sc_net_dns_busy: db 0
 szHelloUser: db "-> Hello from RING 3 (via SYSCALL)!", 0
 
 section .text

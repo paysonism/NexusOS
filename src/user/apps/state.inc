@@ -11,6 +11,8 @@ szNotepadTitle  db "Notepad", 0
 szSettingsTitle db "Settings", 0
 szAboutTitle    db "About NexusOS", 0
 szTaskMgrTitle  db "Task Manager", 0
+szPingTitle     db "Networking", 0
+szMediaTitle    db "Media Player", 0
 
 ; --- Explorer strings ---
 szPathRoot      db "C:\", 0
@@ -42,6 +44,7 @@ szPropTypeDir   db "Folder", 0
 szPropSizeDir   db "--", 0
 
 prop_entry_ptr  dq 0            ; pointer to VFS entry being viewed
+exp_prop_visible db 0           ; 1 = Properties overlay shown inside Explorer window
 
 ; --- Virtual Filesystem ---
 ; Each entry: 24 bytes name (null-padded) + 1 byte type (0=dir,1=file) + 7 bytes size string
@@ -130,6 +133,8 @@ szAppNamePaint    db "paint", 0
 szAppNameAbout    db "about", 0
 szAppNameSecurity db "security", 0
 szAppNameSecurityProbe db "security_probe", 0
+szAppNamePing     db "ping", 0
+szAppNameMedia    db "media", 0
 szAppNameRoot     db "root", 0
 
 ; Context menu state (legacy explorer.inc — retained for back-compat).

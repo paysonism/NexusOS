@@ -47,6 +47,7 @@ default rel
 %define FP_OPEN      8
 %define FP_CLOSE     16
 %define FP_READ      32
+%define FP_WRITE     40
 
 ; --- Physical memory aliases ---
 %define VBE_INFO     VBE_INFO_ADDR
@@ -241,6 +242,26 @@ _start:
     ; === S2b: Load APPS.BIN ===
     call load_apps
 
+    ; === S2b2: Load DATA.IMG (FAT16 ramdisk for real hardware) ===
+    ; Real laptops have no legacy IDE controller, so the kernel's fat16
+    ; driver cannot reach a separate data disk. The build script writes
+    ; the FAT partition to \EFI\BOOT\DATA.IMG; we slurp it into firmware-
+    ; allocated pages and publish (base, size) via VBE_INFO. ata.asm's
+    ; ramdisk shim then satisfies fat16 sector I/O from RAM. Non-fatal:
+    ; if DATA.IMG is missing the kernel falls back to ATA PIO and simply
+    ; finds no usable volume (same as today).
+    call load_data_img
+
+    ; === S2b3: Phase 1b - resolve DATA.IMG physical LBA extents on the ESP
+    ; via EFI_BLOCK_IO_PROTOCOL while firmware services are still alive.
+    ; Captured in VBE_INFO + STORAGE_EXTENTS_ADDR for ramdisk_flush in the
+    ; kernel (Phase 5). Non-fatal: failure leaves contract zeroed.
+    call resolve_data_img_extents
+
+    ; === S2c: If previous kernel left a klog flush request in RAM, write it
+    ; out to \KLOG.TXT and clear the magic. Non-fatal on failure. ===
+    call flush_klog_if_pending
+
     ; === S3: Build identity-mapped page tables ===
     call setup_paging
 
@@ -378,7 +399,9 @@ claim_pages:
     %endmacro
 
     DO_CLAIM VBE_INFO,   1          ; Boot info block
-    DO_CLAIM PT_BASE,    9          ; Page tables (PML4+PDPT0+PDPT1+PD0+PT0+4 app PTs)
+    DO_CLAIM 0x1000,     1          ; E820 entry count page
+    DO_CLAIM E820_MAP_ADDR, 4       ; BIOS-compatible memory map handoff
+    DO_CLAIM PT_BASE,    17         ; Page tables (PML4+PDPT0+PDPT1+PD0+PT0+12 app PTs)
     DO_CLAIM SMP_TRAMPOLINE_ADDR, 1 ; Trampoline
     ; NOTE: Do NOT claim KERN_DEST (0x100000) here — UEFI loaded our own
     ; PE image at ImageBase=0x100000.  Claiming it could corrupt memory
@@ -400,7 +423,7 @@ alloc_boot_regions:
     mov qword [abs VBE_INFO + VBE_BACKBUF_OFF], BACK_BUFFER_ADDR
     mov qword [abs VBE_INFO + VBE_BACKBUF_SIZE_OFF], BOOT_BACK_BUFFER_SIZE
     mov qword [abs VBE_INFO + VBE_APP_ARENA_BASE_OFF], APP_DATA_ADDR
-    mov qword [abs VBE_INFO + VBE_APP_ARENA_SIZE_OFF], (APP_SLOT_SIZE * 8)
+    mov qword [abs VBE_INFO + VBE_APP_ARENA_SIZE_OFF], (APP_SLOT_SIZE * APP_SLOT_COUNT)
 
     ; App arena uses 2MB PDE permissions today, so keep it 2MB-aligned.
     mov qword [v_tmp_addr], APP_DATA_ADDR
@@ -408,7 +431,7 @@ alloc_boot_regions:
     mov rax, [rcx + BS_ALLOCPG]
     mov ecx, 2                      ; AllocateAddress
     mov edx, 2                      ; EfiLoaderData
-    mov r8, (APP_SLOT_SIZE * 8) / 0x1000
+    mov r8, (APP_SLOT_SIZE * APP_SLOT_COUNT) / 0x1000
     lea r9, [v_tmp_addr]
     call rax
     test rax, rax
@@ -839,6 +862,656 @@ load_apps:
     ret
 
 ; ============================================================================
+; LOAD_DATA_IMG - open \EFI\BOOT\DATA.IMG, read into firmware-allocated RAM,
+; publish (base, size) in VBE_INFO so the kernel's ramdisk shim can take over
+; block I/O for the FAT16 partition. See src/kernel/drivers/ramdisk.asm and
+; docs/ramdisk.md for the contract. Non-fatal on every error: missing file,
+; allocation failure, or oversize image all leave the ramdisk fields zero
+; and the kernel falls back to ATA PIO.
+; ============================================================================
+%define DATA_IMG_MAX_SZ DATA_IMG_MAX_SIZE
+
+load_data_img:
+    push rbx
+    sub rsp, 48
+    ; [rsp +  0..31] shadow
+    ; [rsp + 32]     arg5 / scratch
+    ; [rsp + 40]     local: read_size (in/out)
+
+    ; Safe defaults so a partial failure cannot leave stale pointers.
+    mov qword [abs VBE_INFO + VBE_RAMDISK_BASE_OFF], 0
+    mov qword [abs VBE_INFO + VBE_RAMDISK_SIZE_OFF], 0
+    mov qword [v_data_size], 0
+
+    ; Reopen root volume (previous opens have been closed).
+    mov rbx, [v_sfs]
+    test rbx, rbx
+    jz .fail
+    mov rcx, rbx
+    lea rdx, [v_root]
+    mov rax, [rbx + SFS_OPENVOL]
+    call rax
+    test rax, rax
+    jnz .fail
+
+    ; Open \EFI\BOOT\DATA.IMG (read-only).
+    mov rbx, [v_root]
+    mov rcx, rbx
+    lea rdx, [v_file]
+    lea r8,  [s_data_path]
+    mov r9,  1
+    mov qword [rsp+32], 0
+    mov rax, [rbx + FP_OPEN]
+    call rax
+    test rax, rax
+    jnz .fail
+
+    ; AllocatePages(AnyPages, EfiLoaderData, DATA_IMG_MAX_SZ / 4K, &addr).
+    mov qword [v_tmp_addr], 0
+    mov rcx, [v_bs]
+    mov rax, [rcx + BS_ALLOCPG]
+    mov ecx, 0
+    mov edx, 2
+    mov r8, DATA_IMG_MAX_SZ / 0x1000
+    lea r9, [v_tmp_addr]
+    call rax
+    test rax, rax
+    jnz .close_and_fail
+
+    mov qword [rsp+40], DATA_IMG_MAX_SZ
+    mov rbx, [v_file]
+    mov rcx, rbx
+    lea rdx, [rsp+40]
+    mov r8, [v_tmp_addr]
+    mov rax, [rbx + FP_READ]
+    call rax
+    test rax, rax
+    jnz .close_and_fail
+
+    mov rax, [rsp+40]                       ; actual bytes read
+    test rax, rax
+    jz .close_and_fail
+    mov [v_data_size], rax
+    mov rdx, [v_tmp_addr]
+    mov [abs VBE_INFO + VBE_RAMDISK_BASE_OFF], rdx
+    mov [abs VBE_INFO + VBE_RAMDISK_SIZE_OFF], rax
+
+    mov rbx, [v_file]
+    mov rcx, rbx
+    mov rax, [rbx + FP_CLOSE]
+    call rax
+    jmp .done
+
+.close_and_fail:
+    mov rbx, [v_file]
+    mov rcx, rbx
+    mov rax, [rbx + FP_CLOSE]
+    call rax
+.fail:
+.done:
+    add rsp, 48
+    pop rbx
+    ret
+
+; ============================================================================
+; RESOLVE_DATA_IMG_EXTENTS - Phase 1b (partial)
+; ----------------------------------------------------------------------------
+; While firmware services are still alive, open EFI_BLOCK_IO_PROTOCOL on the
+; boot device handle (which is the ESP partition), read its BPB, and capture
+; the FAT32 parameters needed to walk DATA.IMG's cluster chain.
+;
+; Status:
+;   [x] HandleProtocol(devhandle, BlockIoGuid)
+;   [x] Allocate sector scratch
+;   [x] Read partition LBA 0 and parse FAT32 BPB into v_fat_* fields
+;   [ ] Walk root directory cluster, find "DATA    IMG" entry          (TODO Phase 1b.2)
+;   [ ] Walk FAT32 chain, coalesce runs into extents at               (TODO Phase 1b.3)
+;       STORAGE_EXTENTS_ADDR, write VBE_STORAGE_EXT_* fields
+;   [ ] Resolve partition-relative -> absolute disk LBA via            (TODO Phase 1b.4)
+;       DevicePath HARDDRIVE node (needed when NVMe driver lands)
+;
+; Until Phase 1b.2-1b.3 land, VBE_STORAGE_EXT_CNT_OFF stays 0 so the kernel's
+; ramdisk_flush keeps no-op behavior. The BPB capture below is non-destructive
+; and idempotent - safe to call every boot.
+;
+; Non-fatal on every UEFI error: failure leaves the contract zeroed and the
+; rest of boot is unaffected.
+; ============================================================================
+; EFI_BLOCK_IO_PROTOCOL layout
+%define BIO_MEDIA      8
+%define BIO_RESET      16
+%define BIO_READ       24
+%define BIO_WRITE      32
+%define BIO_FLUSH      40
+
+; EFI_BLOCK_IO_MEDIA layout (natural alignment, EFI 2.0)
+%define BIOM_MEDIAID   0
+%define BIOM_BLKSZ     32     ; UINT32 BlockSize after 5 BOOLEAN + pad
+%define BIOM_LASTBLK   40     ; EFI_LBA LastBlock (u64, 8-aligned)
+; Note: older EFI 1.x had BlockSize at +24; we don't support those.
+
+; FAT32 BPB offsets (from start of partition sector 0)
+%define BPB32_BYTSPSEC 11
+%define BPB32_SECPCLUS 13
+%define BPB32_RSVDSEC  14
+%define BPB32_NUMFATS  16
+%define BPB32_FATSZ32  36
+%define BPB32_ROOTCLUS 44
+%define BPB32_SIG      510    ; should be 0xAA55
+
+; FAT32 directory entry offsets
+%define DIRENT_ATTR       11
+%define DIRENT_CLUS_HI    20
+%define DIRENT_CLUS_LO    26
+%define DIRENT_FILE_SIZE  28
+%define ATTR_LONG_NAME    0x0F
+%define ATTR_DIRECTORY    0x10
+%define FAT32_EOC         0x0FFFFFF8
+
+resolve_data_img_extents:
+    push rbx
+    push r12
+    push r13
+    sub rsp, 48
+    ; [rsp+0..31] shadow
+    ; [rsp+32]    arg5 slot
+
+    SER 'X'                                  ; X = resolve_extents entered
+
+    ; --- Zero contract fields up-front so any early return is "no backing" ---
+    mov byte  [abs VBE_INFO + VBE_STORAGE_CLASS_OFF], 0
+    mov byte  [abs VBE_INFO + VBE_STORAGE_LUN_OFF], 0
+    mov word  [abs VBE_INFO + VBE_STORAGE_BLKSIZE_OFF], 0
+    mov dword [abs VBE_INFO + VBE_STORAGE_EXT_CNT_OFF], 0
+    mov qword [abs VBE_INFO + VBE_STORAGE_EXT_PTR_OFF], 0
+
+    mov rax, [v_devhandle]
+    test rax, rax
+    jz .rdx_fail
+
+    ; --- HandleProtocol(v_devhandle, &guid_blkio, &v_blkio) ---
+    mov qword [v_blkio], 0
+    mov rcx, [v_devhandle]
+    lea rdx, [guid_blkio]
+    lea r8,  [v_blkio]
+    mov rax, [v_bs]
+    mov rax, [rax + BS_HNDLPROT]
+    call rax
+    test rax, rax
+    jnz .rdx_fail
+    cmp qword [v_blkio], 0
+    je .rdx_fail
+
+    ; --- AllocatePages(AnyPages, EfiLoaderData, 1, &v_bpb_buf) ---
+    mov qword [v_bpb_buf], 0
+    mov rcx, [v_bs]
+    mov rax, [rcx + BS_ALLOCPG]
+    mov ecx, 0
+    mov edx, 2
+    mov r8, 1
+    lea r9, [v_bpb_buf]
+    call rax
+    test rax, rax
+    jnz .rdx_fail
+    cmp qword [v_bpb_buf], 0
+    je .rdx_fail
+
+    ; --- Capture media params (BlockSize, MediaId) ---
+    mov rbx, [v_blkio]
+    mov r12, [rbx + BIO_MEDIA]
+    test r12, r12
+    jz .rdx_fail
+    mov eax, [r12 + BIOM_BLKSZ]
+    cmp eax, 512
+    jne .rdx_fail              ; only 512 B blocks supported today
+    mov [v_part_blksz], eax
+    mov eax, [r12 + BIOM_MEDIAID]
+    mov [v_part_mediaid], eax
+
+    ; --- ReadBlocks(This, MediaId, LBA=0, BufSz=512, Buf=v_bpb_buf) ---
+    mov rcx, rbx
+    mov edx, [v_part_mediaid]
+    xor r8, r8                 ; LBA = 0
+    mov r9, 512                ; BufferSize
+    mov rax, [v_bpb_buf]
+    mov [rsp+32], rax
+    mov rax, [rbx + BIO_READ]
+    call rax
+    test rax, rax
+    jnz .rdx_fail
+
+    ; --- Validate boot signature, then FAT32 BPB ---
+    mov r13, [v_bpb_buf]
+    cmp word [r13 + BPB32_SIG], 0xAA55
+    jne .rdx_fail
+    movzx eax, word [r13 + BPB32_BYTSPSEC]
+    cmp eax, 512
+    jne .rdx_fail
+    movzx eax, byte [r13 + BPB32_SECPCLUS]
+    test eax, eax
+    jz .rdx_fail
+    mov [v_fat_secperclus], eax
+    movzx eax, word [r13 + BPB32_RSVDSEC]
+    test eax, eax
+    jz .rdx_fail
+    mov [v_fat_rsvd], eax
+    movzx eax, byte [r13 + BPB32_NUMFATS]
+    cmp eax, 1
+    jb .rdx_fail
+    mov [v_fat_numfats], eax
+    mov eax, [r13 + BPB32_FATSZ32]
+    test eax, eax
+    jz .rdx_fail              ; FAT16 ESP not supported here (UEFI spec requires FAT32 on ESPs > 512 MB)
+    mov [v_fat_size32], eax
+    mov eax, [r13 + BPB32_ROOTCLUS]
+    cmp eax, 2
+    jb .rdx_fail
+    mov [v_fat_rootclus], eax
+
+    ; FirstDataSector = RsvdSecCnt + NumFATs * FATSz32
+    mov eax, [v_fat_rsvd]
+    mov edx, [v_fat_numfats]
+    imul edx, [v_fat_size32]
+    add eax, edx
+    mov [v_fat_first_data_sec], eax
+
+    SER 'B'                                  ; B = BPB parsed OK
+
+    ; Publish stable metadata before the walk. Class stays 0 until a kernel
+    ; backing driver exists, but the extent table can already be captured.
+    mov ax, [v_part_blksz]
+    mov [abs VBE_INFO + VBE_STORAGE_BLKSIZE_OFF], ax
+    mov qword [abs VBE_INFO + VBE_STORAGE_EXT_PTR_OFF], STORAGE_EXTENTS_ADDR
+
+    ; --- Resolve \EFI\BOOT\DATA.IMG by walking FAT32 directory clusters ---
+    mov eax, [v_fat_rootclus]
+    lea rsi, [s_efi_83]
+    call fat32_find_dirent
+    jc .rdx_fail
+    test bl, ATTR_DIRECTORY
+    jz .rdx_fail
+
+    lea rsi, [s_boot_83]
+    call fat32_find_dirent
+    jc .rdx_fail
+    test bl, ATTR_DIRECTORY
+    jz .rdx_fail
+
+    lea rsi, [s_data_83]
+    call fat32_find_dirent
+    jc .rdx_fail
+    test bl, ATTR_DIRECTORY
+    jnz .rdx_fail
+    cmp eax, 2
+    jb .rdx_fail
+    test edx, edx
+    jz .rdx_fail
+    mov [v_data_first_clus], eax
+    mov [v_data_file_size], edx
+
+    SER 'D'                                  ; D = DATA.IMG directory entry found
+
+    ; --- Walk the DATA.IMG FAT32 chain and coalesce contiguous clusters ---
+    call fat32_emit_data_extents
+    jc .rdx_fail
+    mov [abs VBE_INFO + VBE_STORAGE_EXT_CNT_OFF], eax
+
+    SER 'e'                                  ; e = extents emitted
+
+.rdx_fail:
+    add rsp, 48
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; read_part_sector
+;   r8  = partition-relative LBA
+;   r10 = 512-byte destination buffer
+;   returns EFI_STATUS in rax
+;   clobbers volatile registers
+read_part_sector:
+    sub rsp, 40
+    mov r11, [v_blkio]
+    mov rcx, r11
+    mov edx, [v_part_mediaid]
+    mov r9, 512
+    mov [rsp+32], r10
+    mov rax, [r11 + BIO_READ]
+    call rax
+    add rsp, 40
+    ret
+
+; fat32_cluster_lba
+;   eax = cluster number
+;   returns rax = partition-relative LBA of the cluster's first sector
+;   clobbers rdx
+fat32_cluster_lba:
+    sub eax, 2
+    mul dword [v_fat_secperclus]
+    add eax, [v_fat_first_data_sec]
+    ret
+
+; fat32_get_next_cluster
+;   eax = current cluster
+;   returns CF clear + eax = next cluster (masked to 28 bits), or CF set
+;   clobbers volatile registers
+fat32_get_next_cluster:
+    sub rsp, 40
+    shl eax, 2
+    mov edx, eax
+    shr eax, 9
+    add eax, [v_fat_rsvd]
+    mov r8d, eax
+    mov r10, [v_bpb_buf]
+    mov [rsp+32], edx
+    call read_part_sector
+    test rax, rax
+    jnz .gnc_fail
+    mov edx, [rsp+32]
+    and edx, 511
+    mov r10, [v_bpb_buf]
+    mov eax, [r10 + rdx]
+    and eax, 0x0FFFFFFF
+    clc
+    add rsp, 40
+    ret
+.gnc_fail:
+    stc
+    add rsp, 40
+    ret
+
+; fat32_find_dirent
+;   eax = starting directory cluster
+;   rsi = pointer to 11-byte 8.3 uppercase name
+;   returns CF clear + eax = first cluster, edx = file size, bl = attr
+;   returns CF set if not found or on read/FAT error
+fat32_find_dirent:
+    push rbx
+    push rsi
+    push rdi
+    push r12
+    push r13
+    push r14
+    push r15
+    cld
+    mov r12d, eax
+    mov r13, rsi
+.fde_cluster:
+    cmp r12d, 2
+    jb .fde_fail
+    xor r14d, r14d
+.fde_sector:
+    mov eax, r12d
+    call fat32_cluster_lba
+    add eax, r14d
+    mov r8d, eax
+    mov r10, [v_bpb_buf]
+    call read_part_sector
+    test rax, rax
+    jnz .fde_fail
+
+    mov r15, [v_bpb_buf]
+    mov ecx, 16
+.fde_entry:
+    mov al, [r15]
+    test al, al
+    jz .fde_fail                 ; 0x00 marks end of this directory
+    cmp al, 0xE5
+    je .fde_next_entry
+    mov bl, [r15 + DIRENT_ATTR]
+    mov al, bl
+    and al, ATTR_LONG_NAME
+    cmp al, ATTR_LONG_NAME
+    je .fde_next_entry
+
+    push rcx
+    mov rsi, r13
+    mov rdi, r15
+    mov ecx, 11
+    repe cmpsb
+    pop rcx
+    jne .fde_next_entry
+
+    movzx eax, word [r15 + DIRENT_CLUS_HI]
+    shl eax, 16
+    movzx edx, word [r15 + DIRENT_CLUS_LO]
+    or eax, edx
+    mov edx, [r15 + DIRENT_FILE_SIZE]
+    clc
+    jmp .fde_done
+.fde_next_entry:
+    add r15, 32
+    dec ecx
+    jnz .fde_entry
+
+    inc r14d
+    cmp r14d, [v_fat_secperclus]
+    jb .fde_sector
+
+    mov eax, r12d
+    call fat32_get_next_cluster
+    jc .fde_fail
+    cmp eax, FAT32_EOC
+    jae .fde_fail
+    mov r12d, eax
+    jmp .fde_cluster
+.fde_fail:
+    stc
+.fde_done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rdi
+    pop rsi
+    pop rbx
+    ret
+
+; fat32_emit_data_extents
+;   eax = DATA.IMG first cluster
+;   edx = DATA.IMG file size in bytes
+;   returns CF clear + eax = extent count, or CF set
+fat32_emit_data_extents:
+    push rbx
+    push rsi
+    push rdi
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12d, eax
+    mov eax, edx
+    add eax, 511
+    shr eax, 9
+    mov r13d, eax                   ; remaining file sectors
+    xor r15d, r15d                  ; extent count
+    test r13d, r13d
+    jz .ede_fail
+.ede_cluster:
+    mov eax, r12d
+    call fat32_cluster_lba
+    mov rbx, rax                    ; current extent start LBA
+    mov ecx, [v_fat_secperclus]
+    cmp ecx, r13d
+    jbe .ede_chunk_ok
+    mov ecx, r13d
+.ede_chunk_ok:
+    test r15d, r15d
+    jz .ede_new_extent
+
+    mov edi, r15d
+    dec edi
+    shl edi, 4
+    lea r14, [abs STORAGE_EXTENTS_ADDR + rdi]
+    mov rax, [r14]
+    mov edx, [r14 + 8]
+    add rax, rdx
+    cmp rax, rbx
+    jne .ede_new_extent
+    add [r14 + 8], ecx
+    jmp .ede_appended
+.ede_new_extent:
+    cmp r15d, STORAGE_EXTENTS_MAX
+    jae .ede_fail
+    mov edi, r15d
+    shl edi, 4
+    lea r14, [abs STORAGE_EXTENTS_ADDR + rdi]
+    mov [r14], rbx
+    mov [r14 + 8], ecx
+    mov dword [r14 + 12], 0
+    inc r15d
+.ede_appended:
+    sub r13d, ecx
+    jz .ede_done
+
+    mov eax, r12d
+    call fat32_get_next_cluster
+    jc .ede_fail
+    cmp eax, FAT32_EOC
+    jae .ede_fail
+    cmp eax, 2
+    jb .ede_fail
+    mov r12d, eax
+    jmp .ede_cluster
+.ede_done:
+    mov eax, r15d
+    clc
+    jmp .ede_ret
+.ede_fail:
+    stc
+.ede_ret:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rdi
+    pop rsi
+    pop rbx
+    ret
+
+; ============================================================================
+; FLUSH_KLOG_IF_PENDING
+; ----------------------------------------------------------------------------
+; Checks the kernel-log flush region at 0x600000 for a magic header left
+; behind by the previous boot's kernel (via F11). If present, writes the
+; payload to \KLOG.TXT on the ESP and clears the magic so we do not write
+; the same buffer again next boot.
+;
+; Layout at 0x600000:
+;   +0  qword magic = 0x3130534E474F4C4B  ("KLOGNS01")
+;   +8  qword payload length (bytes)
+;   +16 payload (ASCII text)
+;
+; Non-fatal: any UEFI error simply skips the write and continues boot.
+; ============================================================================
+%define KLOG_FLUSH_ADDR_LO 0x600000
+%define KLOG_MAGIC_QWORD   0x3130534E474F4C4B
+
+flush_klog_if_pending:
+    push rbx
+    push r12
+    push r13
+    sub rsp, 64
+    ; [rsp +  0..31] shadow
+    ; [rsp + 32]     arg5
+    ; [rsp + 40]     local: bytecount in/out
+    ; [rsp + 48]     scratch
+
+    SER 'k'                                  ; k = flush_klog entered
+
+    ; --- Check magic ---
+    mov rax, KLOG_MAGIC_QWORD
+    cmp [abs KLOG_FLUSH_ADDR_LO], rax
+    jne .fk_no_magic
+    SER 'M'                                  ; M = magic found
+    jmp .fk_have_magic
+.fk_no_magic:
+    SER 'm'                                  ; m = no magic
+    jmp .fk_done
+.fk_have_magic:
+
+    mov r12, [abs KLOG_FLUSH_ADDR_LO + 8]   ; payload length
+    test r12, r12
+    jz .fk_clear                            ; empty payload, just clear magic
+    cmp r12, 0x100000                       ; sanity cap 1 MB
+    ja .fk_clear
+
+    ; --- Reopen root volume ---
+    mov rbx, [v_sfs]
+    test rbx, rbx
+    jz .fk_clear
+    mov rcx, rbx
+    lea rdx, [v_root]
+    mov rax, [rbx + SFS_OPENVOL]
+    call rax
+    test rax, rax
+    jz .fk_root_ok
+    SER 'R'                                  ; R = OpenVolume failed
+    jmp .fk_clear
+.fk_root_ok:
+
+    ; --- Open \KLOG.TXT with CREATE|READ|WRITE ---
+    mov rbx, [v_root]
+    mov rcx, rbx
+    lea rdx, [v_file]
+    lea r8,  [s_klog_path]
+    ; OpenMode = CREATE(0x8000000000000000) | READ(1) | WRITE(2) = 0x8000000000000003
+    mov r9, 0x8000000000000003
+    mov qword [rsp+32], 0                   ; Attributes = 0
+    mov rax, [rbx + FP_OPEN]
+    call rax
+    test rax, rax
+    jz .fk_open_ok
+    SER 'O'                                  ; O = Open(KLOG.TXT) failed
+    jmp .fk_close_root
+.fk_open_ok:
+    SER 'o'                                  ; o = Open succeeded
+
+    ; --- Write payload ---
+    mov [rsp+40], r12                        ; bytecount in
+    mov rbx, [v_file]
+    mov rcx, rbx
+    lea rdx, [rsp+40]
+    mov r8, KLOG_FLUSH_ADDR_LO + 16          ; payload ptr
+    mov rax, [rbx + FP_WRITE]
+    call rax
+    test rax, rax
+    jz .fk_write_ok
+    SER 'X'                                  ; X = Write failed
+    jmp .fk_close_file
+.fk_write_ok:
+    SER 'w'                                  ; w = Write succeeded
+.fk_close_file:
+
+    ; --- Close file ---
+    mov rbx, [v_file]
+    mov rcx, rbx
+    mov rax, [rbx + FP_CLOSE]
+    call rax
+
+.fk_close_root:
+    mov rbx, [v_root]
+    test rbx, rbx
+    jz .fk_clear
+    mov rcx, rbx
+    mov rax, [rbx + FP_CLOSE]
+    call rax
+
+.fk_clear:
+    ; Wipe the magic so we don't re-write next boot.
+    xor eax, eax
+    mov [abs KLOG_FLUSH_ADDR_LO], rax
+    mov [abs KLOG_FLUSH_ADDR_LO + 8], rax
+
+.fk_done:
+    add rsp, 64
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; ============================================================================
 ; SETUP_PAGING  - identity-map 512 GB.
 ; The first 1 GB uses 2 MB pages so the app arena can be user-accessible
 ; while the rest stays supervisor-only; everything above 1 GB stays mapped
@@ -855,17 +1528,17 @@ setup_paging:
     %define UEFI_KTEXT_START_PAGE  0x100     ; PTE index of 0x100000
     %define UEFI_KTEXT_END_PAGE    0x200     ; executable kernel text through 2 MiB
     %define UEFI_PT0_BASE          0x74000   ; 4KB page table for PD0[0]
-    %define UEFI_APP_PT_BASE       0x75000   ; 4 PTs (0x75000..0x78FFF) for app arena
+    %define UEFI_APP_PT_BASE       0x75000   ; 8 PTs (0x75000..0x7CFFF) for app arena
     push rbx
     push r12
     push r13
 
-    ; Clear 9 pages: PML4 + PDPT0 + PDPT1 + PD0 + PT0 + 4 app-arena PTs
-    ; (0x70000..0x78FFF). The 4 arena PTs at UEFI_APP_PT_BASE give the app
+    ; Clear 13 pages: PML4 + PDPT0 + PDPT1 + PD0 + PT0 + 8 app-arena PTs
+    ; (0x70000..0x7CFFF). The 8 arena PTs at UEFI_APP_PT_BASE give the app
     ; arena 4KB granularity for per-slot USER toggling and W^X.
     mov rdi, PT_BASE
     xor eax, eax
-    mov ecx, 9 * 4096 / 4
+    mov ecx, 13 * 4096 / 4
     rep stosd
 
     ; PML4[0] -> PDPT0 at 0x71000 (covers 0-512 GB).
@@ -1100,6 +1773,8 @@ exit_boot_services:
     test rax, rax
     jnz .fail
 
+    call publish_e820_map
+
     ; *** No UEFI calls between GetMemoryMap and ExitBootServices ***
     SER 'X'                         ; X = GetMemoryMap OK, about to exit
 
@@ -1125,6 +1800,76 @@ exit_boot_services:
 .done:
     add rsp, 104
     pop r12
+    pop rbx
+    ret
+
+; ============================================================================
+; PUBLISH_E820_MAP - convert the UEFI memory map into the kernel's legacy
+; E820 handoff block at E820_COUNT_ADDR/E820_MAP_ADDR.
+;
+; Input locals from exit_boot_services:
+;   [rsp+48] mmap_size, [rsp+64] desc_size, [rsp+80] mmap_buffer
+; ============================================================================
+publish_e820_map:
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+
+    mov rsi, [rsp + 48 + 80]        ; caller rsp+48 after return addr + 9 pushes
+    mov rbx, [rsp + 64 + 80]        ; descriptor size
+    mov r10, [rsp + 80 + 80]        ; descriptor buffer
+    xor r11d, r11d                  ; output entry count
+
+    test rsi, rsi
+    jz .done
+    test rbx, rbx
+    jz .done
+
+    mov rdi, E820_MAP_ADDR
+.loop:
+    cmp rsi, rbx
+    jb .done
+
+    mov eax, [r10 + 0]              ; EFI_MEMORY_DESCRIPTOR.Type
+    cmp eax, 7                      ; EfiConventionalMemory
+    jne .next
+
+    cmp r11d, 255                   ; 255 * 24 fits below the 0x8000 trampoline
+    jae .done
+
+    mov rax, [r10 + 8]              ; PhysicalStart
+    mov [rdi + 0], rax
+    mov rax, [r10 + 24]             ; NumberOfPages
+    shl rax, 12
+    mov [rdi + 8], rax
+    mov dword [rdi + 16], 1         ; E820 usable RAM
+    mov dword [rdi + 20], 0         ; ACPI extended attributes
+
+    add rdi, 24
+    inc r11d
+
+.next:
+    add r10, rbx
+    sub rsi, rbx
+    jmp .loop
+
+.done:
+    mov [abs E820_COUNT_ADDR], r11w
+
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
     pop rbx
     ret
 
@@ -1192,6 +1937,12 @@ guid_sfs:
     dw 0x6459, 0x11d2
     db 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b
 
+; EFI_BLOCK_IO_PROTOCOL (964e5b21-6459-11d2-8e39-00a0c9697239)
+guid_blkio:
+    dd 0x964e5b21
+    dw 0x6459, 0x11d2
+    db 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x39
+
 guid_lip:
     dd 0x5b1b31a1
     dw 0x9562, 0x11d2
@@ -1209,6 +1960,13 @@ guid_spp:
 align 2
 s_kern_path:    ustr "\EFI\BOOT\KERNEL.BIN"
 s_apps_path:    ustr "\EFI\BOOT\APPS.BIN"
+s_data_path:    ustr "\EFI\BOOT\DATA.IMG"
+s_klog_path:    ustr "\KLOG.TXT"
+
+; FAT32 8.3 path components for \EFI\BOOT\DATA.IMG extent resolution.
+s_efi_83:       db 'EFI     ', '   '
+s_boot_83:      db 'BOOT    ', '   '
+s_data_83:      db 'DATA    ', 'IMG'
 
 ; ============================================================================
 ; Variables
@@ -1231,7 +1989,25 @@ v_file:        dq 0
 v_kernel_addr: dq 0
 v_ksize:       dq 0
 v_apps_size:   dq 0
+v_data_size:   dq 0
 v_tmp_addr:    dq 0
+
+; --- Phase 1b: storage extent resolution scratch -------------------------
+; Populated by resolve_data_img_extents. Once Phase 2/3 land (NVMe / USB-MSC)
+; the kernel's ramdisk_flush will consult these via VBE_INFO + the extent
+; table at STORAGE_EXTENTS_ADDR to write dirty ramdisk pages back to the ESP.
+v_blkio:        dq 0
+v_bpb_buf:      dq 0    ; 4 KiB scratch page, sector 0 of partition
+v_part_blksz:   dd 0
+v_part_mediaid: dd 0
+v_fat_secperclus:    dd 0
+v_fat_rsvd:          dd 0
+v_fat_numfats:       dd 0
+v_fat_size32:        dd 0
+v_fat_rootclus:      dd 0
+v_fat_first_data_sec: dd 0
+v_data_first_clus:   dd 0
+v_data_file_size:    dd 0
 
 ; Pad text section to full raw size
 times (HDR_SZ + TEXT_RAW - ($ - $$)) db 0

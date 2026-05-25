@@ -3,7 +3,8 @@
 
 Updates the three (str <name> = "..."; const <NAME>_LEN = N) declarations in
 src/user/nexushl/apps/wallpaper.nxh so the native NexusHL SVG renderer has the
-current SVG source. Run after editing any wallpaper SVG.
+current SVG source. If wallpaper.nxh uses the lightweight procedural renderer,
+the declarations are absent and this tool exits cleanly without changing it.
 """
 from __future__ import annotations
 
@@ -26,6 +27,9 @@ def escape(raw: str) -> str:
 
 def main() -> int:
     text = NXH.read_text(encoding="utf-8")
+    if "LIQUID_SVG_LEN" not in text:
+        print("[wallpaper-strings] SVG wallpaper strings not present; skipping")
+        return 0
     for var, length_const, svg_name in WALLPAPERS:
         raw = (ROOT / "src" / "resources" / "wallpapers" / svg_name).read_text(encoding="utf-8")
         esc = escape(raw)

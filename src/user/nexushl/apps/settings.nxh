@@ -12,13 +12,14 @@ app "Settings" { stack = 4096; }
 const C_PANEL      = 0x00F5F6FA
 const C_BUTTON     = 0x00D8DDE3
 const C_BUTTON_ON  = 0x002A6FFF
+const C_BUTTON_OFF = 0x00B8BEC8
 const C_TEXT       = 0x002A2F3A
 const C_MUTED      = 0x005C6673
 
 # Widget metrics.
-const RES_W           = 88            # preset resolution button width
-const BG_W            = 96            # theme button width
-const NATIVE_BTN_W    = 110           # "Use Native" button width
+const RES_W           = 78            # preset resolution button width
+const BG_W            = 82            # theme button width
+const NATIVE_BTN_W    = 92            # "Use Native" button width
 const TOGGLE_COL_W    = 130           # checkbox + label column
 
 # Layout cursor constants. Derived from gui.nxh defaults
@@ -26,17 +27,68 @@ const TOGGLE_COL_W    = 130           # checkbox + label column
 #  UI_BUTTON_H=16, UI_ROW_GAP=6, UI_ROW_H=22, UI_SECTION_GAP=20).
 # Inlined as literals because nxhc `const` only accepts numeric literals.
 const X0              = 12
-const Y_TITLE_DISP    = 12            # "Display"
-const Y_CURRENT_LINE  = 34            # "Current: WxH   Native: WxH"
-const Y_NATIVE_BTN    = 52            # [ Use Native ]
-const Y_CAP_RES       = 78            # "Resolution"
-const Y_RES           = 96            # preset buttons
-const Y_TOGGLES       = 118           # vsync / fps / stretch row
-const Y_TITLE_MEM     = 144           # "Memory"
-const Y_RAM           = 164
-const Y_TITLE_BG      = 188           # "Appearance"
-const Y_CAP_BG        = 204
-const Y_BG            = 220
+const Y_TITLE_DISP    = 10            # "Display"
+const Y_CURRENT_LINE  = 32            # "Current: WxH"
+const Y_NATIVE_LINE   = 46            # "Native: WxH"
+const Y_NATIVE_BTN    = 44            # [ Use Native ]
+const Y_CAP_RES       = 70            # "Resolution"
+const Y_RES           = 86            # preset buttons
+const Y_TOGGLES       = 108           # vsync / fps row
+const Y_TOGGLES_2     = 128           # stretch row
+const Y_TITLE_GPU     = 150           # "Graphics"
+const Y_GPU_NAME      = 168
+const Y_GPU_ID        = 182
+const Y_GPU_BAR       = 196
+const Y_TITLE_MEM     = 218           # "Memory"
+const Y_RAM           = 236
+const Y_TITLE_BG      = 256           # "Appearance"
+const Y_CAP_BG        = 270
+const Y_BG            = 286
+
+# --- Framebuffer (debug) section ---------------------------------------
+# Live readouts from SYS_SYSINFO selectors 100..134 (fbperf). Lets the user
+# watch flip rate / caching state without leaving the OS, and ships a
+# "Dump to serial" button that fires selector 199 -> fbperf_serial_dump,
+# emitting a full [FBPERF] block over COM1 for offline diagnosis.
+const Y_TITLE_FB      = 310
+const Y_FB_LINE1      = 328
+const Y_FB_LINE2      = 342
+const Y_FB_LINE3      = 356
+const Y_FB_LINE4      = 370
+const Y_FB_LINE5      = 384
+const Y_FB_LINE6      = 398
+const Y_FB_DUMP_BTN   = 414
+const FB_DUMP_W       = 130
+
+# fbperf SYS_SYSINFO selector IDs (mirror fbperf.asm comment block).
+const FB_SI_FLIPS_TOTAL   = 100
+const FB_SI_FULL_FLIPS    = 101
+const FB_SI_RECT_FLIPS    = 102
+const FB_SI_BYTES_LO      = 103
+const FB_SI_BYTES_HI      = 104
+const FB_SI_TSC_TOTAL_LO  = 105
+const FB_SI_TSC_TOTAL_HI  = 106
+const FB_SI_TSC_MIN       = 107
+const FB_SI_TSC_MAX       = 108
+const FB_SI_TSC_LAST      = 109
+const FB_SI_DIRTY_SUM     = 110
+const FB_SI_CR3           = 116
+const FB_SI_CR4           = 117
+const FB_SI_PAT_LO        = 120
+const FB_SI_PAT_HI        = 121
+const FB_SI_MTRR_DEF      = 122
+const FB_SI_MTRR_COUNT    = 123
+const FB_SI_PTE_LO        = 124
+const FB_SI_PTE_HI        = 125
+const FB_SI_PTE_LEVEL     = 126
+const FB_SI_CACHING_TYPE  = 127
+const FB_SI_WC_PLAN_LO    = 128
+const FB_SI_WC_ARMED      = 130
+const FB_SI_WC_ACTIVATED  = 131
+const FB_SI_FB_ADDR_LO    = 132
+const FB_SI_FB_ADDR_HI    = 133
+const FB_SI_INIT_DONE     = 134
+const FB_SI_DUMP_SERIAL   = 199
 
 state {
     settings_flags: 4;
@@ -48,16 +100,28 @@ state {
     native_res_buf:  24;
     current_label_buf: 24;
     native_label_buf:  24;
+    ram_label_buf:     40;
+    gpu_name_buf:      48;
+    gpu_id_buf:        56;
+    gpu_bar_buf:       64;
+    fb_line1_buf:      64;
+    fb_line2_buf:      64;
+    fb_line3_buf:      64;
+    fb_line4_buf:      64;
+    fb_line5_buf:      64;
+    fb_line6_buf:      64;
 }
 
 str title_display  = "Display";
+str title_gpu      = "Graphics";
 str title_memory   = "Memory";
 str title_bg_sec   = "Appearance";
 str label_res      = "Preset resolutions";
 str label_vsync    = "VSync";
 str label_fps      = "Show FPS";
 str label_stretch  = "Stretch to fill";
-str label_ram      = "Total RAM: 512 MB";
+str label_ram_prefix = "Total RAM: ";
+str label_ram_suffix = " MB";
 str label_bg       = "Desktop background";
 str btn_native     = "Use Native";
 str res_800        = "800x600";
@@ -70,6 +134,28 @@ str mode_ok        = "Mode switch ready";
 str mode_failed    = "Mode switch failed";
 str prefix_current = "Current: ";
 str prefix_native  = "  Native: ";
+str prefix_gpu     = "GPU: ";
+str prefix_gpu_id  = "ID: ";
+str prefix_bdf     = " BDF: ";
+str prefix_bar0    = "BAR0: ";
+str prefix_cmd     = " CMD: ";
+str gpu_none       = "No AMD display";
+str gpu_780m       = "AMD Radeon 780M";
+str gpu_amd        = "AMD display"
+str title_fb_dbg   = "Framebuffer (debug)"
+str btn_dump_ser   = "Dump to serial"
+str fb_lbl_flips   = "flips total/full/rect: "
+str fb_lbl_tsc     = "tsc last/min/max: "
+str fb_lbl_bytes   = "bytes total: "
+str fb_lbl_pat     = "PAT: "
+str fb_lbl_leaf    = "fb leaf lvl/cache/mtrr#: "
+str fb_lbl_wc      = "WC armed/activated/init: ";
+
+# --- fbperf accessors. Selectors 100..199 reserved for framebuffer perf in
+# the kernel's sc_sysinfo dispatcher.
+fn fbperf_get(sel) {
+    return syscall(SYS_SYSINFO, sel, 0);
+}
 
 # Append `n` as a decimal ASCII into `buf`, return ptr just past the last
 # digit. Writes the digits LSB-first then reverses the slice in place,
@@ -96,6 +182,32 @@ fn put_uint(buf, n) {
         i = i + 1;
         j = j - 1;
     }
+    return p;
+}
+
+fn put_hex_digit(buf, n) {
+    let d = n & 15;
+    if d < 10 {
+        sb(buf, 48 + d);
+    } else {
+        sb(buf, 55 + d);
+    }
+    return buf + 1;
+}
+
+fn put_hex16(buf, n) {
+    let p = buf;
+    p = put_hex_digit(p, n >> 12);
+    p = put_hex_digit(p, n >> 8);
+    p = put_hex_digit(p, n >> 4);
+    p = put_hex_digit(p, n);
+    return p;
+}
+
+fn put_hex32(buf, n) {
+    let p = buf;
+    p = put_hex16(p, n >> 16);
+    p = put_hex16(p, n);
     return p;
 }
 
@@ -134,6 +246,44 @@ fn fmt_labeled_res(buf, prefix, w, h) {
     sb(p, 0);
 }
 
+fn fmt_gpu_name(buf) {
+    let provider = gpu_provider();
+    let p = copy_cstr(buf, &prefix_gpu);
+    if provider == GPU_PROVIDER_780M {
+        p = copy_cstr(p, &gpu_780m);
+    } else {
+        if provider == GPU_PROVIDER_AMD {
+            p = copy_cstr(p, &gpu_amd);
+        } else {
+            p = copy_cstr(p, &gpu_none);
+        }
+    }
+    sb(p, 0);
+}
+
+fn fmt_gpu_id(buf) {
+    let id = gpu_id();
+    let vendor = id & 0xFFFF;
+    let device = (id >> 16) & 0xFFFF;
+    let p = copy_cstr(buf, &prefix_gpu_id);
+    p = put_hex16(p, vendor);
+    sb(p, 58);                         # ':'
+    p = p + 1;
+    p = put_hex16(p, device);
+    p = copy_cstr(p, &prefix_bdf);
+    p = put_hex32(p, gpu_bdf());
+    sb(p, 0);
+}
+
+fn fmt_gpu_bar(buf) {
+    let p = copy_cstr(buf, &prefix_bar0);
+    p = put_hex32(p, gpu_bar0_hi());
+    p = put_hex32(p, gpu_bar0_lo());
+    p = copy_cstr(p, &prefix_cmd);
+    p = put_hex32(p, gpu_cmd());
+    sb(p, 0);
+}
+
 fn set_mode(width, height) {
     let rc = display_set_mode(width, height, 32);
     sw(&settings_last_mode_result, rc);
@@ -160,15 +310,48 @@ fn sync_bg() {
 
 fn theme_button(win, x, y, id, label) {
     let fill = C_BUTTON;
+    let fg = C_TEXT;
+    let busy = svg_desktop_background_busy();
     if sync_bg() == id {
         fill = C_BUTTON_ON;
+        fg = UI_COL_TEXT_INVERT;
     }
-    ui_rect_at(win, x, y, BG_W, UI_BUTTON_H, fill);
-    if sync_bg() == id {
-        ui_text_at(win, x + 5, y + 2, label, UI_COL_TEXT_INVERT, fill);
-    } else {
-        ui_text_at(win, x + 5, y + 2, label, C_TEXT, fill);
+    if busy != 0 {
+        fill = C_BUTTON_OFF;
+        fg = C_MUTED;
     }
+    button_frame(win, x, y, BG_W, fill);
+    ui_text_at(win, x + 5, y + 2, label, fg, fill);
+}
+
+fn button_frame(win, x, y, w, fill) {
+    ui_rect_at(win, x, y, w, UI_BUTTON_H, fill);
+    ui_rect_at(win, x, y, w, 1, UI_COL_BORDER_2);
+    ui_rect_at(win, x, y + UI_BUTTON_H - 1, w, 1, UI_COL_BORDER_2);
+    ui_rect_at(win, x, y, 1, UI_BUTTON_H, UI_COL_BORDER_2);
+    ui_rect_at(win, x + w - 1, y, 1, UI_BUTTON_H, UI_COL_BORDER_2);
+}
+
+fn action_button(win, x, y, w, label, active) {
+    let fill = C_BUTTON;
+    let fg = C_TEXT;
+    if active != 0 {
+        fill = C_BUTTON_ON;
+        fg = UI_COL_TEXT_INVERT;
+    }
+    button_frame(win, x, y, w, fill);
+    ui_text_at(win, x + 5, y + 2, label, fg, fill);
+}
+
+fn native_button_x(win) {
+    return ui_win_w(win) - UI_BORDER * 2 - X0 - NATIVE_BTN_W;
+}
+
+fn settings_section_title(win, y, label) {
+    let w = ui_win_w(win) - UI_BORDER * 2;
+    ui_rect_at(win, 0, y - 3, w, 18, UI_COL_SURFACE_2);
+    ui_rect_at(win, 0, y + 15, w, 1, UI_COL_BORDER);
+    ui_text_at(win, X0, y, label, C_TEXT, UI_COL_SURFACE_2);
 }
 
 fn draw(win) {
@@ -180,61 +363,132 @@ fn draw(win) {
 
     fmt_labeled_res(&current_label_buf, &prefix_current, cur_w, cur_h);
     fmt_labeled_res(&native_label_buf,  &prefix_native,  nat_w, nat_h);
+    fmt_gpu_name(&gpu_name_buf);
+    fmt_gpu_id(&gpu_id_buf);
+    fmt_gpu_bar(&gpu_bar_buf);
 
     ui_fill_client_below(win, 0, C_PANEL);
 
     # --- Display ---------------------------------------------------------
-    ui_section_title(win, Y_TITLE_DISP, &title_display);
+    settings_section_title(win, Y_TITLE_DISP, &title_display);
 
-    # Single-line "Current: WxH  Native: WxH"
     ui_text_at(win, X0, Y_CURRENT_LINE,
                &current_label_buf, C_TEXT, C_PANEL);
-    # Place native caption to the right of the current one. With max 9
-    # chars (e.g. "Current: 1920x1200") at 8 px per glyph, 9*8 = 72 px is
-    # tight; we use 96 px to leave breathing room.
-    ui_text_at(win, X0 + 96, Y_CURRENT_LINE,
+    ui_text_at(win, X0, Y_NATIVE_LINE,
                &native_label_buf, C_MUTED, C_PANEL);
 
     # "Use Native" — switch to the monitor's detected native size.
-    let native_fill = C_BUTTON;
+    let native_active = 0;
     if cur_w == nat_w {
         if cur_h == nat_h {
-            native_fill = C_BUTTON_ON;
+            native_active = 1;
         }
     }
-    ui_rect_at(win, X0, Y_NATIVE_BTN, NATIVE_BTN_W, UI_BUTTON_H, native_fill);
-    if native_fill == C_BUTTON_ON {
-        ui_text_at(win, X0 + 6, Y_NATIVE_BTN + 2,
-                   &btn_native, UI_COL_TEXT_INVERT, native_fill);
-    } else {
-        ui_text_at(win, X0 + 6, Y_NATIVE_BTN + 2,
-                   &btn_native, C_TEXT, native_fill);
-    }
+    action_button(win, native_button_x(win), Y_NATIVE_BTN, NATIVE_BTN_W, &btn_native, native_active);
 
     # Preset resolution buttons.
     ui_caption(win, X0, Y_CAP_RES, &label_res);
-    ui_button(win, ui_row_x(X0, RES_W, 0), Y_RES, RES_W, &res_800,  C_BUTTON);
-    ui_button(win, ui_row_x(X0, RES_W, 1), Y_RES, RES_W, &res_1024, C_BUTTON);
-    ui_button(win, ui_row_x(X0, RES_W, 2), Y_RES, RES_W, &res_1280, C_BUTTON);
+    action_button(win, ui_row_x(X0, RES_W, 0), Y_RES, RES_W, &res_800, 0);
+    action_button(win, ui_row_x(X0, RES_W, 1), Y_RES, RES_W, &res_1024, 0);
+    action_button(win, ui_row_x(X0, RES_W, 2), Y_RES, RES_W, &res_1280, 0);
 
-    # Toggles. Three columns: vsync, fps, stretch.
+    # Toggles wrap into two rows so labels stay inside the window.
     ui_checkbox(win, X0,                       Y_TOGGLES,
                 flags & DISPLAY_FLAG_VSYNC,   &label_vsync);
     ui_checkbox(win, X0 + TOGGLE_COL_W,        Y_TOGGLES,
                 flags & DISPLAY_FLAG_FPS,     &label_fps);
-    ui_checkbox(win, X0 + TOGGLE_COL_W * 2,    Y_TOGGLES,
+    ui_checkbox(win, X0,                       Y_TOGGLES_2,
                 flags & DISPLAY_FLAG_STRETCH, &label_stretch);
 
+    # --- Graphics --------------------------------------------------------
+    settings_section_title(win, Y_TITLE_GPU, &title_gpu);
+    ui_text_at(win, X0, Y_GPU_NAME, &gpu_name_buf, C_TEXT, C_PANEL);
+    ui_text_at(win, X0, Y_GPU_ID,   &gpu_id_buf,   C_MUTED, C_PANEL);
+    ui_text_at(win, X0, Y_GPU_BAR,  &gpu_bar_buf,  C_MUTED, C_PANEL);
+
     # --- Memory ----------------------------------------------------------
-    ui_section_title(win, Y_TITLE_MEM, &title_memory);
-    ui_text_at(win, X0, Y_RAM, &label_ram, C_TEXT, C_PANEL);
+    settings_section_title(win, Y_TITLE_MEM, &title_memory);
+    # Build "Total RAM: <N> MB" from SYS_SYSINFO. The kernel returns total
+    # usable RAM in KB; round to nearest MB so a 4096 MB stick reads "4096"
+    # not "4095" once a few KB get shaved off by alignment.
+    let ram_kb = sys_ram_max_kb();
+    let ram_mb = (ram_kb + 512) / 1024;
+    let p = copy_cstr(&ram_label_buf, &label_ram_prefix);
+    p = put_uint(p, ram_mb);
+    p = copy_cstr(p, &label_ram_suffix);
+    sb(p, 0);
+    ui_text_at(win, X0, Y_RAM, &ram_label_buf, C_TEXT, C_PANEL);
 
     # --- Appearance ------------------------------------------------------
-    ui_section_title(win, Y_TITLE_BG, &title_bg_sec);
+    settings_section_title(win, Y_TITLE_BG, &title_bg_sec);
     ui_caption(win, X0, Y_CAP_BG, &label_bg);
     theme_button(win, ui_row_x(X0, BG_W, 0), Y_BG, SVG_BG_LIQUID_METAL, &bg_metal);
     theme_button(win, ui_row_x(X0, BG_W, 1), Y_BG, SVG_BG_GLASS_RIBBONS, &bg_ribbons);
     theme_button(win, ui_row_x(X0, BG_W, 2), Y_BG, SVG_BG_FROSTED_BLOOM, &bg_bloom);
+
+    # --- Framebuffer (debug) -------------------------------------------
+    # All values pulled live from fbperf via SYS_SYSINFO each draw. Cheap:
+    # each call is one MSR-free scalar read on the kernel side. Six lines so
+    # the user can see flip stats, the FB's actual page caching, and the
+    # WC arm/activate state without leaving the OS. The "Dump to serial"
+    # button below fires the full [FBPERF] block over COM1 for offline
+    # analysis (much more detail than the on-screen lines).
+    settings_section_title(win, Y_TITLE_FB, &title_fb_dbg);
+
+    # Line 1: "flips total/full/rect: A/B/C"
+    let p = copy_cstr(&fb_line1_buf, &fb_lbl_flips);
+    p = put_uint(p, fbperf_get(FB_SI_FLIPS_TOTAL));
+    sb(p, 47); p = p + 1;
+    p = put_uint(p, fbperf_get(FB_SI_FULL_FLIPS));
+    sb(p, 47); p = p + 1;
+    p = put_uint(p, fbperf_get(FB_SI_RECT_FLIPS));
+    sb(p, 0);
+    ui_text_at(win, X0, Y_FB_LINE1, &fb_line1_buf, C_TEXT, C_PANEL);
+
+    # Line 2: "tsc last/min/max: A/B/C"
+    p = copy_cstr(&fb_line2_buf, &fb_lbl_tsc);
+    p = put_uint(p, fbperf_get(FB_SI_TSC_LAST));
+    sb(p, 47); p = p + 1;
+    p = put_uint(p, fbperf_get(FB_SI_TSC_MIN));
+    sb(p, 47); p = p + 1;
+    p = put_uint(p, fbperf_get(FB_SI_TSC_MAX));
+    sb(p, 0);
+    ui_text_at(win, X0, Y_FB_LINE2, &fb_line2_buf, C_MUTED, C_PANEL);
+
+    # Line 3: "bytes total: N (lo only — hi via serial dump)"
+    p = copy_cstr(&fb_line3_buf, &fb_lbl_bytes);
+    p = put_uint(p, fbperf_get(FB_SI_BYTES_LO));
+    sb(p, 0);
+    ui_text_at(win, X0, Y_FB_LINE3, &fb_line3_buf, C_MUTED, C_PANEL);
+
+    # Line 4: "PAT: <hex32>"
+    p = copy_cstr(&fb_line4_buf, &fb_lbl_pat);
+    p = put_hex32(p, fbperf_get(FB_SI_PAT_HI));
+    p = put_hex32(p, fbperf_get(FB_SI_PAT_LO));
+    sb(p, 0);
+    ui_text_at(win, X0, Y_FB_LINE4, &fb_line4_buf, C_MUTED, C_PANEL);
+
+    # Line 5: "fb leaf lvl/cache/mtrr#: L/C/M"
+    p = copy_cstr(&fb_line5_buf, &fb_lbl_leaf);
+    p = put_uint(p, fbperf_get(FB_SI_PTE_LEVEL));
+    sb(p, 47); p = p + 1;
+    p = put_uint(p, fbperf_get(FB_SI_CACHING_TYPE));
+    sb(p, 47); p = p + 1;
+    p = put_uint(p, fbperf_get(FB_SI_MTRR_COUNT));
+    sb(p, 0);
+    ui_text_at(win, X0, Y_FB_LINE5, &fb_line5_buf, C_MUTED, C_PANEL);
+
+    # Line 6: "WC armed/activated/init: A/B/I"
+    p = copy_cstr(&fb_line6_buf, &fb_lbl_wc);
+    p = put_uint(p, fbperf_get(FB_SI_WC_ARMED));
+    sb(p, 47); p = p + 1;
+    p = put_uint(p, fbperf_get(FB_SI_WC_ACTIVATED));
+    sb(p, 47); p = p + 1;
+    p = put_uint(p, fbperf_get(FB_SI_INIT_DONE));
+    sb(p, 0);
+    ui_text_at(win, X0, Y_FB_LINE6, &fb_line6_buf, C_MUTED, C_PANEL);
+
+    action_button(win, X0, Y_FB_DUMP_BTN, FB_DUMP_W, &btn_dump_ser, 0);
 
     if lw(&settings_last_mode_result) < 0 {
         ui_status_bar(win, &mode_failed, UI_COL_ERROR);
@@ -247,7 +501,7 @@ fn click(win, x, y) {
     # Use-Native button
     if y >= Y_NATIVE_BTN {
         if y < Y_NATIVE_BTN + UI_BUTTON_H {
-            if ui_button_hit(x, y, X0, Y_NATIVE_BTN, NATIVE_BTN_W) != 0 {
+            if ui_button_hit(x, y, native_button_x(win), Y_NATIVE_BTN, NATIVE_BTN_W) != 0 {
                 set_mode(display_native_width(), display_native_height());
                 return;
             }
@@ -272,7 +526,7 @@ fn click(win, x, y) {
         }
     }
 
-    # Toggle row (three checkboxes)
+    # Toggle rows
     if y >= Y_TOGGLES {
         if y < Y_TOGGLES + UI_CHECK_SIZE {
             let flags = sync_flags();
@@ -292,8 +546,14 @@ fn click(win, x, y) {
                     return;
                 }
             }
-            if x >= X0 + TOGGLE_COL_W * 2 {
-                if x < X0 + TOGGLE_COL_W * 2 + UI_CHECK_SIZE {
+        }
+    }
+
+    if y >= Y_TOGGLES_2 {
+        if y < Y_TOGGLES_2 + UI_CHECK_SIZE {
+            let flags = sync_flags();
+            if x >= X0 {
+                if x < X0 + UI_CHECK_SIZE {
                     flags = flags ^ DISPLAY_FLAG_STRETCH;
                     display_set_flags(flags);
                     sw(&settings_flags, flags);
@@ -306,19 +566,37 @@ fn click(win, x, y) {
     # Appearance row
     if y >= Y_BG {
         if y < Y_BG + UI_BUTTON_H {
+            if svg_desktop_background_busy() != 0 {
+                return;
+            }
             if ui_button_hit(x, y, ui_row_x(X0, BG_W, 0), Y_BG, BG_W) != 0 {
-                svg_set_desktop_background(SVG_BG_LIQUID_METAL);
-                sw(&settings_bg_cache, SVG_BG_LIQUID_METAL);
+                if svg_set_desktop_background(SVG_BG_LIQUID_METAL) == 0 {
+                    sw(&settings_bg_cache, SVG_BG_LIQUID_METAL);
+                }
                 return;
             }
             if ui_button_hit(x, y, ui_row_x(X0, BG_W, 1), Y_BG, BG_W) != 0 {
-                svg_set_desktop_background(SVG_BG_GLASS_RIBBONS);
-                sw(&settings_bg_cache, SVG_BG_GLASS_RIBBONS);
+                if svg_set_desktop_background(SVG_BG_GLASS_RIBBONS) == 0 {
+                    sw(&settings_bg_cache, SVG_BG_GLASS_RIBBONS);
+                }
                 return;
             }
             if ui_button_hit(x, y, ui_row_x(X0, BG_W, 2), Y_BG, BG_W) != 0 {
-                svg_set_desktop_background(SVG_BG_FROSTED_BLOOM);
-                sw(&settings_bg_cache, SVG_BG_FROSTED_BLOOM);
+                if svg_set_desktop_background(SVG_BG_FROSTED_BLOOM) == 0 {
+                    sw(&settings_bg_cache, SVG_BG_FROSTED_BLOOM);
+                }
+                return;
+            }
+        }
+    }
+
+    # Dump-to-serial button. One press emits the full [FBPERF] block over
+    # COM1 — captured by the standard serial.log redirect in QEMU and by
+    # the EFI klog->ESP flush path on real hardware.
+    if y >= Y_FB_DUMP_BTN {
+        if y < Y_FB_DUMP_BTN + UI_BUTTON_H {
+            if ui_button_hit(x, y, X0, Y_FB_DUMP_BTN, FB_DUMP_W) != 0 {
+                fbperf_get(FB_SI_DUMP_SERIAL);
                 return;
             }
         }

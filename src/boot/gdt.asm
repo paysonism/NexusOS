@@ -3,6 +3,12 @@
 ; Three stages: 16-bit temp, 32-bit PM, 64-bit LM
 ; ============================================================================
 
+%ifndef STAGE2_BUILD
+%include "constants.inc"
+%else
+SMP_MAX_CORES equ 1
+%endif
+
 ; --- 32-bit Protected Mode GDT (temporary, for transition) ---
 align 16
 gdt32_start:
@@ -82,7 +88,10 @@ gdt64_user_code64:
     db 0x00
 
 gdt64_tss:
-    ; 64-bit TSS descriptor (16 bytes, Selector 0x30/0x38)
+    ; 64-bit TSS descriptor for the BSP (Selector 0x30).
+    ; Each subsequent AP gets its own TSS descriptor below; the per-core
+    ; selector is 0x30 + core_idx * 16. tss.asm's tss_init_for_core walks
+    ; this table and patches the per-core TSS base in at runtime.
     dw 103                  ; Limit (104 bytes - 1)
     dw 0                    ; Base low (filled at runtime)
     db 0                    ; Base mid 1
@@ -90,6 +99,11 @@ gdt64_tss:
     db 0                    ; Flags + Limit High
     db 0                    ; Base mid 2
     dq 0                    ; Base high (remaining 32 bits + reserved)
+
+gdt64_tss_ap:
+    ; (SMP_MAX_CORES - 1) additional TSS slots, one per AP. Each is a 16-byte
+    ; descriptor; bases stay zero until tss_init_for_core(idx) fills them in.
+    times ((SMP_MAX_CORES - 1) * 2) dq 0
 
 gdt64_end:
 

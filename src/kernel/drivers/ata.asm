@@ -7,6 +7,8 @@ bits 64
 %include "constants.inc"
 
 extern tick_count
+extern ramdisk_intercept_read
+extern ramdisk_intercept_write
 
 section .text
 
@@ -41,6 +43,23 @@ ATA_SR_ERR      equ 0x01
 ; Returns: eax = 0 on success, -1 on error
 ; ============================================================================
 ata_read_sectors:
+    ; RAM-disk fast path. If a ramdisk region covers this LBA range, the
+    ; entire request is served from memory and we never touch the IDE
+    ; ports. This is what makes the kernel work on real hardware that
+    ; lacks a legacy IDE controller (NVMe-only laptops, USB-boot).
+    ; eax: 1=handled, 0=outside region (fall through), -1=partial overlap.
+    call ramdisk_intercept_read
+    test eax, eax
+    jz .ata_pio_read
+    cmp eax, 1
+    je .read_ramdisk_ok
+    mov eax, -1                 ; partial overlap is a kernel bug
+    ret
+.read_ramdisk_ok:
+    xor eax, eax
+    ret
+
+.ata_pio_read:
     push rbx
     push rcx
     push rdx
@@ -131,6 +150,21 @@ ata_read_sectors:
 ; Returns: eax = 0 on success, -1 on error
 ; ============================================================================
 ata_write_sectors:
+    ; RAM-disk fast path. See ata_read_sectors for rationale. Writes are
+    ; not propagated back to DATA.IMG on disk - they live for the boot
+    ; session only, matching QEMU without -snapshot=off.
+    call ramdisk_intercept_write
+    test eax, eax
+    jz .ata_pio_write
+    cmp eax, 1
+    je .write_ramdisk_ok
+    mov eax, -1
+    ret
+.write_ramdisk_ok:
+    xor eax, eax
+    ret
+
+.ata_pio_write:
     push rbx
     push rcx
     push rdx

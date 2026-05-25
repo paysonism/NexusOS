@@ -25,6 +25,12 @@ global desktop_bg_theme
 global wallpaper_selected
 global wallpaper_cache_valid
 global wallpaper_cache_active_addr
+global wallpaper_render_active
+global wallpaper_cache_presented
+global wallpaper_render_target_addr
+global wallpaper_render_w
+global wallpaper_render_h
+global wm_poll_wallpaper_render
 
 ; Plain desktop fill colour used until a wallpaper is selected (0x00RRGGBB).
 DESKTOP_SOLID_COLOR equ 0x00202632
@@ -43,6 +49,15 @@ extern scr_pitch_q
 extern memcpy
 extern cursor_mode
 extern call_app_l3
+extern dispatch_app_callback           ; Stage 2d cross-core chokepoint
+extern call_app_l3_packed
+extern process_submit_job
+extern workqueue_done
+extern workqueue_reap
+extern wq_lock
+extern wq_unlock
+extern app_callback_lock
+extern raster_select_default_target
 extern ser_print_hex64
 extern process_kill_window
 extern process_create
@@ -50,8 +65,10 @@ extern l3_slot_base
 extern desktop_draw_icons
 extern nx_icon_close_16
 extern app_hl_wallpaper_draw
+extern app_media_draw
 extern scr_width
 extern scr_height
+extern scene_dirty
 
 FN_BEGIN wm_init, 0, 0, FN_RET_VOID
     push rbx
@@ -85,6 +102,14 @@ FN_BEGIN wm_init, 0, 0, FN_RET_VOID
     xor edi, edi
     call l3_slot_base
     mov [rbx + WIN_OFF_APPDATA], rax
+
+    ; Give the hidden wallpaper renderer a PCB so expensive SVG callbacks can
+    ; be pinned to an AP home_core instead of falling back to the BSP.
+    lea rdi, [rel app_hl_wallpaper_draw]
+    xor esi, esi
+    xor edx, edx
+    call process_create
+    mov [wallpaper_process_id], eax
 
     pop rbx
     FN_END wm_init
@@ -318,6 +343,8 @@ FN_BEGIN wm_draw_desktop, 0, 0, FN_RET_VOID
 
     ; 1. Desktop background
     call wm_draw_desktop_background
+    cmp byte [wallpaper_render_active], 0
+    jne .draw_done
 
     ; 1b. Desktop icons (between background and windows so apps cover them)
     call desktop_draw_icons
@@ -409,6 +436,7 @@ FN_BEGIN wm_draw_desktop_background, 0, 0, FN_RET_VOID
     jne .render
     mov rdi, r15
     call wm_bg_restore_cache
+    mov byte [wallpaper_cache_presented], 1
     jmp .done
 
 .theme_zero:
@@ -421,8 +449,11 @@ FN_BEGIN wm_draw_desktop_background, 0, 0, FN_RET_VOID
     mov byte [wallpaper_cache_valid_by_theme + 0], 0
     mov byte [wallpaper_cache_valid_by_theme + 1], 0
     mov byte [wallpaper_cache_valid_by_theme + 2], 0
+    mov byte [wallpaper_cache_presented], 0
 
 .render:
+    cmp byte [wallpaper_render_state], 1
+    je .poll_render
     ; Refresh slot 0's shadow window to the current resolution before invoking
     ; the renderer -- wallpaper.nxh reads display_current_width/height through
     ; syscalls so this is only defense in depth.
@@ -432,21 +463,56 @@ FN_BEGIN wm_draw_desktop_background, 0, 0, FN_RET_VOID
     mov eax, [scr_height]
     mov [rbx + WIN_OFF_H], rax
 
-    lea rdi, [rel app_hl_wallpaper_draw]
-    mov rsi, rbx                       ; arg0: window ptr (slot 0)
-    xor edx, edx                       ; arg1
-    xor ecx, ecx                       ; arg2
-    call call_app_l3
-
-    mov rdi, r15
-    call wm_bg_save_cache
-
     mov eax, [scr_width]
-    mov [wallpaper_cache_w], eax
+    mov [wallpaper_render_w], eax
     mov eax, [scr_height]
-    mov [wallpaper_cache_h], eax
-    mov byte [wallpaper_cache_valid_by_theme + r12], 1
-    mov byte [wallpaper_cache_valid], 1
+    mov [wallpaper_render_h], eax
+    mov [wallpaper_render_theme], r12d
+    mov [wallpaper_render_target_addr], r15
+    mov byte [wallpaper_cache_presented], 0
+
+    lea rax, [rel app_hl_wallpaper_draw]
+    mov [wallpaper_render_pack + 0], rax
+    mov [wallpaper_render_pack + 8], rbx
+    mov qword [wallpaper_render_pack + 16], 0
+    mov qword [wallpaper_render_pack + 24], 0
+
+    mov byte [wallpaper_render_active], 1
+    mov edi, [wallpaper_process_id]
+    test edi, edi
+    jle .render_unavailable
+    lea rsi, [rel wallpaper_render_job]
+    xor edx, edx
+    xor r8d, r8d                       ; low priority background work
+    call process_submit_job
+    cmp eax, -1
+    je .render_unavailable
+    mov [wallpaper_render_handle], eax
+    mov byte [wallpaper_render_state], 1
+    mov byte [scene_dirty], 1
+    jmp .done
+
+.poll_render:
+    call wm_poll_wallpaper_render
+    cmp byte [wallpaper_render_state], 1
+    je .render_still_pending
+    cmp byte [wallpaper_cache_valid_by_theme + r12], 1
+    jne .render
+    cmp byte [wallpaper_cache_valid], 1
+    jne .render
+    mov rdi, r15
+    call wm_bg_restore_cache
+    mov byte [wallpaper_cache_presented], 1
+    jmp .done
+
+.render_still_pending:
+    mov byte [scene_dirty], 1
+    jmp .done
+
+.render_unavailable:
+    mov byte [wallpaper_render_active], 0
+    mov byte [wallpaper_cache_presented], 1
+    call wm_bg_fill_solid
 
 .done:
     pop r15
@@ -455,6 +521,62 @@ FN_BEGIN wm_draw_desktop_background, 0, 0, FN_RET_VOID
     pop r12
     pop rbx
     FN_END wm_draw_desktop_background
+    ret
+
+; Poll the background wallpaper job without waiting for it. This is called from
+; the BSP render loop so completed jobs are reaped without blocking core 0.
+FN_BEGIN wm_poll_wallpaper_render, 0, 0, FN_RET_VOID
+    cmp byte [wallpaper_render_state], 1
+    jne .poll_done
+    mov edi, [wallpaper_render_handle]
+    call workqueue_done
+    test eax, eax
+    jz .poll_done
+    mov edi, [wallpaper_render_handle]
+    call workqueue_reap
+    mov byte [wallpaper_render_state], 0
+    mov byte [scene_dirty], 1
+.poll_done:
+    FN_END wm_poll_wallpaper_render
+    ret
+
+; Runs on an AP through process_submit_job. It renders the wallpaper app into
+; the selected wallpaper cache. SVG raster syscalls select that cache as their
+; destination, so this job never mutates bb_addr and the BSP can keep using the
+; real backbuffer.
+wallpaper_render_job:
+    push rbx
+    push r12
+    push r13
+
+    lea rdi, [rel app_callback_lock]
+    call wq_lock
+
+    lea rdi, [rel wallpaper_render_pack]
+    call call_app_l3_packed
+
+    call raster_select_default_target
+
+    mov eax, [wallpaper_render_w]
+    mov [wallpaper_cache_w], eax
+    mov eax, [wallpaper_render_h]
+    mov [wallpaper_cache_h], eax
+    mov eax, [wallpaper_render_theme]
+    cmp eax, 2
+    ja .skip_theme_valid
+    mov byte [wallpaper_cache_valid_by_theme + rax], 1
+.skip_theme_valid:
+    mov byte [wallpaper_cache_valid], 1
+
+    lea rdi, [rel app_callback_lock]
+    call wq_unlock
+    mov byte [wallpaper_render_active], 0
+    mov byte [scene_dirty], 1
+    xor eax, eax
+
+    pop r13
+    pop r12
+    pop rbx
     ret
 
 wm_wallpaper_cache_addr:
@@ -781,11 +903,17 @@ FN_BEGIN wm_draw_window, 1, 0, FN_RET_VOID
     mov rax, [rbx + WIN_OFF_DRAWFN]
     test rax, rax
     jz .default_content
+    cmp rax, app_media_draw
+    jne .dispatch_user_draw
+    mov rdi, rbx
+    call app_media_draw
+    jmp .draw_done
+.dispatch_user_draw:
     mov rdi, rax
     mov rsi, rbx         ; arg0: window_ptr
     xor edx, edx         ; arg1
     xor ecx, ecx         ; arg2
-    call call_app_l3
+    call dispatch_app_callback
 .draw_done:
     jmp .content_done
 
@@ -833,6 +961,16 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     cmp qword [wm_app_drag_window_id], -1
     jne .app_drag_active
 
+    ; Right-button down is a separate app callback, fired only on the press
+    ; edge. This lets apps own context menus instead of using a global "Open"
+    ; menu that cannot know the app's local state.
+    test r14, 2
+    jz .need_left_button
+    test qword [wm_last_buttons], 2
+    jnz .mouse_done
+    jmp .right_click
+
+.need_left_button:
     ; Need left button down to start anything
     test r14, 1
     jz .mouse_done
@@ -984,7 +1122,7 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     sub rcx, TITLEBAR_HEIGHT  ; client_y (relY)
     mov rdi, r11              ; target
     mov rsi, rax              ; arg0: window ptr
-    call call_app_l3
+    call dispatch_app_callback
     SER 'n'
 .click_done:
     ; A client click can launch or focus another window. Keep that new focus
@@ -1000,6 +1138,41 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
 
 .client_click_already_down:
     mov r15d, 1
+
+.right_click:
+    ; Find window under cursor
+    mov rdi, r12
+    mov rsi, r13
+    call wm_get_window_at
+    cmp rax, -1
+    je .mouse_done
+
+    mov rbx, rax
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+
+    ; Only client-area right clicks go to apps; titlebar/chrome stays owned by
+    ; the WM and does not open a global fallback menu.
+    mov r8, [rax + WIN_OFF_Y]
+    mov r9, r13
+    sub r9, r8
+    cmp r9, TITLEBAR_HEIGHT
+    jle .mouse_done
+
+    mov r11, [rax + WIN_OFF_RCLICKFN]
+    test r11, r11
+    jz .mouse_done
+    mov rdx, r12
+    sub rdx, [rax + WIN_OFF_X]
+    sub rdx, BORDER_WIDTH
+    mov rcx, r13
+    sub rcx, [rax + WIN_OFF_Y]
+    sub rcx, TITLEBAR_HEIGHT
+    mov rdi, r11
+    mov rsi, rax
+    call dispatch_app_callback
+    mov eax, 1
+    jmp .mouse_ret
 
 .set_focus:
     mov rcx, WINDOW_POOL_ADDR
@@ -1158,7 +1331,7 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     mov [wm_app_drag_last_y], rcx
     mov rdi, r11                ; target = drag_fn
     mov rsi, rax                ; arg0 = window ptr
-    call call_app_l3
+    call dispatch_app_callback
 
 .app_drag_handled:
     mov eax, 1
@@ -1391,11 +1564,23 @@ desktop_bg_theme  db 0
 ; theme in Settings; only then is a wallpaper rendered.
 wallpaper_selected db 0
 wallpaper_cache_valid db 0
+wallpaper_cache_presented db 0
 wallpaper_cache_valid_by_theme db 0, 0, 0
 align 8
 wallpaper_cache_active_addr dq WALLPAPER_CACHE0_ADDR
 align 4
 wallpaper_cache_w dd 0
 wallpaper_cache_h dd 0
+wallpaper_process_id dd -1
+wallpaper_render_state db 0
+wallpaper_render_active db 0
+times 2 db 0
+wallpaper_render_handle dd -1
+wallpaper_render_theme dd 0
+wallpaper_render_w dd 0
+wallpaper_render_h dd 0
+wallpaper_render_target_addr dq WALLPAPER_CACHE0_ADDR
+align 64
+wallpaper_render_pack times 32 db 0
 
 section .text

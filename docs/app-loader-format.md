@@ -40,9 +40,15 @@ Offset `0x1C`
 - Key callback RVA (`u32`, optional, `0` if none)
 
 Offset `0x20`
-- Requested stack size (`u32`)
+- Right-click callback RVA (`u32`, optional, `0` if none)
 
 Offset `0x24`
+- Drag callback RVA (`u32`, optional, `0` if none)
+
+Offset `0x28`
+- Requested stack size (`u32`)
+
+Offset `0x2C`
 - Reserved
 
 ## Loader rules
@@ -65,6 +71,10 @@ The callback names used today are the contract future HLL output should target:
   Input: `RDI = shadow window pointer`, `RSI = mouse x`, `RDX = mouse y`
 - `key`
   Input: `RDI = shadow window pointer`, `RSI = key value`
+- `right_click`
+  Input: `RDI = shadow window pointer`, `RSI = mouse x`, `RDX = mouse y`
+- `drag`
+  Input: `RDI = shadow window pointer`, `RSI = mouse x`, `RDX = mouse y`
 
 Callbacks return with `ret`. If an app deliberately exits through the
 trampoline, it uses `SYS_APP_DONE`.

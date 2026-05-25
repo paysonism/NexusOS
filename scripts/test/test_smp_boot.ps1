@@ -3,8 +3,13 @@ $ErrorActionPreference = 'Stop'
 $Root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $LogPath = Join-Path $Root 'build\cache32_serial.log'
 
+Remove-Item -Path $LogPath -Force -ErrorAction SilentlyContinue
+powershell -ExecutionPolicy Bypass -File (Join-Path $Root 'scripts\test\test_cache32_boot.ps1')
+if ($LASTEXITCODE -ne 0) {
+    throw "Cache32Max boot log refresh failed with exit code $LASTEXITCODE."
+}
 if (-not (Test-Path $LogPath)) {
-    powershell -ExecutionPolicy Bypass -File (Join-Path $Root 'scripts\test\test_cache32_boot.ps1')
+    throw 'Cache32Max boot log refresh did not create cache32_serial.log.'
 }
 
 $serial = Get-Content -Path $LogPath -Raw

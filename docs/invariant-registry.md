@@ -7,10 +7,10 @@ layout, syscall numbers, callback entry, or process ownership.
 
 | Name | Value | Owner | Rule |
 |---|---:|---|---|
-| `APP_DATA_ADDR` | `0x1800000` | `constants.inc`, paging, L3 | User-mapped app arena start. |
-| `APP_SLOT_SIZE` | `0x100000` | L3, window manager | One private arena per window/process slot. |
-| `L3_SYSCALL_STACK_ADDR` | `0x2100000` | L3 syscall path | Kernel-only syscall stack arena. |
-| `MAX_WINDOWS` | `8` | GUI, L3, process table | Upper bound for app slots and windows. |
+| `APP_DATA_ADDR` | `0x2600000` | `boot_memory.inc`, paging, L3 | User-mapped app arena start. |
+| `APP_SLOT_SIZE` | `0x200000` | L3, window manager | One private arena per window/process slot. |
+| `L3_SYSCALL_STACK_ADDR` | `APPS_BLOB_ADDR + APPS_BLOB_MAX_SIZE` | L3 syscall path | Kernel-only syscall stack arena. |
+| `MAX_WINDOWS` | `12` | GUI, L3, process table | Upper bound for window/app slots. Slot 0 is reserved, leaving 11 open app windows. |
 | `L3_USER_STACK_SIZE` | `16384` | L3 callback path | Per-slot ring-3 callback stack. |
 | `L3_SYSCALL_STACK_SIZE` | `4096` | syscall path | Per-slot kernel syscall stack. |
 

@@ -27,6 +27,8 @@ section .text
 section .text
 %include "src/kernel/core/main.asm"
 section .text
+%include "src/kernel/core/klog.asm"
+section .text
 %include "src/kernel/core/idt.asm"
 section .text
 %include "src/kernel/core/isr.asm"
@@ -55,6 +57,24 @@ section .text
 section .text
 %include "src/kernel/proc/workqueue.asm"
 
+; --- Network stack ---
+section .text
+%include "src/kernel/net/eth.asm"
+section .text
+%include "src/kernel/net/ip.asm"
+section .text
+%include "src/kernel/net/arp.asm"
+section .text
+%include "src/kernel/net/dhcp.asm"
+section .text
+%include "src/kernel/net/udp.asm"
+section .text
+%include "src/kernel/net/dns.asm"
+section .text
+%include "src/kernel/net/icmp.asm"
+section .text
+%include "src/kernel/net/tcp.asm"
+
 ; --- ACPI & APIC Core ---
 section .text
 %include "src/kernel/arch/rsdp.asm"
@@ -77,17 +97,33 @@ section .text
 section .text
 %include "src/kernel/drivers/display.asm"
 section .text
+%include "src/kernel/drivers/fbperf.asm"
+section .text
 %include "src/kernel/drivers/keyboard.asm"
 section .text
 %include "src/kernel/drivers/mouse.asm"
+section .text
+%include "src/kernel/drivers/ramdisk.asm"
 section .text
 %include "src/kernel/drivers/ata.asm"
 section .text
 %include "src/kernel/drivers/pci.asm"
 section .text
+%include "src/kernel/drivers/amd_display.asm"
+section .text
+%include "src/kernel/drivers/amd_dcn.asm"
+section .text
+%include "src/kernel/drivers/rtl8139.asm"
+section .text
 %include "src/kernel/drivers/xhci.asm"
 section .text
 %include "src/kernel/drivers/usb_hid.asm"
+section .text
+%include "src/kernel/drivers/rtl8156.asm"
+section .text
+%include "src/kernel/net/nic.asm"
+section .text
+%include "src/kernel/drivers/driver_debug.asm"
 section .text
 %include "src/kernel/drivers/spi.asm"
 section .text

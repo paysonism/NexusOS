@@ -18,6 +18,10 @@ fn svg_set_desktop_background(svg_id) {
     return desktop_set_bg(svg_id);
 }
 
+fn svg_desktop_background_busy() {
+    return desktop_bg_busy();
+}
+
 # --- Raster primitives ---
 # Each draws into the back buffer; caller is responsible for display_flip.
 

@@ -10,8 +10,125 @@ extern pci_read_conf_dword
 extern pci_write_conf_dword
 extern tick_count
 extern debug_print
+extern usb_hid_port_owned
 
 section .text
+
+; --- DEBUG: append a new xhci_init log entry derived from xhci_pci_addr ---
+xhci_dbg_initlog_new:
+    push rax
+    push rbx
+    push rdx
+    movzx ebx, byte [xhci_initlog_n]
+    cmp ebx, 8
+    jae .d
+    mov eax, ebx
+    shl eax, 2
+    lea rbx, [xhci_initlog]
+    add rbx, rax
+    mov eax, [xhci_pci_addr]
+    mov edx, eax
+    shr edx, 16
+    and edx, 0xFF
+    mov [rbx + 0], dl                ; bus
+    mov edx, eax
+    shr edx, 11
+    and edx, 0x1F
+    mov [rbx + 1], dl                ; dev
+    mov edx, eax
+    shr edx, 8
+    and edx, 0x07
+    mov [rbx + 2], dl                ; fn
+    mov byte [rbx + 3], 1            ; stage = pciFound
+    mov [xhci_initlog_cur], rbx
+    inc byte [xhci_initlog_n]
+.d:
+    pop rdx
+    pop rbx
+    pop rax
+    ret
+
+; --- DEBUG: set stage byte of current log entry (AL = stage) ---
+xhci_dbg_initlog_stage:
+    push rbx
+    mov rbx, [xhci_initlog_cur]
+    test rbx, rbx
+    jz .d
+    mov [rbx + 3], al
+.d:
+    pop rbx
+    ret
+
+; --- DEBUG: snapshot what xhci_find_port sees (op base, ports, PORTSC map) ---
+xhci_dbg_fp_snapshot:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    mov qword [xhci_dbg_fp_cur], 0
+    ; Rotating buffer: keep the LAST 4 calls (slot = call# mod 4) so retries
+    ; overwrite stale boot-time records instead of being dropped.
+    movzx ecx, byte [xhci_dbg_fp_n]
+    mov eax, ecx
+    and eax, 3
+    shl eax, 4
+    lea rdi, [xhci_dbg_fp]
+    add rdi, rax
+    mov [xhci_dbg_fp_cur], rdi
+    mov rax, [xhci_op_base]
+    mov [rdi + 0], eax
+    movzx edx, byte [xhci_max_ports]
+    mov [rdi + 4], dl
+    mov byte [rdi + 5], 0xFF          ; result pending
+    mov rsi, [xhci_op_base]
+    add rsi, 0x400
+    xor ebx, ebx
+.loop:
+    cmp ebx, 10
+    jge .done_inc
+    cmp ebx, edx
+    jge .pad
+    mov eax, ebx
+    shl eax, 4
+    mov eax, [rsi + rax]              ; PORTSC
+    xor r8d, r8d
+    test eax, XHCI_PORTSC_CCS
+    jz .store
+    mov r8d, eax
+    shr r8d, XHCI_PORTSC_SPEED_SHIFT
+    and r8d, 0x0F
+    jmp .store
+.pad:
+    xor r8d, r8d
+.store:
+    mov [rdi + rbx + 6], r8b
+    inc ebx
+    jmp .loop
+.done_inc:
+    inc byte [xhci_dbg_fp_n]
+.done:
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; --- DEBUG: record xhci_find_port result (AL = 0/1) ---
+xhci_dbg_fp_result:
+    push rbx
+    mov rbx, [xhci_dbg_fp_cur]
+    test rbx, rbx
+    jz .d
+    mov [rbx + 5], al
+.d:
+    pop rbx
+    ret
 
 ; ============================================================================
 ; xhci_init - Find and initialize XHCI controller
@@ -29,7 +146,7 @@ xhci_init:
     push r13
     push r14
     push r15
-    
+
     mov rsi, szXhciStart
     call debug_print
 
@@ -48,7 +165,8 @@ xhci_init:
     call xhci_pci_find
     test eax, eax
     jz .fail
-    
+    call xhci_dbg_initlog_new
+
     mov rsi, szXhciFound
     call debug_print
 
@@ -59,9 +177,13 @@ xhci_init:
 
     ; --- Read capability registers ---
     call xhci_read_caps
+    mov al, 2
+    call xhci_dbg_initlog_stage
 
     ; --- Take ownership from BIOS ---
     call xhci_take_ownership
+    mov al, 3
+    call xhci_dbg_initlog_stage
 
     ; Serial: '2' (ownership taken)
     mov dx, 0x3F8
@@ -72,6 +194,8 @@ xhci_init:
     call xhci_reset
     test eax, eax
     jz .fail
+    mov al, 4
+    call xhci_dbg_initlog_stage
 
     ; Serial: 'S' (setup start)
     mov dx, 0x3F8
@@ -83,6 +207,8 @@ xhci_init:
     call xhci_setup_dcbaa
     call xhci_setup_cmd_ring
     call xhci_setup_event_ring
+    mov al, 5
+    call xhci_dbg_initlog_stage
 
     ; Serial: 'R' (rings set up)
     mov dx, 0x3F8
@@ -105,8 +231,20 @@ xhci_init:
     xor eax, eax
     mov [rsi + XHCI_OP_CRCR_HI], eax
 
-    ; Set MaxSlotsEn = 1
-    mov dword [rsi + XHCI_OP_CONFIG], 1
+    ; Set MaxSlotsEn = max(controller-supported, 16). One slot is not enough
+    ; when usb_hid_init brings up slot1 (mouse) + slot2 (kbd) AND rtl8156_init
+    ; tries to enable a third slot for the NIC. QEMU accepts oversize values
+    ; up to HCSPARAMS1.MaxSlots; clamp to 16 as a sane upper bound.
+    movzx eax, byte [xhci_max_slots]
+    test eax, eax
+    jnz .config_slots_set
+    mov eax, 16
+.config_slots_set:
+    cmp eax, 16
+    jbe .config_slots_write
+    mov eax, 16
+.config_slots_write:
+    mov dword [rsi + XHCI_OP_CONFIG], eax
 
     ; Serial: '3' (regs programmed)
     mov dx, 0x3F8
@@ -121,15 +259,11 @@ xhci_init:
     ; Wait for HCH = 0 (controller running) - up to 500ms
     mov rbx, [tick_count]
     add rbx, 50              ; 50 ticks = 500ms
-    mov ecx, 10000000        ; 10M spins fallback
 .wait_run:
     mov eax, [rsi + XHCI_OP_USBSTS]
     test eax, XHCI_STS_HCH
     jz .running
-    
-    dec ecx
-    jz .fail
-    
+
     mov rax, [tick_count]
     cmp rax, rbx
     jge .fail
@@ -142,8 +276,10 @@ xhci_init:
     mov al, '4'
     out dx, al
 
-    ; Controller is running. Return success. 
+    ; Controller is running. Return success.
     ; Port enumeration is now handled by the caller (usb_hid.asm)
+    mov al, 6
+    call xhci_dbg_initlog_stage
     mov byte [xhci_active], 1
     mov eax, 1
     jmp .ret
@@ -428,7 +564,9 @@ xhci_read_caps:
     and ecx, 0x1F                 ; Low 5 bits (bits 25-21)
     shl ebx, 5
     or ebx, ecx
-    mov [xhci_scratchpad_count], bl
+    and ebx, 0x3FF                ; 10-bit field per spec
+    mov [xhci_scratchpad_count], bx
+    mov [xhci_scratchpad_req], bx ; Raw uncapped count for debug
 
     ; HCCPARAMS1
     mov eax, [rsi + XHCI_CAP_HCCPARAMS1]
@@ -505,13 +643,10 @@ xhci_take_ownership:
     push rcx
     mov rdx, [tick_count]
     add rdx, 10              ; 10 ticks = 100ms
-    mov ecx, 2000000
 .wait_bios:
     mov eax, [rsi]
     test eax, (1 << 16)
     jz .own_done_pop
-    dec ecx
-    jz .bios_timeout
     mov rax, [tick_count]
     cmp rax, rdx
     jge .bios_timeout
@@ -560,13 +695,10 @@ xhci_reset:
     ; Wait for HCH = 1 (halted) - up to 100ms
     mov rbx, [tick_count]
     add rbx, 10              ; 10 PIT ticks = 100ms
-    mov ecx, 2000000
 .wait_halt:
     mov eax, [rsi + XHCI_OP_USBSTS]
     test eax, XHCI_STS_HCH
     jnz .halted
-    dec ecx
-    jz .reset_fail
     mov rax, [tick_count]
     cmp rax, rbx
     jge .reset_fail          ; Timeout
@@ -589,13 +721,10 @@ xhci_reset:
     ; Wait for HCRST to clear - up to 1 second
     mov rbx, [tick_count]
     add rbx, 100             ; 100 PIT ticks = 1 second
-    mov ecx, 20000000
 .wait_rst:
     mov eax, [rsi + XHCI_OP_USBCMD]
     test eax, XHCI_CMD_HCRST
     jz .rst_done
-    dec ecx
-    jz .reset_fail
     mov rax, [tick_count]
     cmp rax, rbx
     jge .reset_fail          ; Timeout
@@ -613,13 +742,10 @@ xhci_reset:
     ; Wait for CNR = 0 - up to 1 second
     mov rbx, [tick_count]
     add rbx, 100
-    mov ecx, 20000000
 .wait_cnr:
     mov eax, [rsi + XHCI_OP_USBSTS]
     test eax, XHCI_STS_CNR
     jz .reset_ok
-    dec ecx
-    jz .reset_fail
     mov rax, [tick_count]
     cmp rax, rbx
     jge .reset_fail
@@ -656,14 +782,21 @@ xhci_setup_scratchpad:
     push rcx
     push rdi
 
-    movzx ecx, byte [xhci_scratchpad_count]
+    movzx ecx, word [xhci_scratchpad_count]
     test ecx, ecx
     jz .scratch_done              ; No scratchpads needed
 
-    ; Cap at 4 (we have space for 4 buffer pages)
-    cmp ecx, 4
+    ; XHCI region 0x1740000..0x17F0000 = 0xB0000 (720 KB). First page holds
+    ; the pointer array (max 512 entries fits in 4 KB); buffers start at
+    ; +0x1000. That leaves 0xAF000/0x1000 = 175 4K-buffer slots. Cap at 64
+    ; — way above what any real controller asks for (typical: 8-32) and
+    ; far enough below the limit to be safe. Real AMD FCH/Promontory
+    ; report >4 here, and silently dropping them gives undefined DMA
+    ; targets on first device address — a likely "QEMU works, HW fails"
+    ; failure mode.
+    cmp ecx, 128
     jle .scratch_ok
-    mov ecx, 4
+    mov ecx, 128
 .scratch_ok:
 
     ; Scratchpad array at XHCI_SCRATCH_ADDR
@@ -841,16 +974,10 @@ xhci_submit_cmd:
     mov rax, [tick_count]
     add rax, 200                  ; 200 ticks = 2 seconds at 100Hz
     mov [xhci_cmd_deadline], rax  ; store deadline (not rbx - rbx is return value)
-    mov ecx, 40000000             ; ~20M iterations spin fallback
 .poll:
-    push rcx
     call xhci_poll_event
-    pop rcx
     test eax, eax
     jnz .got_event
-
-    dec ecx
-    jz .cmd_fail_spin
 
     mov rax, [tick_count]
     cmp rax, [xhci_cmd_deadline]
@@ -865,16 +992,6 @@ xhci_submit_cmd:
     pop rdx
     pop rax
     jmp .cmd_fail
-
-.cmd_fail_spin:
-    ; Spin counter timeout
-    push rax
-    push rdx
-    mov dx, 0x3F8
-    mov al, 'z'
-    out dx, al
-    pop rdx
-    pop rax
 
 .cmd_fail:
     ; Timeout
@@ -924,6 +1041,26 @@ global xhci_poll_event
 xhci_poll_event:
     push rsi
     push rdi
+
+    ; Serialize access to the event ring. NEXUS_ENABLE_RING3_AP can have CPU0
+    ; in rtl8156_rx_once polling for a DHCP OFFER while CPU N is in
+    ; usb_poll_mouse polling for HID reports — both call this function and
+    ; race on xhci_evt_dequeue. Without this lock, one CPU reads a TRB whose
+    ; cycle bit was JUST flipped by the other's dequeue advance, treats the
+    ; old contents as a fresh event, and dispatches off a stale slot/type →
+    ; observed as RIP=0 page fault during DHCP+mouse contention.
+.evt_lock_acquire:
+    mov eax, 1
+    xchg eax, [rel xhci_evt_lock]
+    test eax, eax
+    jnz .evt_lock_spin
+    jmp .evt_have_lock
+.evt_lock_spin:
+    pause
+    cmp dword [rel xhci_evt_lock], 0
+    jne .evt_lock_spin
+    jmp .evt_lock_acquire
+.evt_have_lock:
 
     mov edi, [xhci_evt_dequeue]
     mov rsi, XHCI_EVT_RING_ADDR
@@ -987,6 +1124,7 @@ xhci_poll_event:
     xor ecx, ecx
 
 .evt_ret:
+    mov dword [rel xhci_evt_lock], 0   ; release
     pop rdi
     pop rsi
     ret
@@ -1019,6 +1157,39 @@ xhci_find_port:
     pop rdx
     pop rax
 
+    ; --- Power on EVERY root port first. After HCRST the ports come up
+    ;     unpowered (PP=0); while PP=0 the CCS bit reads 0, so a scan would
+    ;     see an empty controller even with a device attached. Set PP on all
+    ;     ports, then wait for power-good + connect debounce before scanning.
+    xor edx, edx
+.pp_loop:
+    cmp edx, ecx
+    jge .pp_done
+    mov eax, edx
+    shl eax, 4
+    mov ebx, [rsi + rax]
+    test ebx, XHCI_PORTSC_PP
+    jnz .pp_next
+    and ebx, ~XHCI_PORTSC_CHANGE_BITS
+    or  ebx, XHCI_PORTSC_PP
+    mov [rsi + rax], ebx
+.pp_next:
+    inc edx
+    jmp .pp_loop
+.pp_done:
+    ; ~200ms settle: power-good ramp + root-hub connect debounce
+    mov rbx, [tick_count]
+    add rbx, 20
+.pp_wait:
+    mov rax, [tick_count]
+    cmp rax, rbx
+    jge .pp_settled
+    pause
+    jmp .pp_wait
+.pp_settled:
+    call xhci_dbg_fp_snapshot     ; DEBUG: record what the scan will see
+    xor edx, edx                  ; restart index for the CCS scan
+
 .port_loop:
     cmp edx, ecx
     jge .no_port
@@ -1039,8 +1210,38 @@ xhci_find_port:
 
     ; Check CCS (Current Connect Status)
     test ebx, XHCI_PORTSC_CCS
-    jnz .found_port
+    jz .fp_next
 
+    ; Skip ports already owned by an active HID slot — resetting them here
+    ; would detach the mouse/keyboard from its addressed slot.
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    lea edi, [edx + 1]
+    call usb_hid_port_owned
+    mov r11d, eax
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    test r11d, r11d
+    jnz .fp_next
+
+    ; Also skip the rtl8156 NIC's port — re-addressing it would conflict
+    ; with the active NIC slot. Without this, usb_hid_init re-running after
+    ; rtl8156_selftest re-grabs port 1 (the NIC) and never reaches the mouse.
+    extern rtl8156_active, rtl8156_port
+    cmp byte [rtl8156_active], 1
+    jne .not_nic_port
+    movzx eax, byte [rtl8156_port]
+    lea r11d, [edx + 1]
+    cmp eax, r11d
+    je .fp_next
+.not_nic_port:
+
+    jmp .found_port
+.fp_next:
     inc edx
     jmp .port_loop
 
@@ -1083,13 +1284,11 @@ xhci_find_port:
     push rcx
     mov rdx, [tick_count]
     add rdx, 3                    ; 3 ticks = 30ms at 100Hz
-    mov ecx, 600000
 .power_wait:
     mov rax, [tick_count]
     cmp rax, rdx
     jge .pwdone
-    dec ecx
-    jz .pwdone
+    pause
     jmp .power_wait
 .pwdone:
     pop rcx
@@ -1102,14 +1301,17 @@ xhci_find_port:
     dec edx
     shl rdx, 4
     mov eax, [rsi + rdx + XHCI_PORTSC]
+    mov [xhci_dbg_portsc_pre], eax    ; DEBUG: PORTSC before reset
+    movzx ecx, byte [xhci_port_speed]
+    mov [xhci_dbg_speed_pre], cl       ; DEBUG: speed before reset
+    mov byte [xhci_dbg_rststage], 40   ; DEBUG: about to issue reset
     and eax, ~XHCI_PORTSC_CHANGE_BITS  ; Preserve change bits
     and eax, ~XHCI_PORTSC_PED          ; Don't accidentally disable
-    
+
     ; USB 3.0+ (Speed 4+) might need Warm Reset
-    movzx ecx, byte [xhci_port_speed]
     cmp ecx, 4
     jge .do_warm_reset
-    
+
     ; Normal Reset
     or eax, XHCI_PORTSC_PR             ; Set Port Reset
     jmp .apply_reset
@@ -1120,35 +1322,58 @@ xhci_find_port:
     or eax, (1 << 31)                  ; XHCI_PORTSC_WPR
     
 .apply_reset:
+    mov [xhci_dbg_portsc_written], eax  ; DEBUG: exact value we are writing
     mov [rsi + rdx + XHCI_PORTSC], eax
+    mov byte [xhci_dbg_rststage], 41   ; DEBUG: reset bit written
+
+    ; DEBUG: read PORTSC back IMMEDIATELY to see if write took effect
+    mov eax, [rsi + rdx + XHCI_PORTSC]
+    mov [xhci_dbg_portsc_immed], eax
 
     ; Wait for reset complete: PRC or WRC. PIT-based deadline (60 ticks = 600ms)
     ; ensures real-hardware safety; CPU spin alone is too short on fast cores.
     push rbx
     mov rbx, [tick_count]
     add rbx, 60
-    mov ecx, 12000000
+    xor ecx, ecx                       ; poll iteration counter
 .wait_reset:
     mov eax, [rsi + rdx + XHCI_PORTSC]
+    inc ecx
     test eax, XHCI_PORTSC_PRC
     jnz .reset_done
     test eax, (1 << 19)                ; WRC bit
     jnz .reset_done
-    dec ecx
-    jz .reset_done
     mov rax, [tick_count]
     cmp rax, rbx
-    jge .reset_done                    ; timeout: proceed anyway
+    jl .wait_reset_cont
+    mov byte [xhci_dbg_rststage], 99   ; DEBUG: reset TIMED OUT
+    jmp .reset_done
+.wait_reset_cont:
     pause
     jmp .wait_reset
 .reset_done:
-    pop rbx
-
-    ; Clear PRC and WRC by writing 1 to them
+    mov [xhci_dbg_reset_polls], ecx    ; DEBUG: how many polls before exit
+    ; DEBUG: read PORTSC right after exit from wait loop
     mov eax, [rsi + rdx + XHCI_PORTSC]
-    and eax, ~XHCI_PORTSC_CHANGE_BITS
-    or eax, XHCI_PORTSC_PRC          ; Write 1 to clear
-    or eax, (1 << 19)                ; WRC
+    mov [xhci_dbg_portsc_wait], eax
+    pop rbx
+    cmp byte [xhci_dbg_rststage], 99
+    je .skip_rst_ok
+    mov byte [xhci_dbg_rststage], 42   ; DEBUG: PRC/WRC fired
+.skip_rst_ok:
+
+    ; Clear PRC and WRC by writing 1 to them.
+    ; CRITICAL: PED (bit 1) is RW1C "write 1 to DISABLE". If we read PORTSC
+    ; after a successful reset, PED is 1. If we write back with PED=1 set in
+    ; the value, we DISABLE the port we just enabled. Mask out PED (and all
+    ; other change bits we're not explicitly setting) to write a neutral
+    ; value with only PRC|WRC set, leaving PED alone.
+    ; (This is the xhci_port_state_to_neutral pattern from Linux.)
+    mov eax, [rsi + rdx + XHCI_PORTSC]
+    and eax, ~XHCI_PORTSC_CHANGE_BITS  ; don't accidentally clear other change bits
+    and eax, ~XHCI_PORTSC_PED           ; PED RW1C: write 0 = no-op, write 1 = disable
+    or eax, XHCI_PORTSC_PRC            ; Write 1 to clear PRC
+    or eax, (1 << 19)                  ; Write 1 to clear WRC
     mov [rsi + rdx + XHCI_PORTSC], eax
 
     ; Re-read speed after reset (may change)
@@ -1161,13 +1386,10 @@ xhci_find_port:
     push rbx
     mov rbx, [tick_count]
     add rbx, 2                         ; 2 ticks = 20ms (>= 10ms required)
-    mov ecx, 1000000
 .post_reset_wait:
     mov rax, [tick_count]
     cmp rax, rbx
     jge .post_reset_done
-    dec ecx
-    jz .post_reset_done
     pause
     jmp .post_reset_wait
 .post_reset_done:
@@ -1181,13 +1403,10 @@ xhci_find_port:
     push rbx
     mov rbx, [tick_count]
     add rbx, 50                        ; 50 ticks = 500ms
-    mov ecx, 10000000
 .wait_ped:
     mov eax, [rsi + rdx + XHCI_PORTSC]
     test eax, XHCI_PORTSC_PED
     jnz .ped_wait_done
-    dec ecx
-    jz .ped_wait_done
     mov rax, [tick_count]
     cmp rax, rbx
     jge .ped_wait_done
@@ -1201,6 +1420,18 @@ xhci_find_port:
     and eax, 0x0F
     mov [xhci_port_speed], al
 .ped_ok:
+    ; DEBUG: capture final PORTSC, speed, and PED/CCS flags
+    mov eax, [rsi + rdx + XHCI_PORTSC]
+    mov [xhci_dbg_portsc_post], eax
+    mov ecx, eax
+    and ecx, XHCI_PORTSC_PED
+    setnz [xhci_dbg_ped_ok]
+    mov ecx, eax
+    and ecx, XHCI_PORTSC_CCS
+    setnz [xhci_dbg_ccs_ok]
+    movzx ecx, byte [xhci_port_speed]
+    mov [xhci_dbg_speed_post], cl
+    mov byte [xhci_dbg_rststage], 43   ; DEBUG: reset path complete
 
     mov eax, 1
     jmp .port_ret
@@ -1208,6 +1439,7 @@ xhci_find_port:
 .no_port:
     xor eax, eax
 .port_ret:
+    call xhci_dbg_fp_result       ; DEBUG: record 0/1 result
     pop rbx
     pop rdx
     pop rcx
@@ -1242,8 +1474,30 @@ xhci_find_port_next:
     shl eax, 4
     mov ebx, [rsi + rax + XHCI_PORTSC]
     test ebx, XHCI_PORTSC_CCS
-    jnz .next_found
+    jz .next_skip
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    lea edi, [edx + 1]
+    call usb_hid_port_owned
+    mov r11d, eax
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    test r11d, r11d
+    jnz .next_skip
 
+    extern rtl8156_active, rtl8156_port
+    cmp byte [rtl8156_active], 1
+    jne .next_found
+    movzx eax, byte [rtl8156_port]
+    lea r11d, [edx + 1]
+    cmp eax, r11d
+    je .next_skip
+    jmp .next_found
+.next_skip:
     inc edx
     jmp .next_loop
 
@@ -1284,30 +1538,29 @@ xhci_find_port_next:
 
     ; Wait for reset complete (PRC bit) - PIT-based 500ms timeout
     push rdx
-    push r8
     mov rdx, [tick_count]
     add rdx, 50                   ; 50 ticks = 500ms at 100Hz
-    mov r8d, 10000000
 .next_rst_wait:
     mov eax, [rsi + rcx + XHCI_PORTSC]
     test eax, XHCI_PORTSC_PRC
     jnz .next_rst_pop_done
-    
-    dec r8d
-    jz .next_rst_pop_done
-    
+
     push rax
     mov rax, [tick_count]
     cmp rax, rdx
     pop rax
     jl .next_rst_wait
 .next_rst_pop_done:
-    pop r8
     pop rdx
 .next_rst_done:
-    ; Clear PRC
-    or eax, XHCI_PORTSC_PRC
-    and eax, ~XHCI_PORTSC_CHANGE_BITS
+    ; Clear PRC. Two bugs lurked here:
+    ;  1. Original order set PRC then ANDed out CHANGE_BITS - that masked PRC
+    ;     back to 0, so PRC was NEVER cleared.
+    ;  2. Didn't mask PED (RW1C: write 1 disables) - inadvertently disabled
+    ;     the port we just enabled (matches LS-mouse failure on AMD).
+    and eax, ~XHCI_PORTSC_CHANGE_BITS   ; preserve other change bits
+    and eax, ~XHCI_PORTSC_PED            ; PED RW1C: write 0 to leave alone
+    or eax, XHCI_PORTSC_PRC              ; now set PRC=1 to clear it
     mov [rsi + rcx + XHCI_PORTSC], eax
 
     mov eax, 1
@@ -1351,6 +1604,42 @@ xhci_enable_slot:
     ret
 
 ; ============================================================================
+; xhci_disable_slot - Disable a previously enabled slot (release port binding)
+; AL = slot ID. Returns: EAX = 1 on success, 0 on failure.
+; ============================================================================
+global xhci_disable_slot
+xhci_disable_slot:
+    push rcx
+    push rdi
+    push r12
+    movzx ecx, al
+    test ecx, ecx
+    jz .ds_fail
+    mov r12d, ecx
+    xor r8d, r8d
+    xor r9d, r9d
+    xor r10d, r10d
+    shl ecx, 24
+    or  ecx, TRB_DISABLE_SLOT
+    mov r11d, ecx
+    call xhci_submit_cmd
+    cmp eax, 1
+    jne .ds_fail
+    ; Clear DCBAA entry for the slot so a future Enable Slot can reuse it
+    ; cleanly without the controller seeing a stale device context pointer.
+    mov rdi, XHCI_DCBAA_ADDR
+    mov qword [rdi + r12 * 8], 0
+    mov eax, 1
+    jmp .ds_ret
+.ds_fail:
+    xor eax, eax
+.ds_ret:
+    pop r12
+    pop rdi
+    pop rcx
+    ret
+
+; ============================================================================
 ; xhci_address_device - Setup contexts and address device
 ; Returns: EAX = 1 on success, 0 on failure
 ; ============================================================================
@@ -1360,11 +1649,28 @@ xhci_address_device:
     push rdi
     push rcx
 
+    mov byte [xhci_dbg_adstage], 30  ; entered
+
     movzx eax, byte [xhci_ctx_size]
     mov [xhci_ctx_stride], eax    ; 32 or 64
 
     ; --- Setup Input Context at XHCI_INPUT_CTX_ADDR ---
     mov rdi, XHCI_INPUT_CTX_ADDR
+
+    ; FIX: zero entire Input Context (control + slot + ep0) before writing
+    ; fields. Prevents stale Drop Context Flags or stale EP fields from a
+    ; previous slot/retry causing the controller to drop random contexts.
+    push rdi
+    push rcx
+    push rax
+    mov ecx, 32                   ; 32 qwords = 256 bytes (covers CSZ=64 + slot + EP0)
+    xor eax, eax
+    rep stosq
+    pop rax
+    pop rcx
+    pop rdi
+
+    mov byte [xhci_dbg_adstage], 31  ; input context zeroed
 
     ; Input Control Context (first context entry)
     ; DWord 1: Add Context Flags - A0=1 (Slot), A1=1 (EP0)
@@ -1422,12 +1728,17 @@ xhci_address_device:
     mov [rsi + 4], eax
 
     ; DWord 2-3: TR Dequeue Pointer (64-bit) with DCS=1
+    cmp byte [xhci_nic_mode], 1
+    je .ep0_ring_nic
     cmp byte [xhci_slot2_mode], 1
     je .ep0_ring2
     mov dword [rsi + 8], XHCI_CTRL_RING_ADDR | 1
     jmp .ep0_ring_done
 .ep0_ring2:
     mov dword [rsi + 8], XHCI_CTRL_RING2_ADDR | 1
+    jmp .ep0_ring_done
+.ep0_ring_nic:
+    mov dword [rsi + 8], RTL8156_XHCI_CTRL_RING_ADDR | 1
 .ep0_ring_done:
     mov dword [rsi + 12], 0
 
@@ -1437,15 +1748,22 @@ xhci_address_device:
     ; --- Set DCBAA entry for this slot ---
     movzx eax, byte [xhci_slot_id]
     mov rdi, XHCI_DCBAA_ADDR
+    cmp byte [xhci_nic_mode], 1
+    je .dcbaa_nic
     cmp byte [xhci_slot2_mode], 1
     je .dcbaa_slot2
     mov qword [rdi + rax * 8], XHCI_DEV_CTX_ADDR
     jmp .dcbaa_done
 .dcbaa_slot2:
     mov qword [rdi + rax * 8], XHCI_DEV_CTX2_ADDR
+    jmp .dcbaa_done
+.dcbaa_nic:
+    mov qword [rdi + rax * 8], RTL8156_XHCI_DEV_CTX_ADDR
 .dcbaa_done:
 
     ; --- Init EP0 transfer ring (slot-specific) ---
+    cmp byte [xhci_nic_mode], 1
+    je .addr_ring_nic
     cmp byte [xhci_slot2_mode], 1
     je .addr_ring2
     mov rdi, XHCI_CTRL_RING_ADDR
@@ -1479,6 +1797,15 @@ xhci_address_device:
     mov dword [rax + 12], TRB_LINK | TRB_TC | TRB_CYCLE
     mov dword [xhci_ctrl_enqueue], 0
     mov byte [xhci_ctrl_cycle], 1
+    jmp .addr_ring_done
+.addr_ring_nic:
+    mov rdi, RTL8156_XHCI_CTRL_RING_ADDR
+    lea rax, [rdi + (XHCI_RING_SIZE - 1) * XHCI_TRB_SIZE]
+    mov qword [rax], RTL8156_XHCI_CTRL_RING_ADDR
+    mov dword [rax + 8], 0
+    mov dword [rax + 12], TRB_LINK | TRB_TC | TRB_CYCLE
+    mov dword [xhci_ctrl_enqueue], 0
+    mov byte [xhci_ctrl_cycle], 1
 .addr_ring_done:
 
     ; --- Submit Address Device (BSR=1 first) ---
@@ -1490,9 +1817,40 @@ xhci_address_device:
     or eax, TRB_ADDRESS_DEV       ; Type
     or eax, TRB_BSR               ; Block Set Address Request
     mov r11d, eax
+    mov byte [xhci_dbg_addrn], 1
+    mov byte [xhci_dbg_adstage], 32   ; about to submit BSR=1
+
+    ; Capture PORTSC just before address (debug)
+    call xhci_capture_portsc_dbg
+
     call xhci_submit_cmd
+    mov [xhci_dbg_addrcc], al
+    mov [xhci_dbg_adcc1], al      ; BSR=1 completion code
+    mov byte [xhci_dbg_adstage], 33   ; BSR=1 returned
     cmp eax, 1
     jne .addr_fail
+
+    ; DEBUG: After BSR=1 the controller writes Slot State into the device
+    ; context (slot context at offset 0). Read DWord3 bits 31:27.
+    ; Expected: 1=Default, 2=Addressed (after BSR=0), 3=Configured.
+    push rax
+    push rdi
+    mov rdi, XHCI_DEV_CTX_ADDR
+    cmp byte [xhci_nic_mode], 1
+    jne .ss_check_slot2
+    mov rdi, RTL8156_XHCI_DEV_CTX_ADDR
+    jmp .ss_use_ctx1
+.ss_check_slot2:
+    cmp byte [xhci_slot2_mode], 1
+    jne .ss_use_ctx1
+    mov rdi, XHCI_DEV_CTX2_ADDR
+.ss_use_ctx1:
+    mov eax, [rdi + 12]                ; DWord 3 of Slot Context
+    shr eax, 27
+    and eax, 0x1F
+    mov [xhci_dbg_slotstate], al
+    pop rdi
+    pop rax
 
     ; --- Submit Address Device (BSR=0) ---
     mov r8d, XHCI_INPUT_CTX_ADDR
@@ -1502,9 +1860,19 @@ xhci_address_device:
     shl eax, 24
     or eax, TRB_ADDRESS_DEV       ; No BSR this time
     mov r11d, eax
+    mov byte [xhci_dbg_addrn], 2
+    mov byte [xhci_dbg_adstage], 34   ; about to submit BSR=0
+
+    ; Capture PORTSC again (may have changed between calls)
+    call xhci_capture_portsc_dbg
+
     call xhci_submit_cmd
+    mov [xhci_dbg_addrcc], al
+    mov [xhci_dbg_adcc2], al      ; BSR=0 completion code
+    mov byte [xhci_dbg_adstage], 35   ; BSR=0 returned
     cmp eax, 1
     jne .addr_fail
+    mov byte [xhci_dbg_adstage], 36   ; success
 
     mov eax, 1
     jmp .addr_ret
@@ -1515,6 +1883,30 @@ xhci_address_device:
     pop rcx
     pop rdi
     pop rsi
+    ret
+
+; ============================================================================
+; xhci_capture_portsc_dbg - Read PORTSC for the active port into debug field
+; Clobbers eax, rdi, rsi
+; ============================================================================
+xhci_capture_portsc_dbg:
+    push rax
+    push rsi
+    push rdi
+    movzx eax, byte [xhci_port_num]
+    test eax, eax
+    jz .pc_done                   ; no port selected yet
+    dec eax                        ; PORTSC array is 0-indexed
+    shl eax, 4                     ; *16 bytes per port
+    mov rsi, [xhci_op_base]
+    add rsi, 0x400
+    add rsi, rax
+    mov eax, [rsi]                 ; PORTSC
+    mov [xhci_dbg_portsc], eax
+.pc_done:
+    pop rdi
+    pop rsi
+    pop rax
     ret
 
 ; ============================================================================
@@ -1547,12 +1939,17 @@ xhci_queue_ctrl_trb:
     jl .ctrl_no_wrap
 
     ; Update Link TRB cycle bit (slot-specific ring)
+    cmp byte [xhci_nic_mode], 1
+    je .ctrl_wrap_nic
     cmp byte [xhci_slot2_mode], 1
     je .ctrl_wrap2
     mov rsi, XHCI_CTRL_RING_ADDR
     jmp .ctrl_wrap_go
 .ctrl_wrap2:
     mov rsi, XHCI_CTRL_RING2_ADDR
+    jmp .ctrl_wrap_go
+.ctrl_wrap_nic:
+    mov rsi, RTL8156_XHCI_CTRL_RING_ADDR
 .ctrl_wrap_go:
     lea rax, [rsi + (XHCI_RING_SIZE - 1) * XHCI_TRB_SIZE]
     mov ecx, [rax + 12]
@@ -1566,12 +1963,17 @@ xhci_queue_ctrl_trb:
     xor edi, edi
 
 .ctrl_no_wrap:
+    cmp byte [xhci_nic_mode], 1
+    je .ctrl_ring_nic
     cmp byte [xhci_slot2_mode], 1
     je .ctrl_ring2
     mov rsi, XHCI_CTRL_RING_ADDR
     jmp .ctrl_ring_go
 .ctrl_ring2:
     mov rsi, XHCI_CTRL_RING2_ADDR
+    jmp .ctrl_ring_go
+.ctrl_ring_nic:
+    mov rsi, RTL8156_XHCI_CTRL_RING_ADDR
 .ctrl_ring_go:
     imul eax, edi, XHCI_TRB_SIZE
     add rsi, rax
@@ -1943,6 +2345,24 @@ section .data
 global xhci_active
 xhci_active:        db 0          ; 1 if XHCI initialized and mouse configured
 
+align 4
+xhci_evt_lock:      dd 0          ; spinlock guarding xhci_evt_dequeue + ERDP write
+
+; --- DEBUG: per-controller xhci_init progress log ---
+; Each entry = 4 bytes {bus, dev, fn, stage}. stage: 1=pciFound 2=capsRead
+; 3=ownership 4=reset 5=ringsUp 6=running.
+global xhci_initlog_n, xhci_initlog
+xhci_initlog_n:     db 0
+xhci_initlog:       times 8*4 db 0
+xhci_initlog_cur:   dq 0
+
+; --- DEBUG: xhci_find_port snapshots. Each record = 16 bytes:
+;   +0 opbase_lo(dd)  +4 maxports(db)  +5 result(db)  +6.. port speed map (10)
+global xhci_dbg_fp_n, xhci_dbg_fp
+xhci_dbg_fp_n:      db 0
+xhci_dbg_fp:        times 4*16 db 0
+xhci_dbg_fp_cur:    dq 0
+
 xhci_pci_addr:      dd 0          ; PCI bus/dev/func address
 global xhci_pci_search_start
 xhci_pci_search_start: dd 0      ; Where to continue PCI scan from (for multi-controller)
@@ -1957,12 +2377,45 @@ xhci_rt_base:       dq 0          ; Runtime registers base
 ; Slot2 mode: when 1, address_device/configure_endpoint use slot2 addresses
 global xhci_slot2_mode
 xhci_slot2_mode:    db 0
+; NIC mode: when 1, address_device uses the dedicated rtl8156 device context +
+; control EP0 ring (RTL8156_XHCI_DEV_CTX_ADDR / RTL8156_XHCI_CTRL_RING_ADDR).
+; Overrides slot2_mode for both DCBAA + ring selection.
+global xhci_nic_mode
+xhci_nic_mode:      db 0
 
 xhci_cap_length:    db 0
 xhci_max_slots:     db 0
 global xhci_max_ports
 xhci_max_ports:     db 0
-xhci_scratchpad_count: db 0
+xhci_scratchpad_count: dw 0
+xhci_scratchpad_req:   dw 0         ; Raw count from HCSPARAMS2 (uncapped)
+; DEBUG: ADDRESS_DEVICE diagnostics. addrn = which submit (1=BSR set, 2=BSR clear);
+; addrcc = completion code of last submit (0=timeout/no event, 1=success,
+; 5=TRB error, 11=ctx state error, 17=parameter error, etc.)
+global xhci_dbg_addrn, xhci_dbg_addrcc, xhci_scratchpad_count, xhci_scratchpad_req
+xhci_dbg_addrn:  db 0
+xhci_dbg_addrcc: db 0
+xhci_dbg_adstage: db 0          ; sub-stage within xhci_address_device
+xhci_dbg_adcc1:  db 0           ; completion code for BSR=1 step
+xhci_dbg_adcc2:  db 0           ; completion code for BSR=0 step
+xhci_dbg_portsc: dd 0           ; PORTSC snapshot at last capture
+xhci_dbg_rststage:    db 0      ; sub-stage within port reset (40-43, 99=timeout)
+xhci_dbg_portsc_pre:  dd 0      ; PORTSC before reset bit written
+xhci_dbg_portsc_post: dd 0      ; PORTSC after reset settled
+xhci_dbg_speed_pre:   db 0      ; speed before reset (from initial scan)
+xhci_dbg_speed_post:  db 0      ; speed after reset (final)
+xhci_dbg_ped_ok:      db 0      ; 1 if PED bit set post-reset
+xhci_dbg_ccs_ok:      db 0      ; 1 if CCS bit set post-reset
+xhci_dbg_slotstate:   db 0      ; Slot State (bits 31:27 of slot ctx DW3) after BSR=1
+xhci_dbg_portsc_written: dd 0   ; exact value we wrote to PORTSC for reset
+xhci_dbg_portsc_immed:   dd 0   ; PORTSC read immediately after write (did write take?)
+xhci_dbg_portsc_wait:    dd 0   ; PORTSC after exit from PRC wait loop
+xhci_dbg_reset_polls:    dd 0   ; how many PORTSC polls before PRC fired / timeout
+global xhci_dbg_adstage, xhci_dbg_adcc1, xhci_dbg_adcc2, xhci_dbg_portsc
+global xhci_dbg_rststage, xhci_dbg_portsc_pre, xhci_dbg_portsc_post
+global xhci_dbg_speed_pre, xhci_dbg_speed_post, xhci_dbg_ped_ok, xhci_dbg_ccs_ok
+global xhci_dbg_slotstate, xhci_dbg_portsc_written, xhci_dbg_portsc_immed
+global xhci_dbg_portsc_wait, xhci_dbg_reset_polls
 xhci_ctx_size:      db 32         ; 32 or 64 bytes per context entry
 xhci_ctx_stride:    dd 32
 

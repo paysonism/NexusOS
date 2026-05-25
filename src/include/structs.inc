@@ -86,5 +86,17 @@ struc process_t
     .cs:            resq 1      ; 0xA8
     .ss:            resq 1      ; 0xB0
     .kernel_rsp:    resq 1      ; 0xB8
-    .padding:       resb 384    ; Pad to 512 bytes
+    ; --- Stage 1 SMP process-manager fields ------------------------------------
+    ; affinity_mask: bit i set => this process is permitted to run on core i.
+    ; Bits 0..1 (system cores) are clear for app processes by default; the
+    ; kernel process (PID 0) carries an all-bits-set mask. Bits >= ncores are
+    ; ignored by the placer.
+    .affinity_mask: resd 1      ; 0xC0
+    .home_core:     resd 1      ; 0xC4: last placed / preferred core
+    ; cpu_time_cycles: raw TSC cycles billed to this process by AP workers
+    ; running jobs whose WQ_OFF_PROC_ID matches this PCB's .id. Convert to
+    ; seconds at display time via cpu_tsc_per_tick * 100. lock-add updated
+    ; from APs; readers may see a stale value but never a torn one.
+    .cpu_time_cycles:resq 1     ; 0xC8
+    .padding:       resb 360    ; Pad to 512 bytes
 endstruc

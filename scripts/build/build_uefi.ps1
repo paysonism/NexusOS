@@ -2,7 +2,8 @@ param(
     [switch]$Release,
     [switch]$Trace,
     [ValidateSet('Default', 'Cache32Max')]
-    [string]$PerfProfile = 'Default'
+    [string]$PerfProfile = 'Default',
+    [switch]$NoFbWc          # Phase A baseline: skip fbperf WC arm+activate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,9 +26,18 @@ else {
 }
 if ($PerfProfile -eq 'Cache32Max') {
     $KernelDefines += '-dNEXUS_CACHE32_MAX'
-    $KernelDefines += '-dNEXUS_CACHE32_AP_STARTUP'
     $LoaderDefines += '-dNEXUS_CACHE32_MAX'
 }
+if ($NoFbWc) {
+    $KernelDefines += '-dFBPERF_NO_WC'
+    Write-Host '  (FBPERF: WC activation DISABLED -- Phase A baseline build)' -ForegroundColor Magenta
+}
+$KernelDefines += '-dNEXUS_SMP'
+$KernelDefines += '-dNEXUS_CACHE32_AP_STARTUP'
+$KernelDefines += '-dNEXUS_ENABLE_RING3_AP'
+# UEFI starts AP workers in both profiles. Keep ring-3 callback routing
+# enabled with AP startup so app work runs on each process home_core instead
+# of falling through dispatch_app_callback's BSP-only fallback.
 if ($Trace) {
     $KernelDefines += '-dENABLE_TRACE'
     $KernelDefines += '-dENABLE_SIG_SECTION'
@@ -43,22 +53,22 @@ Write-Host ''
 
 New-Item -Path $ESP -ItemType Directory -Force | Out-Null
 
-# 0. Compile NexusHL apps -> build/nxh/*.asm (included by src/user/apps.asm)
-& powershell -NoProfile -File (Join-Path $Root 'scripts\build\build_nxh.ps1')
-if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED NexusHL compile' -ForegroundColor Red; exit 1 }
-$CoverageTool = Join-Path $Root 'tools\check_coverage.py'
-if (Test-Path $CoverageTool) {
-    & python $CoverageTool
-    if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED signature coverage' -ForegroundColor Red; exit 1 }
-}
-
-# 0b. Embed SVG wallpaper sources into wallpaper.nxh so the native NexusHL
+# 0. Embed SVG wallpaper sources into wallpaper.nxh so the native NexusHL
 # renderer (svg_render) has the current SVG strings. Run on every build so
 # edits to src/resources/wallpapers/*.svg are picked up automatically.
 $WallpaperTool = Join-Path $Root 'tools\gen_wallpaper_strings.py'
 if (Test-Path $WallpaperTool) {
     & python $WallpaperTool
     if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED wallpaper string gen' -ForegroundColor Red; exit 1 }
+}
+
+# 0b. Compile NexusHL apps -> build/nxh/*.asm (included by src/user/apps.asm)
+& powershell -NoProfile -File (Join-Path $Root 'scripts\build\build_nxh.ps1')
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED NexusHL compile' -ForegroundColor Red; exit 1 }
+$CoverageTool = Join-Path $Root 'tools\check_coverage.py'
+if (Test-Path $CoverageTool) {
+    & python $CoverageTool
+    if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED signature coverage' -ForegroundColor Red; exit 1 }
 }
 
 # 0c. Generate boot animation -> build/BOOTANIM.NBA (raw BGRA frames + header).
@@ -277,13 +287,40 @@ try {
     [System.IO.File]::WriteAllBytes($dataImgPath, $imgBytes)
     Write-Host "  OK - data.img ($totalClusters clusters, $($entryIdx - 1) files)" -ForegroundColor Green
 } catch [System.IO.IOException] {
-    # data.img is a data disk, not a build output -- a stale lock (open VM,
-    # image viewer) must not fail the whole build. Reuse the existing image.
-    if (Test-Path $dataImgPath) {
-        Write-Host "  WARN - data.img locked by another process; keeping existing image" -ForegroundColor Yellow
-    } else {
-        throw
-    }
+    if (-not (Test-Path $dataImgPath)) { throw }
+    Write-Host "  WARN - data.img locked by another process; keeping existing image" -ForegroundColor Yellow
+}
+
+# 3b. Copy the FAT16 partition slice to ESP\EFI\BOOT\DATA.IMG.
+#
+# On real hardware the kernel has no legacy IDE controller, so it cannot
+# read the QEMU-only `data.img` via ATA PIO. The UEFI loader instead reads
+# this file from the boot ESP into RAM and the kernel's ramdisk shim
+# (src/kernel/drivers/ramdisk.asm) serves fat16 sector I/O from there.
+# See docs/ramdisk.md for the full contract.
+#
+# We ship only the partition (skip the (KERNEL_START_SECTOR + KERNEL_SECTORS)
+# zero header) so the on-USB file is as small as possible. The kernel's
+# fat16 driver adds FAT16_PART_LBA to every LBA it computes; the ramdisk
+# is registered at LBA base = FAT16_PART_LBA, which makes byte offset 0
+# of DATA.IMG correspond to BPB sector 0 - identical to QEMU's mapping.
+$espDataImgPath = Join-Path $ESP 'DATA.IMG'
+$espDataImgBytes = New-Object byte[] ($fatPartSectors * $bytesPerSect)
+[Array]::Copy($imgBytes, $fatPartStart, $espDataImgBytes, 0, $espDataImgBytes.Length)
+try {
+    [System.IO.File]::WriteAllBytes($espDataImgPath, $espDataImgBytes)
+    Write-Host ("  OK - DATA.IMG ($([math]::Round($espDataImgBytes.Length / 1MB,2)) MiB on ESP)") -ForegroundColor Green
+} catch [System.IO.IOException] {
+    if (-not (Test-Path $espDataImgPath)) { throw }
+    Write-Host "  WARN - ESP\DATA.IMG locked; keeping existing copy" -ForegroundColor Yellow
+}
+
+# Guard: if DATA.IMG exceeds the loader's DATA_IMG_MAX_SIZE (16 MiB today)
+# the kernel will reject it at boot. Catch that at build time instead.
+$dataImgMax = 16 * 1024 * 1024
+if ($espDataImgBytes.Length -gt $dataImgMax) {
+    Write-Host "  FAILED - DATA.IMG ($($espDataImgBytes.Length) bytes) exceeds DATA_IMG_MAX_SIZE ($dataImgMax). Bump src/include/boot_memory.inc." -ForegroundColor Red
+    exit 1
 }
 
 Write-Host ''
@@ -292,5 +329,7 @@ Write-Host ''
 Write-Host "  Output: $ESP\" -ForegroundColor White
 Write-Host '    BOOTX64.EFI  (UEFI bootloader)' -ForegroundColor Gray
 Write-Host '    KERNEL.BIN   (NexusOS kernel)' -ForegroundColor Gray
-Write-Host "    $dataImgPath  (FAT16 data disk)" -ForegroundColor Gray
+Write-Host '    APPS.BIN     (NexusHL app blob)' -ForegroundColor Gray
+Write-Host '    DATA.IMG     (FAT16 ramdisk for real hardware)' -ForegroundColor Gray
+Write-Host "    $dataImgPath  (FAT16 data disk for QEMU IDE)" -ForegroundColor Gray
 Write-Host ''

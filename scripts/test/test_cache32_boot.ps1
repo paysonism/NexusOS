@@ -7,7 +7,7 @@ $SerialHost = '127.0.0.1'
 $SerialPort = 5555
 
 function Stop-QemuIfRunning {
-    Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
 function Read-Serial {

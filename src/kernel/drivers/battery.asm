@@ -61,6 +61,18 @@ EC_REG_C_DES_HI     equ 0xB5
 EC_REG_C_STATUS     equ 0xA0
 EC_REG_C_AC         equ 0xA1
 
+; Layout D registers (Acer Nitro V16 AI / Strix Point — empirically verified
+; by EC RAM diff under plug/unplug, see memory amd_dcn_bar0_uc.md).
+;   EC[0x00] bit0 = AC adapter present
+;   EC[0x07]      = 0x41 board signature (used to fingerprint this EC layout)
+;   EC[0x04]      = 0x06 secondary signature
+; Battery % offset is unknown on this EC; left as 100 when D matches.
+EC_REG_D_AC         equ 0x00
+EC_REG_D_SIG1       equ 0x07
+EC_REG_D_SIG1_VAL   equ 0x41
+EC_REG_D_SIG2       equ 0x04
+EC_REG_D_SIG2_VAL   equ 0x06
+
 BAT_STATE_UNKNOWN  equ 0
 BAT_STATE_AC       equ 1
 BAT_STATE_DISCHARGE equ 2
@@ -70,6 +82,7 @@ EC_LAYOUT_NONE  equ 0
 EC_LAYOUT_A     equ 1
 EC_LAYOUT_B     equ 2
 EC_LAYOUT_C     equ 3
+EC_LAYOUT_D     equ 4
 
 section .text
 
@@ -97,6 +110,29 @@ battery_probe_layout:
     push rbx
     push rdx
 
+    ; --- Try Layout D FIRST (Acer Strix). Only layout with a real board
+    ;     signature, so it can't false-positive. Other layouts probe by
+    ;     "is value ≤100" which trivially matches garbage bytes. ---
+    mov dl, EC_REG_D_SIG1
+    call ec_read_reg
+    jc .try_layout_a
+    cmp al, EC_REG_D_SIG1_VAL
+    jne .try_layout_a
+    mov dl, EC_REG_D_SIG2
+    call ec_read_reg
+    jc .try_layout_a
+    cmp al, EC_REG_D_SIG2_VAL
+    jne .try_layout_a
+    mov dl, EC_REG_D_AC
+    call ec_read_reg
+    jc .try_layout_a
+    cmp al, 1
+    ja .try_layout_a
+    mov byte [bat_layout], EC_LAYOUT_D
+    mov al, EC_LAYOUT_D
+    jmp .probe_done
+
+.try_layout_a:
     ; --- Try Layout A: reg 0xA2 should be 0-100 ---
     mov dl, EC_REG_A_BAT_CAP
     call ec_read_reg
@@ -180,7 +216,23 @@ battery_do_read:
     je .read_layout_b
     cmp al, EC_LAYOUT_C
     je .read_layout_c
+    cmp al, EC_LAYOUT_D
+    je .read_layout_d
     jmp .done              ; EC_LAYOUT_NONE
+
+; --- Layout D: AC-only at EC[0x00] bit0; % unknown, fixed to 100 ---
+.read_layout_d:
+    mov dl, EC_REG_D_AC
+    call ec_read_reg
+    jc .done
+    mov byte [battery_percent], 100
+    test al, 0x01
+    jnz .ld_ac
+    mov byte [battery_state], BAT_STATE_DISCHARGE
+    jmp .done
+.ld_ac:
+    mov byte [battery_state], BAT_STATE_AC
+    jmp .done
 
 ; --- Layout A: 0xA2=cap%, 0xA3=flags, 0xA4=AC ---
 .read_layout_a:

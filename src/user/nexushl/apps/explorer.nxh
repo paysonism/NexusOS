@@ -73,6 +73,12 @@ str szPropLoc        = "Path:"
 str szPropTypeFile   = "File"
 str szPropTypeDir    = "Folder"
 str szPropSizeDir    = "--"
+str szPropOpenWith   = "Open with:"
+str szOpenerNotepad  = "Notepad"
+str szOpenerMedia    = "Media Player"
+# To add an opener (e.g. a future image viewer), add a string here, then
+# extend `opener_count`, `opener_name`, and `opener_open` below. See
+# docs/app-authoring.md for the full recipe.
 str szRowNameScratch = "               "
 str szRowSizeScratch = "                   "
 
@@ -95,6 +101,7 @@ extern exp_ctx_y;
 extern fat16_name_buf;
 extern fat16_size_buf;
 extern prop_entry_ptr;
+extern exp_prop_visible;
 
 # `properties_drawfn_addr` is an asm-escape helper that returns the address
 # of our own properties_draw callback. NexusHL has no `&local_fn` syntax
@@ -226,18 +233,110 @@ fn properties_drawfn_addr() {
     asm "lea rax, [rel app_hl_explorer_properties_draw]";
 }
 
+fn properties_clickfn_addr() {
+    asm "lea rax, [rel app_hl_explorer_properties_click]";
+}
+
+fn properties_keyfn_addr() {
+    asm "lea rax, [rel app_hl_explorer_properties_key]";
+}
+
 fn open_properties() {
     let ent = selected_entry();
     if ent == 0 { return; }
-    sq(&prop_entry_ptr, ent);
-    syscall(SYS_WM_CREATE, &szPropTitleHL, 250, 200, 240, 140,
-            properties_drawfn_addr());
+    let win_idx = syscall(SYS_WM_CREATE, 250, 200, 240, 196,
+                          &szPropTitleHL, properties_drawfn_addr());
+    if win_idx == -1 { return; }
+    syscall(SYS_WM_HANDLERS, win_idx,
+            properties_clickfn_addr(),
+            properties_keyfn_addr());
+    # SYS_WM_CREATE allocates a *new* app slot for the new window, so the
+    # Properties drawfn runs in a slot that doesn't have access to the
+    # Explorer's per-slot state (explorer_sel, prop_entry_ptr, …). Pass the
+    # selected file index through the window's WIN_OFF_USER_ARG field
+    # (offset 160) — the drawfn reads it from its own `win` pointer and
+    # re-fetches the dir entry via SYS_FS_ENTRY in its own slot. Store
+    # `idx + 1` so 0 cleanly means "no selection".
+    syscall(SYS_WM_SET_USER_ARG, win_idx, lw(&explorer_sel) + 1);
+}
+
+# -------------------- file-opener registry --------------------
+#
+# Maps a row in the Properties window's "Open with" list to the action that
+# opens `ent` in a specific app. The list is file-type aware so binary media
+# is not offered to Notepad. To register a new opener:
+#   1. Add a `str szOpener<Name> = "..."` next to szOpenerNotepad above.
+#   2. Bump the return value of `opener_count`.
+#   3. Add an `if idx == N { return &szOpener<Name>; }` row in `opener_name`.
+#   4. Add an `if idx == N { syscall(SYS_OPEN_FILE_<NEW>, ent); return; }`
+#      row in `opener_open`. (Add the SYS_OPEN_FILE_* const + kernel syscall
+#      first if the viewer doesn't have one yet.)
+# The Properties UI lays each opener out as a button automatically, so no
+# layout changes are needed when expanding the list (up to OPENER_MAX rows).
+
+const OPENER_MAX = 4
+const OPENER_BTN_W = 110
+# Button column starts after 4 detail rows + a section-title gap. Kept in
+# sync with the layout cursor in properties_draw — if you add/remove a
+# row above, update this offset.
+const OPENER_BTN_Y0 = 120
+const OPENER_BTN_DY = 22
+
+fn is_media_entry(ent) {
+    if lb(ent + 8) == 66 {
+        if lb(ent + 9) == 77 {
+            if lb(ent + 10) == 80 { return 1; }
+        }
+    }
+    if lb(ent + 8) != 78 { return 0; }
+    if lb(ent + 9) == 73 {
+        if lb(ent + 10) == 67 { return 1; }
+    }
+    if lb(ent + 9) == 66 {
+        if lb(ent + 10) == 65 { return 1; }
+    }
+    return 0;
+}
+
+fn opener_count(ent) {
+    if fs_is_dir(ent) == 1 { return 0; }
+    return 1;
+}
+
+fn opener_name(idx, ent) {
+    if idx == 0 {
+        if is_media_entry(ent) == 1 { return &szOpenerMedia; }
+        return &szOpenerNotepad;
+    }
+    return 0;
+}
+
+fn opener_open(idx, ent) {
+    if idx == 0 {
+        if is_media_entry(ent) == 1 { syscall(SYS_OPEN_FILE_MEDIA, ent); return; }
+        syscall(SYS_OPEN_FILE_NP, ent);
+        return;
+    }
+}
+
+fn opener_btn_y(idx) {
+    return OPENER_BTN_Y0 + idx * OPENER_BTN_DY;
 }
 
 fn show_context_menu() {
     let sel = lw(&explorer_sel);
     sw(&exp_ctx_x, 40);
     sw(&exp_ctx_y, LIST_Y + sel * ROW_H);
+    sb(&exp_ctx_visible, 1);
+}
+
+fn show_context_menu_at(cx, cy) {
+    if cy < LIST_Y { return; }
+    let idx = (cy - LIST_Y) / ROW_H;
+    if idx >= file_count() { return; }
+    sw(&explorer_sel, idx);
+    sw(&exp_ctx_x, cx);
+    sw(&exp_ctx_y, cy);
     sb(&exp_ctx_visible, 1);
 }
 
@@ -388,6 +487,13 @@ fn click(win, cx, cy) {
     sw(&explorer_sel, idx);
 }
 
+fn rclick(win, cx, cy) {
+    if lb(&exp_rename_active) == 1 { return; }
+    if lb(&exp_newfolder_active) == 1 { return; }
+    if lb(&exp_newfolder_done_msg) == 1 { return; }
+    show_context_menu_at(cx, cy);
+}
+
 # -------------------- text-input key helper --------------------
 # Returns 1 when the key was consumed (caller should stop processing),
 # 0 to fall through to the next handler.
@@ -481,42 +587,69 @@ fn key(win, k) {
 
 # -------------------- Properties window --------------------
 #
-# Spawned by `open_properties`. The window owns no state of its own; it
-# reads prop_entry_ptr each draw so the user can leave it open while
-# navigating the main explorer.
+# Runs in its own WM-allocated app slot — separate from Explorer's slot —
+# so it cannot read Explorer per-slot globals. The selected file index is
+# passed via the window's WIN_OFF_USER_ARG (offset 160), and the dir entry
+# is re-fetched via SYS_FS_ENTRY into this slot's own cache each frame.
+
+fn prop_field(win, y, label, value) {
+    ui_text_at(win, UI_PAD, y, label, UI_COL_TEXT_MUTED, UI_COL_BG_BASE);
+    ui_text_at(win, UI_PAD + 60, y, value, UI_COL_TEXT, UI_COL_BG_BASE);
+    return y + UI_ROW_H;
+}
+
+fn properties_entry(win) {
+    # idx+1 stored at offset 160; 0 = not initialized.
+    let slot = lq(win + 160);
+    if slot == 0 { return 0; }
+    return syscall(SYS_FS_ENTRY, slot - 1);
+}
 
 fn properties_draw(win) {
-    let ent = lq(&prop_entry_ptr);
+    let ent = properties_entry(win);
     if ent == 0 { return; }
+
+    ui_fill_client_below(win, 0, UI_COL_BG_BASE);
 
     format_entry_name(ent, &fat16_name_buf);
 
-    ui_text_at(win, 8,  8,  &szPropName, C_MUTED, C_WHITE);
-    ui_text_at(win, 60, 8,  &fat16_name_buf, C_BLACK, C_WHITE);
+    let y = UI_PAD;
+    y = prop_field(win, y, &szPropName, &fat16_name_buf);
 
-    ui_text_at(win, 8,  30, &szPropType, C_MUTED, C_WHITE);
     if fs_is_dir(ent) == 1 {
-        ui_text_at(win, 60, 30, &szPropTypeDir, C_BLACK, C_WHITE);
+        y = prop_field(win, y, &szPropType, &szPropTypeDir);
+        y = prop_field(win, y, &szPropSize, &szPropSizeDir);
     } else {
-        ui_text_at(win, 60, 30, &szPropTypeFile, C_BLACK, C_WHITE);
-    }
-
-    ui_text_at(win, 8,  52, &szPropSize, C_MUTED, C_WHITE);
-    if fs_is_dir(ent) == 1 {
-        ui_text_at(win, 60, 52, &szPropSizeDir, C_BLACK, C_WHITE);
-    } else {
+        y = prop_field(win, y, &szPropType, &szPropTypeFile);
         format_bytes_size(lw(ent + 28), &fat16_size_buf);
-        ui_text_at(win, 60, 52, &fat16_size_buf, C_BLACK, C_WHITE);
+        y = prop_field(win, y, &szPropSize, &fat16_size_buf);
     }
+    y = prop_field(win, y, &szPropLoc, &szPathRoot);
 
-    ui_text_at(win, 8,  74, &szPropLoc, C_MUTED, C_WHITE);
-    ui_text_at(win, 60, 74, &szPathRoot, C_BLACK, C_WHITE);
+    ui_section_title(win, OPENER_BTN_Y0 - UI_TITLE_H, &szPropOpenWith);
+    let n = opener_count(ent);
+    let i = 0;
+    while i < n {
+        ui_button(win, UI_PAD, opener_btn_y(i),
+                  OPENER_BTN_W, opener_name(i, ent), UI_COL_SURFACE_2);
+        i = i + 1;
+    }
 }
 
 fn properties_click(win, cx, cy) {
-    # No interactive elements yet — click is a no-op.
+    let ent = properties_entry(win);
+    if ent == 0 { return; }
+    let n = opener_count(ent);
+    let i = 0;
+    while i < n {
+        if ui_button_hit(cx, cy, UI_PAD, opener_btn_y(i), OPENER_BTN_W) != 0 {
+            opener_open(i, ent);
+            return;
+        }
+        i = i + 1;
+    }
 }
 
 fn properties_key(win, k) {
-    # No keybindings yet — key is a no-op.
+    # No keybindings yet.
 }

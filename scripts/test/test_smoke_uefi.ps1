@@ -17,7 +17,17 @@ $SerialHost = '127.0.0.1'
 $SerialPort = 5555
 
 function Stop-QemuIfRunning {
-    Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force
+    try {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        $client.Connect('127.0.0.1', 4444)
+        $stream = $client.GetStream()
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes("quit`r`n")
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush()
+        $client.Close()
+        Start-Sleep -Milliseconds 500
+    } catch {}
+    Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
 function Read-SerialBootLog {
@@ -77,7 +87,7 @@ try {
     Write-Host '[smoke] Booting VM and capturing serial...' -ForegroundColor Yellow
     $bootJob = Start-Job -ScriptBlock {
         param($RootPath)
-        powershell -ExecutionPolicy Bypass -File (Join-Path $RootPath 'scripts\run\run_uefi.ps1')
+        powershell -ExecutionPolicy Bypass -File (Join-Path $RootPath 'scripts\run\run_uefi.ps1') -Headless -NoPassthrough -SerialTcp
     } -ArgumentList $Root
 
     try {

@@ -111,6 +111,7 @@ i2c_hid_init:
     mov byte [i2c_hid_active], 0
     mov byte [i2c_poll_state], 0
     mov dword [i2c_error_count], 0
+    mov byte [i2c_dbg_init_code], 0x10
 
     ; Serial: 'T' (touchpad init)
     mov dx, 0x3F8
@@ -140,6 +141,7 @@ i2c_hid_init:
     je .next_amd_ctrl
 
     mov [i2c_base_addr], rsi
+    mov byte [i2c_dbg_init_code], 0x20
 
     push rsi
     mov rsi, szI2cProbing
@@ -159,6 +161,7 @@ i2c_hid_init:
 .try_intel:
     mov rsi, szI2cIntel
     call debug_print
+    mov byte [i2c_dbg_init_code], 0x30
 
     ; Scan PCI for Intel LPSS I2C controllers
     ; Look for: vendor=0x8086, class code byte 0x0C (Serial Bus), subclass 0x80
@@ -230,6 +233,7 @@ i2c_hid_init:
 
     mov [i2c_base_addr], rsi
     mov byte [i2c_is_intel], 1
+    mov byte [i2c_dbg_init_code], 0x31
 
     push rsi
     mov rsi, szI2cIntelFound
@@ -264,6 +268,7 @@ i2c_hid_init:
     add rsp, 8                  ; pop saved rax
 .found:
     mov byte [i2c_hid_active], 1
+    mov byte [i2c_dbg_init_code], 0x80
 
     ; Serial: 'TK' (touchpad OK)
     mov dx, 0x3F8
@@ -277,6 +282,10 @@ i2c_hid_init:
     jmp .ret
 
 .not_found:
+    cmp byte [i2c_dbg_init_code], 0xE0
+    jae .not_found_keep_code
+    mov byte [i2c_dbg_init_code], 0xF0
+.not_found_keep_code:
     ; Serial: 'TF'
     mov dx, 0x3F8
     mov al, 'F'
@@ -322,21 +331,29 @@ i2c_try_all_addresses:
     ; Initialize this I2C controller with target address
     call i2c_init_controller
     test eax, eax
-    jz .next_addr
+    jnz .ctrl_ready
+    mov byte [i2c_dbg_init_code], 0xE1
+    jmp .next_addr
+.ctrl_ready:
+    mov byte [i2c_dbg_init_code], 0x41
 
     ; Try to read I2C-HID descriptor
     call i2c_hid_get_descriptor
     test eax, eax
-    jz .next_addr
+    jnz .desc_ready
+    mov byte [i2c_dbg_init_code], 0xE2
+    jmp .next_addr
+.desc_ready:
+    mov byte [i2c_dbg_init_code], 0x42
 
     ; Found! Store device address and configure
     mov byte [i2c_dev_addr], dil
 
-    ; Send reset command
-    call i2c_hid_reset
-
-    ; Send power-on command
+    ; Power the device ON first, then RESET (I2C-HID spec order).
     call i2c_hid_set_power_on
+
+    ; Send reset command (also consumes the reset-response report)
+    call i2c_hid_reset
 
     ; Read HID report descriptor (for smart parsing)
     call i2c_hid_read_report_desc
@@ -400,6 +417,32 @@ i2c_init_controller:
 
     ; Set RX threshold to 0 (notify on any byte)
     mov dword [rsi + DW_IC_RX_TL], 0
+
+    ; Cache FIFO depths. IC_COMP_PARAM_1 encodes depth as N-1; some cores
+    ; leave the register unimplemented, so keep conservative 16-byte defaults.
+    mov eax, [rsi + DW_IC_COMP_PARAM_1]
+    test eax, eax
+    jz .fifo_depths_done
+    cmp eax, 0xFFFFFFFF
+    je .fifo_depths_done
+    mov ecx, eax
+    shr ecx, 16
+    and ecx, 0xFF
+    jz .fifo_rx
+    inc ecx
+    cmp ecx, 64
+    ja .fifo_rx
+    mov [i2c_tx_fifo_depth], cl
+.fifo_rx:
+    mov ecx, eax
+    shr ecx, 8
+    and ecx, 0xFF
+    jz .fifo_depths_done
+    inc ecx
+    cmp ecx, 64
+    ja .fifo_depths_done
+    mov [i2c_rx_fifo_depth], cl
+.fifo_depths_done:
 
     ; Clear any pending interrupts/aborts
     mov eax, [rsi + DW_IC_CLR_INTR]
@@ -531,21 +574,37 @@ i2c_hid_get_descriptor:
     push rcx
     push rbx
     push rdi
+    push r10
+    push r11
 
-    ; Clear any pending state
+    ; The I2C-HID descriptor register is vendor-specific and is normally read
+    ; from ACPI (_DSM). This machine's touchpad (Synaptics SYNA1B92) uses
+    ; register 0x0020; ELAN parts use 0x0001. Try each candidate until one
+    ; returns a structurally valid HID descriptor.
+    xor r11d, r11d                  ; candidate index
+.desc_try_reg:
+    cmp r11d, I2C_DESC_REG_COUNT
+    jge .fail
+    movzx r10d, word [i2c_desc_reg_cands + r11 * 2]
+
+    ; Clear any pending state / stale abort from a previous candidate
     mov eax, [rsi + DW_IC_CLR_INTR]
+    mov eax, [rsi + DW_IC_CLR_TX_ABRT]
     call i2c_flush_rx
 
-    ; Write: register address 0x0001 (HID descriptor register)
+    ; Write HID descriptor register address (LE: low byte, then high byte)
     ; No STOP - use RESTART on first read for atomic write+read transaction
-    mov al, 0x01
+    mov eax, r10d
+    and eax, 0xFF
     call i2c_write_byte
-    mov al, 0x00
+    mov eax, r10d
+    shr eax, 8
+    and eax, 0xFF
     call i2c_write_byte
 
     ; Wait for TX done
     call i2c_wait_tx_empty
-    jc .fail
+    jc .desc_next_reg
 
     ; Small delay for device to prepare
     mov ecx, 50000
@@ -567,7 +626,7 @@ i2c_hid_get_descriptor:
     ; Wait for 30 bytes
     mov ecx, 30
     call i2c_wait_rx_avail
-    jc .fail
+    jc .desc_next_reg
 
     ; Read 30 bytes into i2c_desc_buf
     lea rdi, [i2c_desc_buf]
@@ -598,10 +657,11 @@ i2c_hid_get_descriptor:
     ; Validate wHIDDescLength
     movzx ecx, word [rbx]
     cmp ecx, 4
-    jl .fail
+    jl .desc_next_reg
     cmp ecx, 64
-    jg .fail
+    jg .desc_next_reg
     mov [i2c_hid_desc_len], cx
+    mov [i2c_hid_desc_reg], r10w   ; remember which register worked
 
     ; Extract wReportDescLength [4:5]
     movzx eax, word [rbx + 4]
@@ -644,9 +704,15 @@ i2c_hid_get_descriptor:
     mov eax, 1
     jmp .desc_ret
 
+.desc_next_reg:
+    inc r11d
+    jmp .desc_try_reg
+
 .fail:
     xor eax, eax
 .desc_ret:
+    pop r11
+    pop r10
     pop rdi
     pop rbx
     pop rcx
@@ -691,63 +757,56 @@ i2c_hid_read_report_desc:
 .rdesc_dly: dec ecx
     jnz .rdesc_dly
 
-    ; Issue N read commands
-    movzx ecx, word [i2c_rdesc_read_len]
-    test ecx, ecx
-    jz .rdesc_done
-
-    ; First with RESTART
-    mov eax, IC_CMD_READ | IC_CMD_RESTART
-    mov [rsi + DW_IC_DATA_CMD], eax
-    dec ecx
-    test ecx, ecx
-    jz .rdesc_last_done
-
-    ; Middle reads
-.rdesc_queue:
-    cmp ecx, 1
-    je .rdesc_last
-    mov eax, IC_CMD_READ
-    mov [rsi + DW_IC_DATA_CMD], eax
-    dec ecx
-    jmp .rdesc_queue
-
-.rdesc_last:
-    ; Last with STOP
-    mov eax, IC_CMD_READ | IC_CMD_STOP
-    mov [rsi + DW_IC_DATA_CMD], eax
-.rdesc_last_done:
-
-    ; Wait for all bytes - use multiple waits since FIFO depth may be limited
-    movzx ecx, word [i2c_rdesc_read_len]
+    ; Read the report descriptor in FIFO-safe chunks. The DW I2C TX/RX FIFOs
+    ; are only ~32 deep; queueing all 600+ read commands at once (as the old
+    ; code did) overflows them and silently truncates the descriptor. Issue up
+    ; to 16 reads, drain them, repeat. The controller holds SCL between chunks.
+    movzx r8d, word [i2c_rdesc_read_len]   ; total bytes to read
     lea rdi, [i2c_rdesc_buf]
     xor ebx, ebx                ; bytes read so far
+    mov r11d, 1                 ; first-read flag (needs RESTART)
 
-.rdesc_read_loop:
-    cmp ebx, ecx
+.rdesc_chunk:
+    cmp ebx, r8d
     jge .rdesc_read_done
+    ; chunk = min(16, total - read)
+    mov ecx, r8d
+    sub ecx, ebx
+    cmp ecx, 16
+    jbe .rdesc_chunk_sz
+    mov ecx, 16
+.rdesc_chunk_sz:
+    mov r9d, ecx                ; r9d = this chunk's count
+    mov edx, ebx                ; edx = absolute byte index being queued
+.rdesc_q:
+    mov eax, IC_CMD_READ
+    test r11d, r11d
+    jz .rdesc_q_nofirst
+    or eax, IC_CMD_RESTART
+    xor r11d, r11d
+.rdesc_q_nofirst:
+    lea r10d, [edx + 1]
+    cmp r10d, r8d               ; STOP on the final byte of the descriptor
+    jne .rdesc_q_nostop
+    or eax, IC_CMD_STOP
+.rdesc_q_nostop:
+    mov [rsi + DW_IC_DATA_CMD], eax
+    inc edx
+    dec ecx
+    jnz .rdesc_q
 
-    ; Wait for at least 1 byte
-    push rcx
-    mov ecx, 1
+    ; wait for the chunk to arrive, then drain it
+    mov ecx, r9d
     call i2c_wait_rx_avail
-    pop rcx
     jc .rdesc_read_done
-
-    ; Read available bytes
-    mov eax, [rsi + DW_IC_RXFLR]
-.rdesc_drain:
-    test eax, eax
-    jz .rdesc_read_loop
-    cmp ebx, ecx
-    jge .rdesc_read_done
-    push rax
+    mov ecx, r9d
+.rdesc_d:
     mov eax, [rsi + DW_IC_DATA_CMD]
     mov [rdi + rbx], al
     inc ebx
-    pop rax
-    dec eax
-    jmp .rdesc_drain
+    dec ecx
+    jnz .rdesc_d
+    jmp .rdesc_chunk
 
 .rdesc_read_done:
     ; Parse the report descriptor
@@ -790,13 +849,32 @@ i2c_hid_reset:
 
     call i2c_wait_tx_empty
 
-    ; Wait for reset to complete (~10ms)
-    mov ecx, 1000000
+    ; Wait for reset to complete (~60ms busy-loop)
+    mov ecx, 6000000
 .rst_wait:
     dec ecx
     jnz .rst_wait
 
-    ; Drain any reset response
+    ; Consume the reset-response report. After RESET the device signals
+    ; completion by presenting a report at the Input Register; it will NOT
+    ; produce further input reports until that response has been read out.
+    ; A bare RX-FIFO flush is not enough - we must run a real I2C read
+    ; transaction against wInputRegister.
+    mov eax, [rsi + DW_IC_CLR_TX_ABRT]
+    call i2c_flush_rx
+
+    movzx eax, word [i2c_hid_input_reg]
+    call i2c_write_byte
+    movzx eax, word [i2c_hid_input_reg]
+    shr eax, 8
+    call i2c_write_byte
+    mov eax, IC_CMD_READ | IC_CMD_RESTART
+    mov [rsi + DW_IC_DATA_CMD], eax
+    mov eax, IC_CMD_READ | IC_CMD_STOP
+    mov [rsi + DW_IC_DATA_CMD], eax
+
+    mov ecx, 2
+    call i2c_wait_rx_avail      ; CF=1 on timeout - harmless, just drain
     call i2c_flush_rx
 
     pop rcx
@@ -855,13 +933,12 @@ i2c_hid_bus_reset:
 ; ============================================================================
 ; i2c_hid_poll - Non-blocking touchpad poll (called from main loop)
 ;
-; State machine (3 states for variable-length reports):
-;   State 0: Issue wInputRegister address + queue header reads (2 bytes)
-;            -> set state=1
-;   State 1: Check if 2 header bytes available. Read length.
-;            If length > 0, queue remaining reads. -> state=2
-;            If length == 0, -> state=0 (no data)
-;   State 2: Check if all data bytes available. Process report. -> state=0
+; State machine (2 states - the input report is read in ONE I2C
+; transaction, as the I2C-HID spec requires):
+;   State 0: Address wInputRegister + queue the full report read burst
+;            (RESTART..STOP), arm a deadline -> state=1
+;   State 1: Wait until the whole burst is in the RX FIFO, then drain
+;            and process it. On deadline timeout, recover -> state=0
 ; ============================================================================
 i2c_hid_poll:
     cmp byte [i2c_hid_active], 1
@@ -869,17 +946,26 @@ i2c_hid_poll:
 
     push rbx                    ; rbx is callee-saved; clobbered by xor ebx,ebx below
 
+    cmp byte [i2c_poll_busy], 0
+    jne .poll_ret_busy
+    mov byte [i2c_poll_busy], 1
+
     mov rsi, [i2c_base_addr]
+    inc dword [i2c_dbg_polls]           ; DEBUG: count poll entries
 
     ; Check for TX abort (non-blocking)
     mov eax, [rsi + DW_IC_RAW_INTR_STAT]
     test eax, (1 << 6)
     jz .no_abort
+    inc dword [i2c_dbg_aborts]          ; DEBUG: count aborts
+    mov eax, [rsi + DW_IC_TX_ABRT_SRC]  ; DEBUG: why did it abort?
+    mov [i2c_dbg_abrt_src], eax
     mov eax, [rsi + DW_IC_CLR_TX_ABRT]
     inc dword [i2c_error_count]
     cmp dword [i2c_error_count], 50
     jge .do_bus_reset
     mov byte [i2c_poll_state], 0
+    mov byte [i2c_poll_busy], 0
     pop rbx
     ret
 .no_abort:
@@ -887,10 +973,13 @@ i2c_hid_poll:
     movzx eax, byte [i2c_poll_state]
     cmp eax, 1
     je .state1
-    cmp eax, 2
-    je .state2
 
-    ; === STATE 0: Issue read request ===
+    ; === STATE 0: issue a single-transaction input-report read ===
+    ; The I2C-HID spec requires the 2-byte length header AND the report
+    ; payload to be read in ONE transaction (one START..STOP). Splitting
+    ; it - read header, STOP, then a second read - makes the device treat
+    ; the report as consumed; the second read returns an empty 0-length
+    ; report. So queue the whole burst up front.
 .state0:
     ; Drain any stale RX data
     mov eax, [rsi + DW_IC_RXFLR]
@@ -898,127 +987,159 @@ i2c_hid_poll:
     jz .state0_no_drain
     call i2c_flush_rx
 .state0_no_drain:
+    ; Clear any stale abort
+    mov eax, [rsi + DW_IC_CLR_TX_ABRT]
 
-    ; Write wInputRegister address (2 bytes, no STOP - RESTART on read)
+    ; Bytes to read = wMaxInputLength, clamped to our HID parser buffer. Do
+    ; not clamp to RX FIFO depth: real touchpad reports often exceed 16 bytes.
+    ; State 1 drains RX progressively while queueing more read commands.
+    movzx ecx, word [i2c_max_input_len]
+    cmp ecx, 8
+    jae .ric_have
+    mov ecx, 16                 ; missing/bogus descriptor value
+.ric_have:
+    cmp ecx, MOUSE_BUFFER_SIZE
+    jbe .ric_min
+    mov ecx, MOUSE_BUFFER_SIZE
+.ric_min:
+    cmp ecx, 8
+    jae .ric_ok
+    mov ecx, 8
+.ric_ok:
+    mov [i2c_read_count], cx
+
+    ; Address the Input Register (2-byte LE write, no STOP -> RESTART read)
     movzx eax, word [i2c_hid_input_reg]
     call i2c_write_byte
     movzx eax, word [i2c_hid_input_reg]
     shr eax, 8
     call i2c_write_byte
+    call i2c_wait_tx_empty
+    jc .state0_recover
 
-    ; Queue reads for the 2-byte length header
-    mov eax, IC_CMD_READ | IC_CMD_RESTART
-    mov [rsi + DW_IC_DATA_CMD], eax
-    mov eax, IC_CMD_READ | IC_CMD_STOP
-    mov [rsi + DW_IC_DATA_CMD], eax
+    mov word [i2c_read_queued], 0
+    mov word [i2c_read_index], 0
+
+    ; Deadline: if the burst has not fully arrived within ~10 PIT ticks
+    ; (~100ms) the transaction aborted - recover instead of stalling.
+    mov eax, [tick_count]
+    add eax, 10
+    mov [i2c_poll_deadline], eax
 
     mov byte [i2c_poll_state], 1
-    ret
+    jmp .state1
 
-    ; === STATE 1: Read length header ===
-.state1:
-    mov eax, [rsi + DW_IC_RXFLR]
-    cmp eax, 2
-    jl .poll_ret                ; Not ready yet
-
-    ; Read 2-byte length (LE)
-    mov eax, [rsi + DW_IC_DATA_CMD]
-    movzx ecx, al
-    mov eax, [rsi + DW_IC_DATA_CMD]
-    movzx eax, al
-    shl eax, 8
-    or ecx, eax                 ; ECX = packet length (including 2-byte header)
-
-    ; Validate length
-    cmp ecx, 2
-    jle .state1_no_data         ; Length 0-2 = no data
-    cmp ecx, 0xFFFF
-    je .state1_no_data
-    cmp ecx, 256
-    jg .state1_no_data          ; Sanity check
-
-    ; Data length = packet length - 2 (header already read)
-    sub ecx, 2
-    mov [i2c_pending_len], cx
-
-    ; Queue reads for remaining data bytes
-    ; First with RESTART
-    push rcx
-    movzx eax, word [i2c_hid_input_reg]
-    call i2c_write_byte
-    movzx eax, word [i2c_hid_input_reg]
-    shr eax, 8
-    call i2c_write_byte         ; No STOP - RESTART on first read
-    pop rcx
-
-    ; FIX: device re-sends full report (packet_length bytes) on the second transaction,
-    ; including the 2-byte length header. Queue packet_length = data_bytes + 2 reads.
-    add ecx, 2
-
-    push rcx
-    ; Queue reads: first with restart
-    mov eax, IC_CMD_READ | IC_CMD_RESTART
-    mov [rsi + DW_IC_DATA_CMD], eax
-    dec ecx
-
-    ; Middle reads
-.state1_queue:
-    cmp ecx, 1
-    jle .state1_last
-    mov eax, IC_CMD_READ
-    mov [rsi + DW_IC_DATA_CMD], eax
-    dec ecx
-    jmp .state1_queue
-
-.state1_last:
-    ; Last with STOP
-    test ecx, ecx
-    jz .state1_queue_done
-    mov eax, IC_CMD_READ | IC_CMD_STOP
-    mov [rsi + DW_IC_DATA_CMD], eax
-
-.state1_queue_done:
-    pop rcx
-    ; ECX = packet_length (data_bytes + 2); i2c_pending_len already accounts for header
-    mov [i2c_pending_len], cx
-
-    mov byte [i2c_poll_state], 2
-    ret
-
-.state1_no_data:
+    ; Address phase failed before any read burst was armed.
+.state0_recover:
+    inc dword [i2c_error_count]
+    mov eax, [rsi + DW_IC_CLR_TX_ABRT]
+    call i2c_flush_rx
     mov byte [i2c_poll_state], 0
+    mov byte [i2c_poll_busy], 0
+    pop rbx
     ret
 
-    ; === STATE 2: Read data payload ===
-.state2:
-    movzx ecx, word [i2c_pending_len]
+    ; === STATE 1: wait for the burst, then process it ===
+.state1:
+    ; Drain any bytes already delivered. RXFLR never exceeds the hardware FIFO
+    ; depth, so waiting for RXFLR == whole report breaks on real touchpads.
+.state1_drain:
     mov eax, [rsi + DW_IC_RXFLR]
-    cmp eax, ecx
-    jl .poll_ret                ; Not all bytes ready yet
-
-    ; Read all bytes into report buffer
-    lea rdi, [i2c_report_buf]
-    xor ebx, ebx
-.state2_read:
+    test eax, eax
+    jz .state1_queue
+    movzx ebx, word [i2c_read_index]
+    movzx ecx, word [i2c_read_count]
     cmp ebx, ecx
-    jge .state2_process
+    jae .state1_queue
     mov eax, [rsi + DW_IC_DATA_CMD]
-    mov [rdi + rbx], al
+    mov [i2c_report_buf + rbx], al
     inc ebx
-    jmp .state2_read
+    mov [i2c_read_index], bx
+    jmp .state1_drain
 
-.state2_process:
+.state1_queue:
+    ; Queue more read commands while the TX FIFO has space.
+    movzx ebx, word [i2c_read_queued]
+    movzx ecx, word [i2c_read_count]
+    cmp ebx, ecx
+    jae .state1_check_done
+    mov eax, [rsi + DW_IC_TXFLR]
+    movzx edx, byte [i2c_tx_fifo_depth]
+    test edx, edx
+    jnz .tx_depth_ok
+    mov edx, 16
+.tx_depth_ok:
+    cmp eax, edx
+    jae .state1_check_done
+
+    mov eax, IC_CMD_READ
+    test ebx, ebx
+    jnz .not_first_read
+    or eax, IC_CMD_RESTART
+.not_first_read:
+    mov edx, ebx
+    inc edx
+    cmp dx, [i2c_read_count]
+    jne .not_last_read
+    or eax, IC_CMD_STOP
+.not_last_read:
+    mov [rsi + DW_IC_DATA_CMD], eax
+    inc ebx
+    mov [i2c_read_queued], bx
+    jmp .state1_drain
+
+.state1_check_done:
+    movzx eax, word [i2c_read_index]
+    movzx ecx, word [i2c_read_count]
+    cmp eax, ecx
+    jge .state1_ready
+
+    ; Burst not fully in yet - check the deadline
+    mov eax, [tick_count]
+    cmp eax, [i2c_poll_deadline]
+    jb .poll_ret                ; still within deadline, keep waiting
+    ; Timed out - the transaction aborted. Recover for the next frame.
+    inc dword [i2c_error_count]
+    mov eax, [rsi + DW_IC_CLR_TX_ABRT]
+    call i2c_flush_rx
+    mov byte [i2c_poll_state], 0
+    mov byte [i2c_poll_busy], 0
+    pop rbx
+    ret
+
+.state1_ready:
     mov byte [i2c_poll_state], 0
     mov dword [i2c_error_count], 0  ; Reset error count on success
 
-    ; Parse the report
-    ; First 2 bytes are length header (skip them)
-    ; Byte 2 = Report ID (if has_report_id)
+    ; --- DEBUG: capture raw report (count, length, first 8 bytes) ---
+    inc dword [i2c_dbg_rpts]
+    movzx eax, word [i2c_report_buf]
+    mov [i2c_dbg_len], ax
+    lea rdi, [i2c_report_buf]
+    lea rax, [i2c_dbg_bytes]
+    mov ecx, 8
+.dbg_cap:
+    mov dl, [rdi]
+    mov [rax], dl
+    inc rdi
+    inc rax
+    dec ecx
+    jnz .dbg_cap
+    ; --- end debug ---
+
+    ; Parse the report. Bytes [0:1] are the length header. The real
+    ; report may be longer than our 32-byte burst, so clamp the data
+    ; length to what we actually read.
     lea rdi, [i2c_report_buf]
     movzx ecx, word [rdi]       ; packet length from header
+    movzx eax, word [i2c_read_count]
+    cmp ecx, eax
+    jbe .len_in_range
+    mov ecx, eax
+.len_in_range:
     sub ecx, 2                   ; data length after header
     cmp ecx, 1
-    jl .poll_ret                 ; No useful data
+    jl .poll_ret                 ; No useful data (idle / empty report)
     add rdi, 2                   ; skip length header
 
     ; Check if we have parsed report descriptor
@@ -1070,6 +1191,9 @@ i2c_hid_poll:
     push rcx
     cmp byte [hid_parsed_has_report_id], 1
     jne .no_skip_id
+    mov al, [rdi]
+    cmp al, [hid_parsed_report_id]
+    jne .parsed_report_id_mismatch
     inc rdi
     dec ecx
 .no_skip_id:
@@ -1080,6 +1204,10 @@ i2c_hid_poll:
     call hid_process_touchpad_report
     pop rcx
     mov byte [mouse_moved], 1   ; mark moved so cursor updates
+    jmp .poll_ret
+
+.parsed_report_id_mismatch:
+    pop rcx
     jmp .poll_ret
 
 .poll_clamp:
@@ -1107,21 +1235,35 @@ i2c_hid_poll:
     mov byte [mouse_moved], 1
 
 .poll_ret:
+    mov byte [i2c_poll_busy], 0
     pop rbx
 .poll_ret_noframe:
     ret
 
+.poll_ret_busy:
+    pop rbx
+    ret
+
 .do_bus_reset:
     call i2c_hid_bus_reset
+    mov byte [i2c_poll_busy], 0
     pop rbx
     ret
 
 ; ============================================================================
 ; i2c_hid_debug_dump - Dump I2C state to buffer
 ; RDI = buffer pointer
+; i2c_hid_debug_dump_line:
+; RDI = buffer pointer, EAX = line index (0..2)
 ; ============================================================================
 global i2c_hid_debug_dump
 i2c_hid_debug_dump:
+    xor eax, eax
+    jmp i2c_hid_debug_dump_line
+
+global i2c_hid_debug_dump_line
+i2c_hid_debug_dump_line:
+    mov r10d, eax
     push rdi
     push rsi
     push rax
@@ -1134,14 +1276,22 @@ i2c_hid_debug_dump:
     lea rsi, [.hdr]
     call .copystr
 
-    ; Active
-    lea rsi, [.s_active]
+    test r10d, r10d
+    jz .line0
+    cmp r10d, 1
+    je .line1
+    jmp .line2
+
+.line0:
+    lea rsi, [.s_init]
+    call .copystr
+    movzx eax, byte [i2c_dbg_init_code]
+    call .writehex8
+    lea rsi, [.s_active_short]
     call .copystr
     movzx eax, byte [i2c_hid_active]
     call .writehex8
-
-    ; Base/Addr
-    lea rsi, [.s_base]
+    lea rsi, [.s_base_short]
     call .copystr
     mov rax, [i2c_base_addr]
     call .writehex32
@@ -1150,35 +1300,115 @@ i2c_hid_debug_dump:
     movzx eax, byte [i2c_dev_addr]
     call .writehex8
 
-    ; Intel?
-    cmp byte [i2c_is_intel], 1
-    jne .not_intel_dbg
-    lea rsi, [.s_intel]
-    call .copystr
-.not_intel_dbg:
-
     ; Parsed?
     cmp byte [i2c_use_parsed], 1
-    jne .not_parsed_dbg
+    jne .line0_done
     lea rsi, [.s_parsed]
     call .copystr
     cmp byte [hid_parsed_is_absolute], 1
-    jne .parsed_rel
+    jne .line0_rel
     lea rsi, [.s_abs]
     call .copystr
-    jmp .parsed_done_dbg
-.parsed_rel:
+    jmp .line0_done
+.line0_rel:
     lea rsi, [.s_rel]
     call .copystr
-.parsed_done_dbg:
-.not_parsed_dbg:
+.line0_done:
+    jmp .done
+
+.line1:
+    lea rsi, [.s_report]
+    call .copystr
+
+    ; Report count
+    lea rsi, [.s_rp]
+    call .copystr
+    mov eax, [i2c_dbg_rpts]
+    call .writehex32
+
+    ; Last report length
+    lea rsi, [.s_ln]
+    call .copystr
+    movzx eax, word [i2c_dbg_len]
+    call .writehex8
+
+    ; First 8 raw report bytes
+    lea rsi, [.s_by]
+    call .copystr
+    push r12
+    push r13
+    lea r12, [i2c_dbg_bytes]
+    xor r13d, r13d
+.dump_byte:
+    cmp r13d, 8
+    jge .dump_byte_done
+    movzx eax, byte [r12 + r13]
+    call .writehex8
+    inc r13d
+    jmp .dump_byte
+.dump_byte_done:
+    pop r13
+    pop r12
+    jmp .done
+
+.line2:
+    lea rsi, [.s_poll]
+    call .copystr
+    ; Poll state
+    lea rsi, [.s_pst]
+    call .copystr
+    movzx eax, byte [i2c_poll_state]
+    call .writehex8
+
+    ; Burst size and FIFO depths
+    lea rsi, [.s_rc]
+    call .copystr
+    movzx eax, word [i2c_read_count]
+    call .writehex8
+    mov byte [rbx], '/'
+    inc rbx
+    movzx eax, byte [i2c_tx_fifo_depth]
+    call .writehex8
+    mov byte [rbx], '/'
+    inc rbx
+    movzx eax, byte [i2c_rx_fifo_depth]
+    call .writehex8
 
     ; Error count
     lea rsi, [.s_err]
     call .copystr
-    mov eax, [i2c_error_count]
+    movzx eax, byte [i2c_error_count]
+    call .writehex8
+
+    ; Polls / aborts / last abort source
+    lea rsi, [.s_pa]
+    call .copystr
+    mov eax, [i2c_dbg_polls]
+    call .writehex32
+    mov byte [rbx], '/'
+    inc rbx
+    mov eax, [i2c_dbg_aborts]
+    call .writehex32
+    mov byte [rbx], '/'
+    inc rbx
+    mov eax, [i2c_dbg_abrt_src]
     call .writehex32
 
+    ; Descriptor register / input register / report-desc length
+    lea rsi, [.s_dreg]
+    call .copystr
+    movzx eax, word [i2c_hid_desc_reg]
+    call .writehex8
+    lea rsi, [.s_ireg]
+    call .copystr
+    movzx eax, word [i2c_hid_input_reg]
+    call .writehex8
+    lea rsi, [.s_rdl]
+    call .copystr
+    movzx eax, word [i2c_report_desc_len]
+    call .writehex32
+
+.done:
     ; Null terminate
     mov byte [rbx], 0
 
@@ -1213,35 +1443,42 @@ i2c_hid_debug_dump:
 
 .writehex32:
     push rax
+    shr eax, 28
+    and al, 0x0F
+    call .nib
+    pop rax
+    push rax
     shr eax, 24
+    and al, 0x0F
     call .nib
     pop rax
     push rax
     shr eax, 20
-    and al, 0xF
+    and al, 0x0F
     call .nib
     pop rax
     push rax
     shr eax, 16
-    and al, 0xF
+    and al, 0x0F
     call .nib
     pop rax
     push rax
     shr eax, 12
-    and al, 0xF
+    and al, 0x0F
     call .nib
     pop rax
     push rax
     shr eax, 8
-    and al, 0xF
+    and al, 0x0F
     call .nib
     pop rax
     push rax
-    shr al, 4
+    shr eax, 4
+    and al, 0x0F
     call .nib
     pop rax
     push rax
-    and al, 0xF
+    and al, 0x0F
     call .nib
     pop rax
     ret
@@ -1258,7 +1495,7 @@ i2c_hid_debug_dump:
     inc rbx
     ret
 
-.hdr        db " -- I2C Debug --", 0
+.hdr        db "I2C", 0
 .s_active   db " Active:", 0
 .s_base     db " Base:", 0
 .s_intel    db " [Intel]", 0
@@ -1266,6 +1503,20 @@ i2c_hid_debug_dump:
 .s_abs      db "Abs", 0
 .s_rel      db "Rel", 0
 .s_err      db " Err:", 0
+.s_dreg     db " dReg:", 0
+.s_pst      db " St:", 0
+.s_ireg     db " inReg:", 0
+.s_rdl      db " rdLen:", 0
+.s_rp       db " rp:", 0
+.s_ln       db " ln:", 0
+.s_by       db " b:", 0
+.s_rc       db " rc:", 0
+.s_pa       db " pa:", 0
+.s_init     db " init:", 0
+.s_active_short db " a:", 0
+.s_base_short db " ba:", 0
+.s_report   db " rep", 0
+.s_poll     db " poll", 0
 
 ; ============================================================================
 ; Data Section
@@ -1298,17 +1549,41 @@ i2c_tp_addrs:
     db 0x2D             ; Synaptics variant
 I2C_TP_ADDR_COUNT   equ ($ - i2c_tp_addrs)
 
+; I2C-HID descriptor register candidates. The register that holds the HID
+; descriptor is vendor-specific (ACPI _DSM provides it on a real OS).
+; 0x0020 = Synaptics (this laptop's SYNA1B92), 0x0001 = ELAN and most others.
+i2c_desc_reg_cands:
+    dw 0x0020
+    dw 0x0001
+I2C_DESC_REG_COUNT  equ (($ - i2c_desc_reg_cands) / 2)
+
 ; I2C-HID state
 global i2c_hid_active
 i2c_hid_active:     db 0
 i2c_dev_addr:       db 0
-i2c_poll_state:     db 0        ; 0=issue, 1=read header, 2=read data
+i2c_poll_state:     db 0        ; 0=issue read burst, 1=wait+process burst
 i2c_is_intel:       db 0        ; 1 if controller found via PCI (Intel LPSS)
 i2c_use_parsed:     db 0        ; 1 if HID report descriptor was parsed successfully
 i2c_base_addr:      dq 0
 i2c_hid_desc_len:   dw 0
+i2c_hid_desc_reg:   dw 0x0020      ; HID descriptor register that worked
 i2c_error_count:    dd 0        ; consecutive error counter for bus reset
-i2c_pending_len:    dw 0        ; bytes pending in state 2
+i2c_read_count:     dw 0        ; bytes to read in the current input-report burst
+i2c_read_queued:    dw 0        ; read commands queued for the current burst
+i2c_read_index:     dw 0        ; bytes drained into i2c_report_buf
+i2c_poll_deadline:  dd 0        ; tick_count deadline for the current burst
+i2c_poll_busy:      db 0        ; prevents IRQ/main-loop reentry
+i2c_tx_fifo_depth:  db 16       ; decoded from DW_IC_COMP_PARAM_1 when available
+i2c_rx_fifo_depth:  db 16       ; decoded from DW_IC_COMP_PARAM_1 when available
+
+; DEBUG: raw touchpad report capture
+i2c_dbg_rpts:       dd 0        ; count of input reports processed
+i2c_dbg_len:        dw 0        ; length of last report
+i2c_dbg_bytes:      times 8 db 0 ; first 8 bytes of last report
+i2c_dbg_polls:      dd 0        ; poll entries
+i2c_dbg_aborts:     dd 0        ; TX aborts seen by poll
+i2c_dbg_abrt_src:   dd 0        ; last DW_IC_TX_ABRT_SRC value
+i2c_dbg_init_code:  db 0        ; init/probe progress: 0x80=active, 0xE*=probe fail
 
 ; I2C-HID register addresses (from HID descriptor, with defaults)
 i2c_hid_cmd_reg:    dw 0x0005
@@ -1325,7 +1600,7 @@ i2c_rdesc_read_len:     dw 0    ; actual bytes to read
 i2c_desc_buf:       times 32 db 0   ; Raw HID descriptor (30 bytes)
 i2c_report_buf:     times 256 db 0  ; Input report buffer (variable length)
 
-I2C_RDESC_BUF_SIZE  equ 512
+I2C_RDESC_BUF_SIZE  equ 1024
 i2c_rdesc_buf:      times I2C_RDESC_BUF_SIZE db 0  ; Report descriptor buffer
 
 ; Strings

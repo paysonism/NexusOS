@@ -56,15 +56,25 @@ After boot, serial control bytes can request diagnostics:
 | `0x01` then `p` | `CPU:`, `CACHE:`, `FREQ:`, `MEMCAP:`, `SMP:` |
 | `0x01` then `m` | `MEMCAP:` arena summary |
 | `0x01` then `s` | `SMP:` detected/target/started/alive/parked counts |
+| `0x01` then `v` | `GPU780M:`/`GPUAMD:` PCI identity plus `AMDDISP:` provider state |
 | `0x01` then `b` | `BENCH:` short CPU benchmark cycle delta |
 
 `FREQ:` reports a TSC delta over one PIT tick when interrupts are enabled. It is
 a measurement aid, not direct turbo control.
 
+The `GPU780M:` probe only reads PCI config space. It does not enable the device,
+write the command register, or touch BAR MMIO. If the exact `1002:15BF` 780M ID
+is not present, it also prints `GPUAMD:` for the first AMD display controller it
+sees so hardware can still be identified 1:1. `BAR0:` and `CMD:` are reported as
+read-only bring-up metadata for the eventual hardware init path.
+`AMDDISP:` reports whether the AMD display provider claimed the boot framebuffer
+and the native firmware/GOP mode it will accept for mode setting.
+
 ## SMP Status
 
-The current milestone adds cacheline-aligned per-core state records plus a
-real-mode AP trampoline and Local APIC INIT-SIPI-SIPI startup path. Cache32Max
-builds enable `NEXUS_CACHE32_AP_STARTUP`; APs enter long mode, update their
-heartbeat/state records, and park in a `hlt` loop while IRQ and device ownership
-remain on the BSP.
+The current milestone has cacheline-aligned per-core state records, a real-mode
+AP trampoline, and Local APIC INIT-SIPI-SIPI startup. Cache32Max builds enable
+`NEXUS_CACHE32_AP_STARTUP` and `NEXUS_ENABLE_RING3_AP`; APs enter long mode,
+update their heartbeat/state records, initialize their ring-3 syscall/TSS
+state, and run `smp_worker_loop`. IRQ and device ownership remain on the BSP,
+but app callbacks are submitted to each process `home_core`.

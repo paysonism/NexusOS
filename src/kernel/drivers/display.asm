@@ -11,6 +11,13 @@ extern tick_count
 extern frame_count
 extern start_tick
 extern serial_putc
+extern wallpaper_render_active
+extern wallpaper_render_target_addr
+extern wallpaper_render_w
+extern wallpaper_render_h
+extern amd_display_init
+extern amd_display_set_mode
+extern amd_display_active
 
 section .text
 
@@ -66,11 +73,98 @@ FN_BEGIN display_init, 0, 0, FN_RET_SCALAR
     mov [bb_addr], rax
 
     call display_recompute_layout
+    call raster_select_default_target
+    call amd_display_init
 
     ; Clear back buffer
     xor edi, edi             ; Black (color arg in edi)
     call display_clear
 
+    ret
+
+; Select the backbuffer as the destination for raster primitives.
+global raster_select_default_target
+raster_select_default_target:
+    push rax
+    mov rax, [bb_addr]
+    mov [raster_target_addr], rax
+    mov eax, [scr_width]
+    mov [raster_target_width], eax
+    mov eax, [scr_height]
+    mov [raster_target_height], eax
+    mov rax, [scr_pitch_q]
+    mov [raster_target_pitch_q], rax
+    pop rax
+    ret
+
+; Select the destination for a usermode raster syscall.
+; EDI = L3 slot.  Slot 0 is the hidden wallpaper renderer; while its AP job is
+; active, SVG raster primitives write directly into the wallpaper cache instead
+; of mutating bb_addr globally.
+;
+; Acquires raster_target_lock before mutating the shared raster_target_*
+; globals. Without this, the wallpaper rasterizer (running on an AP) and the
+; BSP could both call this routine in parallel — the BSP's call would overwrite
+; the AP's target mid-raster-op, sending the AP's pixel writes into bb_addr at
+; framebuffer-pitch offsets computed for a packed-pitch cache. That produced
+; the skewed-stripes wallpaper bug on real hardware (true SMP); QEMU TCG
+; serialized vCPUs and hid it. Pair every call with raster_sc_release_target.
+global raster_select_syscall_target
+raster_select_syscall_target:
+    push rax
+.spin:
+    mov al, 1
+    xchg [raster_target_lock], al
+    test al, al
+    jnz .pause
+    cmp edi, 0
+    jne .use_default
+    cmp byte [wallpaper_render_active], 1
+    jne .use_default
+    cmp dword [wallpaper_render_w], 0
+    jle .use_default
+    cmp dword [wallpaper_render_h], 0
+    jle .use_default
+    mov rax, [wallpaper_render_target_addr]
+    mov [raster_target_addr], rax
+    mov eax, [wallpaper_render_w]
+    mov [raster_target_width], eax
+    shl eax, 2
+    mov [raster_target_pitch_q], rax
+    mov eax, [wallpaper_render_h]
+    mov [raster_target_height], eax
+    pop rax
+    ret
+.use_default:
+    mov rax, [bb_addr]
+    mov [raster_target_addr], rax
+    mov eax, [scr_width]
+    mov [raster_target_width], eax
+    mov eax, [scr_height]
+    mov [raster_target_height], eax
+    mov rax, [scr_pitch_q]
+    mov [raster_target_pitch_q], rax
+    pop rax
+    ret
+.pause:
+    pause
+    jmp .spin
+
+; Reset the raster target to bb_addr and release raster_target_lock. Paired
+; with raster_select_syscall_target at every raster-syscall epilog.
+global raster_sc_release_target
+raster_sc_release_target:
+    push rax
+    mov rax, [bb_addr]
+    mov [raster_target_addr], rax
+    mov eax, [scr_width]
+    mov [raster_target_width], eax
+    mov eax, [scr_height]
+    mov [raster_target_height], eax
+    mov rax, [scr_pitch_q]
+    mov [raster_target_pitch_q], rax
+    mov byte [raster_target_lock], 0
+    pop rax
     ret
 
 ; --- Recompute window-manager layout for the current scr_width/scr_height
@@ -100,7 +194,7 @@ FN_BEGIN display_recompute_layout, 0, 0, FN_RET_SCALAR
     add ecx, 10                   ; +10 = clock Y inset
     mov [scr_clock_y], ecx
     mov ecx, eax
-    sub ecx, 200                  ; -START_MENU_H = start menu top
+    sub ecx, [tb_start_menu_h]    ; -START_MENU_H = start menu top (data-driven)
     mov [scr_start_menu_y], ecx
 
     mov eax, [scr_width]
@@ -122,19 +216,19 @@ FN_BEGIN pixel_set, 0, 0, FN_RET_SCALAR
     ; Bounds check
     cmp edi, 0
     jl .done
-    cmp edi, [scr_width]
+    cmp edi, [raster_target_width]
     jge .done
     cmp esi, 0
     jl .done
-    cmp esi, [scr_height]
+    cmp esi, [raster_target_height]
     jge .done
 
     ; Calculate offset: y * pitch + x * 4
     movsxd rax, esi
-    imul rax, [scr_pitch_q]
+    imul rax, [raster_target_pitch_q]
     movsxd rbx, edi
     lea rax, [rax + rbx * 4]
-    mov rbx, [bb_addr]
+    mov rbx, [raster_target_addr]
     mov [rbx + rax], edx
 
 .done:
@@ -154,18 +248,18 @@ FN_BEGIN blend_pixel, 0, 0, FN_RET_SCALAR
     push r10
     cmp edi, 0
     jl .bp_done
-    cmp edi, [scr_width]
+    cmp edi, [raster_target_width]
     jge .bp_done
     cmp esi, 0
     jl .bp_done
-    cmp esi, [scr_height]
+    cmp esi, [raster_target_height]
     jge .bp_done
 
     movsxd rax, esi
-    imul rax, [scr_pitch_q]
+    imul rax, [raster_target_pitch_q]
     movsxd rbx, edi
     lea rax, [rax + rbx * 4]
-    mov r10, [bb_addr]
+    mov r10, [raster_target_addr]
     add r10, rax              ; r10 = &dst pixel
 
     mov ecx, edx              ; src ARGB
@@ -349,7 +443,7 @@ FN_BEGIN blend_span_argb, 0, 0, FN_RET_SCALAR
     lea r15, [r15 + rax * 4]      ; advance src past skipped pixels
     xor r12d, r12d
 .bsa_cl_right:
-    mov eax, [scr_width]
+    mov eax, [raster_target_width]
     cmp r12, rax
     jge .bsa_done
     mov rbx, rax
@@ -361,7 +455,7 @@ FN_BEGIN blend_span_argb, 0, 0, FN_RET_SCALAR
     ; dst row addr = bb_addr + y * pitch + x * 4
     mov rax, r13
     imul rax, [scr_pitch_q]
-    mov rdi, [bb_addr]
+    mov rdi, [raster_target_addr]
     add rdi, rax
     lea rdi, [rdi + r12 * 4]         ; rdi = dst pixel pointer
     mov rsi, r15                     ; rsi = src pixel pointer
@@ -499,7 +593,7 @@ FN_BEGIN blend_span_argb_screen, 0, 0, FN_RET_SCALAR
     lea r15, [r15 + rax * 4]
     xor r12d, r12d
 .bss_cl_right:
-    mov eax, [scr_width]
+    mov eax, [raster_target_width]
     cmp r12, rax
     jge .bss_done
     mov rbx, rax
@@ -510,7 +604,7 @@ FN_BEGIN blend_span_argb_screen, 0, 0, FN_RET_SCALAR
 .bss_setup:
     mov rax, r13
     imul rax, [scr_pitch_q]
-    mov rdi, [bb_addr]
+    mov rdi, [raster_target_addr]
     add rdi, rax
     lea rdi, [rdi + r12 * 4]         ; rdi = dst pixel pointer
     mov rsi, r15                     ; rsi = src pixel pointer
@@ -646,7 +740,7 @@ FN_BEGIN blend_span_argb_multiply, 0, 0, FN_RET_SCALAR
     jle .bsm_done
     cmp r13, 0
     jl .bsm_done
-    mov eax, [scr_height]
+    mov eax, [raster_target_height]
     cmp r13, rax
     jge .bsm_done
     cmp r12, 0
@@ -658,7 +752,7 @@ FN_BEGIN blend_span_argb_multiply, 0, 0, FN_RET_SCALAR
     lea r15, [r15 + rax * 4]
     xor r12d, r12d
 .bsm_cl_right:
-    mov eax, [scr_width]
+    mov eax, [raster_target_width]
     cmp r12, rax
     jge .bsm_done
     mov rbx, rax
@@ -668,8 +762,8 @@ FN_BEGIN blend_span_argb_multiply, 0, 0, FN_RET_SCALAR
     mov r14, rbx
 .bsm_setup:
     mov rax, r13
-    imul rax, [scr_pitch_q]
-    mov rdi, [bb_addr]
+    imul rax, [raster_target_pitch_q]
+    mov rdi, [raster_target_addr]
     add rdi, rax
     lea rdi, [rdi + r12 * 4]
     mov rsi, r15
@@ -1172,6 +1266,59 @@ FN_BEGIN draw_hline, 0, 0, FN_RET_SCALAR
     pop r8
     ret
 
+; Target-aware scanline used by SVG raster primitives only. Normal GUI chrome
+; uses draw_hline/fill_rect above, which always write to the real backbuffer.
+draw_hline_raster:
+    push rax
+    push rbx
+    push rcx
+    push rdi
+    push rsi
+    push r9
+    push r10
+    movsxd r9, edi            ; x
+    movsxd r10, esi           ; y
+    movsxd rbx, edx           ; width
+    test rbx, rbx
+    jle .done
+    cmp r10, 0
+    jl .done
+    mov eax, [raster_target_height]
+    cmp r10, rax
+    jge .done
+    cmp r9, 0
+    jge .clip_right
+    add rbx, r9
+    jle .done
+    xor r9d, r9d
+.clip_right:
+    mov eax, [raster_target_width]
+    cmp r9, rax
+    jge .done
+    mov rdi, rax
+    sub rdi, r9
+    cmp rbx, rdi
+    jle .addr
+    mov rbx, rdi
+.addr:
+    mov rax, r10
+    imul rax, [raster_target_pitch_q]
+    lea rax, [rax + r9 * 4]
+    mov rdi, [raster_target_addr]
+    add rdi, rax
+    mov eax, ecx
+    mov rcx, rbx
+    rep stosd
+.done:
+    pop r10
+    pop r9
+    pop rsi
+    pop rdi
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
 ; --- Draw vertical line ---
 ; EDI = x, ESI = y, EDX = height, ECX = color
 ; auto-wrapped (FN_BEGIN emits global): global draw_vline
@@ -1284,6 +1431,9 @@ FN_BEGIN display_flip, 0, 0, FN_RET_SCALAR
     push rcx
     push rsi
     push rdi
+    extern fbperf_flip_full_begin
+    extern fbperf_flip_full_end
+    call fbperf_flip_full_begin
 
     mov rdi, [fb_addr]       ; Destination: framebuffer (VRAM)
     mov rsi, [bb_addr]       ; Source: back buffer (RAM)
@@ -1336,6 +1486,7 @@ FN_BEGIN display_flip, 0, 0, FN_RET_SCALAR
     and ecx, 7
     rep movsb
 
+    call fbperf_flip_full_end
     pop rdi
     pop rsi
     pop rcx
@@ -1353,6 +1504,10 @@ FN_BEGIN display_flip_rect, 0, 0, FN_RET_SCALAR
     push r10
     push r11
     push r12
+    extern fbperf_flip_rect_begin
+    extern fbperf_flip_rect_end
+    extern fbperf_flip_rect_note_size
+    call fbperf_flip_rect_begin
 
     ; Clip
     cmp edi, 0
@@ -1383,6 +1538,15 @@ FN_BEGIN display_flip_rect, 0, 0, FN_RET_SCALAR
     jle .fr_done
     cmp ecx, 0
     jle .fr_done
+
+    ; Note clipped rect size for fbperf bytes accounting.
+    push rdi
+    push rsi
+    mov  edi, edx
+    mov  esi, ecx
+    call fbperf_flip_rect_note_size
+    pop  rsi
+    pop  rdi
 
     ; Calculate starting offset
     movsxd r8, esi
@@ -1458,6 +1622,7 @@ FN_BEGIN display_flip_rect, 0, 0, FN_RET_SCALAR
     sfence                   ; Ensure NT stores are visible
 
 .fr_done:
+    call fbperf_flip_rect_end
     pop r12
     pop r11
     pop r10
@@ -1532,6 +1697,7 @@ global fb_native_width, fb_native_height
 global scr_taskbar_y, scr_clock_x, scr_clock_y
 global scr_start_btn_y, scr_start_menu_y
 global scr_tb_btn_y, scr_bat_ind_x, scr_bat_ind_y
+extern tb_start_menu_h
 ; --- Display flags (bit 0 vsync, bit 1 fps, bit 2 stretch) --------------
 ; STRETCH is "plumbing for now": when set, display_set_mode will allow
 ; modes that differ from the native fb size and (later) cause display_flip
@@ -1539,6 +1705,7 @@ global scr_tb_btn_y, scr_bat_ind_x, scr_bat_ind_y
 ; effective behavior is unchanged regardless of the bit. The bit is
 ; persisted across mode changes so Settings can toggle it cleanly.
 global display_stretch
+global raster_target_addr, raster_target_width, raster_target_height, raster_target_pitch_q
 
 fb_addr:    dq 0
 bb_addr:    dq 0
@@ -1546,6 +1713,16 @@ scr_width:  dd SCREEN_WIDTH
 scr_height: dd SCREEN_HEIGHT
 scr_pitch:  dd SCREEN_PITCH
 scr_pitch_q: dq SCREEN_PITCH
+raster_target_addr:    dq BACK_BUFFER_ADDR
+raster_target_width:   dd SCREEN_WIDTH
+raster_target_height:  dd SCREEN_HEIGHT
+raster_target_pitch_q: dq SCREEN_PITCH
+; Serializes mutation of the raster_target_* fields above between the BSP
+; and the wallpaper renderer running on an AP. Held only across a single
+; raster syscall: acquire in raster_select_syscall_target, release in
+; raster_sc_release_target.
+align 8
+raster_target_lock: db 0
 fb_native_width:  dd SCREEN_WIDTH
 fb_native_height: dd SCREEN_HEIGHT
 scr_taskbar_y:    dd (SCREEN_HEIGHT - TASKBAR_HEIGHT)
@@ -1689,6 +1866,15 @@ FN_BEGIN display_set_mode, 0, 0, FN_RET_SCALAR
     mov rax, [tick_count]
     mov [start_tick], rax
 
+    ; Real AMD display hardware is driven by the AMD provider. It accepts the
+    ; firmware/native GOP mode and rejects unsafe non-native switches for now,
+    ; so NexusOS never pokes Bochs VBE ports on AMD laptops.
+    cmp byte [amd_display_active], 1
+    jne .try_bochs_vbe
+    call amd_display_set_mode
+    jmp .set_ret
+
+.try_bochs_vbe:
     ; Check if Bochs VBE is available (Port 0x1CE index 0 should be >= 0xB0C0)
     mov dx, 0x1CE
     mov ax, 0x00
@@ -1766,6 +1952,7 @@ FN_BEGIN display_set_mode, 0, 0, FN_RET_SCALAR
 
     ; Recompute WM layout so taskbar/clock/start-menu follow the new mode
     call display_recompute_layout
+    call raster_select_default_target
 
     ; Clear back buffer completely (using new resolution)
     xor edi, edi
@@ -1937,7 +2124,7 @@ FN_BEGIN fill_circle, 0, 0, FN_RET_SCALAR
     add esi, r12d            ; cy + y_off
     lea edx, [eax + eax + 1] ; 2*dx + 1
     mov ecx, r13d
-    call draw_hline
+    call draw_hline_raster
 
 .fc_next:
     inc r12
@@ -2071,7 +2258,7 @@ FN_BEGIN fill_triangle, 0, 0, FN_RET_SCALAR
     sub edx, eax
     inc edx
     mov ecx, r15d
-    call draw_hline
+    call draw_hline_raster
     jmp .ft_done
 
 .ft_general:
@@ -2139,7 +2326,7 @@ FN_BEGIN fill_triangle, 0, 0, FN_RET_SCALAR
     inc edx
     push rcx
     mov ecx, r15d
-    call draw_hline
+    call draw_hline_raster
     pop rcx
 
 .ft_skip:

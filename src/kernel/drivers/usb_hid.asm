@@ -6,7 +6,19 @@ bits 64
 
 %include "constants.inc"
 
+; DEBUG: set current enumeration stage and bump the cross-pass high-water mark.
+; usb_dbg_stage is reset to 0 each usb_hid_init pass; usb_dbg_stage_max is NOT,
+; so it records the furthest any pass ever reached (boot pass included).
+%macro STAGE 1
+    mov byte [usb_dbg_stage], %1
+    cmp byte [usb_dbg_stage_max], %1
+    jae %%no_bump
+    mov byte [usb_dbg_stage_max], %1
+%%no_bump:
+%endmacro
+
 extern xhci_init
+extern xhci_submit_cmd
 extern xhci_queue_ctrl_trb
 extern xhci_queue_int_trb
 extern xhci_queue_int_trb2
@@ -16,6 +28,7 @@ extern xhci_find_port
 extern xhci_find_port_next
 extern xhci_enable_slot
 extern xhci_address_device
+extern xhci_disable_slot
 extern xhci_flush_events
 extern xhci_pci_search_start
 extern xhci_pci_this_start
@@ -33,6 +46,7 @@ extern xhci_op_base
 extern xhci_max_ports
 extern xhci_port1_num
 extern debug_print
+extern fat16_write_file
 extern hid_parse_report_desc
 extern hid_process_touchpad_report
 extern hid_parsed_report_bytes
@@ -51,6 +65,125 @@ section .text
 ; auto-wrapped (FN_BEGIN emits global): global usb_hid_init_same_ctrl
 ; auto-wrapped (FN_BEGIN emits global): global usb_hid_init_slot2
 ; auto-wrapped (FN_BEGIN emits global): global usb_poll_mouse
+; auto-wrapped (FN_BEGIN emits global): global usb_hid_flush_log
+
+; ============================================================================
+; USB probe log helpers. This is intentionally narrow: it persists the HID/xHCI
+; probe path to USBLOG.TXT on the Nexus FAT data volume for real-hardware boots.
+; ============================================================================
+usb_log_ch:
+    push rbx
+    push rcx
+    mov ebx, [usb_log_len]
+    cmp ebx, USB_LOG_BUF_SIZE - 2
+    jae .done
+    mov [usb_log_buf + rbx], al
+    inc ebx
+    mov [usb_log_len], ebx
+.done:
+    pop rcx
+    pop rbx
+    ret
+
+usb_log_str:
+    push rax
+    push rsi
+.loop:
+    lodsb
+    test al, al
+    jz .done
+    call usb_log_ch
+    jmp .loop
+.done:
+    pop rsi
+    pop rax
+    ret
+
+usb_log_crlf:
+    push rax
+    mov al, 13
+    call usb_log_ch
+    mov al, 10
+    call usb_log_ch
+    pop rax
+    ret
+
+usb_log_hex_nib:
+    and al, 0x0F
+    cmp al, 10
+    jb .digit
+    add al, 'A' - 10
+    jmp usb_log_ch
+.digit:
+    add al, '0'
+    jmp usb_log_ch
+
+usb_log_hex8:
+    push rax
+    shr al, 4
+    call usb_log_hex_nib
+    pop rax
+    push rax
+    call usb_log_hex_nib
+    pop rax
+    ret
+
+usb_log_hex16:
+    push rax
+    shr ax, 8
+    call usb_log_hex8
+    pop rax
+    push rax
+    call usb_log_hex8
+    pop rax
+    ret
+
+usb_log_hex32:
+    push rax
+    shr eax, 16
+    call usb_log_hex16
+    pop rax
+    push rax
+    call usb_log_hex16
+    pop rax
+    ret
+
+usb_log_kv8:
+    call usb_log_str
+    mov al, bl
+    call usb_log_hex8
+    call usb_log_crlf
+    ret
+
+usb_log_kv16:
+    call usb_log_str
+    mov ax, bx
+    call usb_log_hex16
+    call usb_log_crlf
+    ret
+
+usb_hid_flush_log:
+    push rbx
+    push rdx
+    push rdi
+    push rsi
+    cmp dword [usb_log_len], 0
+    je .ret
+    mov ebx, [usb_log_len]
+    cmp ebx, USB_LOG_BUF_SIZE
+    jae .cap
+    mov byte [usb_log_buf + rbx], 0
+.cap:
+    lea rdi, [rel usb_log_name]
+    lea rsi, [rel usb_log_buf]
+    mov edx, [usb_log_len]
+    call fat16_write_file
+.ret:
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rbx
+    ret
 
 ; ============================================================================
 ; usb_hid_init_same_ctrl - Re-enumerate on the currently active XHCI controller
@@ -80,8 +213,20 @@ usb_hid_init_body:
 
     ; Reset active flag
     mov byte [usb_mouse_active], 0
+    mov byte [usb_dbg_stage], 0
     mov byte [usb_use_parsed], 0
+    mov byte [usb_interface_num], 0
     mov byte [usb_accept_keyboard], 0
+    mov byte [usb_primary_keyboard_fallback], 0
+    mov word [usb_device_vid], 0
+    mov word [usb_device_pid], 0
+    mov dword [usb_log_len], 0
+    lea rsi, [rel szUsbLogHeader]
+    call usb_log_str
+    call usb_log_crlf
+    lea rsi, [rel szUsbExpectedMouse]
+    call usb_log_str
+    call usb_log_crlf
 
     ; 1. Try XHCI controllers until one succeeds with a HID endpoint
     ;    xhci_pci_find continues from where it left off each call
@@ -106,6 +251,15 @@ usb_hid_init_body:
     mov ebx, [rsi + rax + XHCI_PORTSC]
     test ebx, XHCI_PORTSC_CCS
     jz .tport_next
+    ; Skip the rtl8156 NIC's port if it's bound.
+    extern rtl8156_active, rtl8156_port
+    cmp byte [rtl8156_active], 1
+    jne .tport_not_nic
+    movzx r10d, byte [rtl8156_port]
+    lea r11d, [edx + 1]
+    cmp r10d, r11d
+    je .tport_next
+.tport_not_nic:
     ; Found a port with a connected device
     lea ecx, [edx + 1]
     mov [xhci_port_num], cl             ; Save 1-based port number
@@ -147,7 +301,8 @@ usb_hid_init_body:
     pause
     jmp .tport_wait_prc
 .tport_reset_done:
-    ; Clear PRC
+    ; Clear PRC. PED is RW1C on xHCI PORTSC, so writing back PED=1 disables
+    ; the port on real hardware. Mask it out and only write the change bit.
     movzx eax, byte [xhci_port_num]
     dec eax
     shl eax, 4
@@ -155,6 +310,7 @@ usb_hid_init_body:
     add rsi, 0x400
     mov ebx, [rsi + rax + XHCI_PORTSC]
     and ebx, ~XHCI_PORTSC_CHANGE_BITS
+    and ebx, ~XHCI_PORTSC_PED
     or  ebx, XHCI_PORTSC_PRC
     mov [rsi + rax + XHCI_PORTSC], ebx
     ; Read updated speed after reset
@@ -172,9 +328,31 @@ usb_hid_init_body:
     cmp byte [usb_ctrl_attempts], 4    ; Max 4 XHCI controllers to try
     jg .fail
 
+    ; On the FIRST attempt only, reuse an already-active controller (e.g. one
+    ; brought up by rtl8156 before us) instead of resetting it. On subsequent
+    ; attempts we have already exhausted that controller's ports without
+    ; finding a HID device, so force a fresh xhci_init — this advances the
+    ; PCI scan (xhci_pci_search_start) to the NEXT controller. AMD Strix
+    ; Point and similar platforms expose multiple xHCI PCI functions; the
+    ; mouse may live on the second or third one.
+    cmp byte [usb_ctrl_attempts], 1
+    jne .force_init
+    cmp byte [xhci_active], 1
+    je .xhci_ok
+.force_init:
+    mov byte [xhci_active], 0          ; allow xhci_init to take fresh ctrl
     call xhci_init
     test eax, eax
-    jz .no_hw                   ; No more XHCI controllers found (PCI scan exhausted)
+    jnz .xhci_ok
+    lea rsi, [rel szUsbLogNoXhci]
+    call usb_log_str
+    call usb_log_crlf
+    jmp .no_hw                  ; No more XHCI controllers found (PCI scan exhausted)
+.xhci_ok:
+    STAGE 1
+    lea rsi, [rel szUsbLogXhciOk]
+    call usb_log_str
+    call usb_log_crlf
 
     ; Wait for device to settle after port reset.
     ; USB spec: 100ms, but 50ms is enough for QEMU/most real devices.
@@ -182,31 +360,56 @@ usb_hid_init_body:
     call usb_delay
 
     mov rsi, szUsbFindPort
+    call usb_log_str
+    call usb_log_crlf
     call debug_print
 
     ; --- 1. Find Port with Device ---
     call xhci_find_port
     test eax, eax
-    jz .try_next_controller
+    jnz .port_ok
+    lea rsi, [rel szUsbLogNoPort]
+    call usb_log_str
+    call usb_log_crlf
+    jmp .try_next_controller
+.port_ok:
+    STAGE 2
+    lea rsi, [rel szUsbLogPort]
+    movzx ebx, byte [xhci_port_num]
+    call usb_log_kv8
+    lea rsi, [rel szUsbLogSpeed]
+    movzx ebx, byte [xhci_port_speed]
+    call usb_log_kv8
 
 .do_enable_slot:
     mov rsi, szUsbEnableSlot
+    call usb_log_str
+    call usb_log_crlf
     call debug_print
 
     ; --- 2. Enable Slot ---
     call xhci_enable_slot
     test eax, eax
-    jz .try_next_controller
+    jz .try_next_port
+    STAGE 3
+    lea rsi, [rel szUsbLogSlot]
+    movzx ebx, byte [xhci_slot_id]
+    call usb_log_kv8
 
     mov rsi, szUsbAddress
+    call usb_log_str
+    call usb_log_crlf
     call debug_print
 
     ; --- 3. Address Device ---
     call xhci_address_device
     test eax, eax
-    jz .try_next_controller
+    jz .release_slot_try_next_port
+    STAGE 4
 
     mov rsi, szUsbGetDesc
+    call usb_log_str
+    call usb_log_crlf
     call debug_print
 
     ; Serial: 'H' (HID Init)
@@ -222,7 +425,18 @@ usb_hid_init_body:
     mov r9d, 0x00120000      ; High dword (Len 18)
     call usb_control_transfer_in
     test eax, eax
-    jz .try_next_controller  ; Failed to get descriptor - try next
+    jz .release_slot_try_next_port  ; Failed to get descriptor - try next port
+    STAGE 5
+    movzx ebx, word [abs XHCI_CTRL_BUF_ADDR + 8]
+    mov [usb_device_vid], bx
+    lea rsi, [rel szUsbLogVid]
+    movzx ebx, word [usb_device_vid]
+    call usb_log_kv16
+    movzx ebx, word [abs XHCI_CTRL_BUF_ADDR + 10]
+    mov [usb_device_pid], bx
+    lea rsi, [rel szUsbLogPid]
+    movzx ebx, word [usb_device_pid]
+    call usb_log_kv16
 
     ; Serial: 'D' (Descriptor)
     mov dx, 0x3F8
@@ -230,6 +444,8 @@ usb_hid_init_body:
     out dx, al
     
     mov rsi, szUsbConfig
+    call usb_log_str
+    call usb_log_crlf
     call debug_print
 
     ; 5. Get Configuration Descriptor (first 9 bytes to get total length)
@@ -240,7 +456,7 @@ usb_hid_init_body:
     mov r9d, 0x00090000
     call usb_control_transfer_in
     test eax, eax
-    jz .try_next_controller
+    jz .release_slot_try_next_port
     
     ; Read TotalLength from offset 2
     movzx ecx, word [abs XHCI_CTRL_BUF_ADDR + 2]
@@ -253,12 +469,48 @@ usb_hid_init_body:
     shl r9d, 16              ; Len in upper word
     call usb_control_transfer_in
     test eax, eax
-    jz .try_next_controller
+    jz .release_slot_try_next_port
+    STAGE 6
 
-    ; 7. Parse Configuration Descriptor to find Interrupt Endpoint
+    ; 7. Parse Configuration Descriptor to find Interrupt Endpoint.
+    ; Prefer boot-mouse protocol first; generic report-HID is a fallback so
+    ; composite vendor/control interfaces do not mask the real mouse.
+    mov byte [usb_find_report_hid], 0
     call usb_find_endpoint
     test eax, eax
-    jz .try_next_port           ; Not a HID mouse - try next port on same controller
+    jnz .endpoint_ok
+    mov byte [usb_find_report_hid], 1
+    call usb_find_endpoint
+    test eax, eax
+    jnz .endpoint_ok
+    call usb_try_known_mouse_endpoint
+    test eax, eax
+    jnz .endpoint_ok
+    ; Not a HID device on this port. The slot is still enabled+addressed and
+    ; the port is bound to it. Release the slot so a later driver (rtl8156)
+    ; can address the same port without TRB Error.
+    mov al, [xhci_slot_id]
+    call xhci_disable_slot
+    jmp .try_next_port
+
+.release_slot_try_next_port:
+    mov al, [xhci_slot_id]
+    call xhci_disable_slot
+    jmp .try_next_port
+.endpoint_ok:
+    STAGE 7
+    lea rsi, [rel szUsbLogProto]
+    movzx ebx, byte [usb_hid_protocol]
+    call usb_log_kv8
+    lea rsi, [rel szUsbLogEp]
+    movzx ebx, byte [usb_ep_addr]
+    call usb_log_kv8
+    lea rsi, [rel szUsbLogMps]
+    movzx ebx, word [usb_ep_mps]
+    call usb_log_kv16
+    lea rsi, [rel szUsbLogInterval]
+    movzx ebx, byte [usb_ep_interval]
+    call usb_log_kv8
 
     ; Serial: 'E' (Endpoint Found)
     mov dx, 0x3F8
@@ -272,6 +524,10 @@ usb_hid_init_body:
     call usb_control_transfer_nodata
     test eax, eax
     jz .fail
+    STAGE 8
+    lea rsi, [rel szUsbLogConfigured]
+    call usb_log_str
+    call usb_log_crlf
 
     ; Serial: 'C' (Config Set)
     mov dx, 0x3F8
@@ -285,24 +541,25 @@ usb_hid_init_body:
     ; 7. Set Protocol (Value = 0 for Boot Protocol)
     ; Request: 21 0B 00 00 00 00 00 00 (SET_PROTOCOL)
     mov r8d, 0x00000B21
-    mov r9d, 0x00000000
+    movzx r9d, byte [usb_interface_num]
     call usb_control_transfer_nodata
     
     ; 8. Set Idle (Value = 0 for infinite duration)
     ; Request: 21 0A 00 00 00 00 00 00 (SET_IDLE)
     mov r8d, 0x00000A21
-    mov r9d, 0x00000000
+    movzx r9d, byte [usb_interface_num]
     call usb_control_transfer_nodata
 
 .skip_set_protocol:
 
     ; 8b. Fetch HID Report Descriptor (type 0x22) for precise field layout
     ; GET_DESCRIPTOR: bmRequestType=0x81, bRequest=0x06, wValue=0x2200
-    ; wIndex=0, wLength=512
+    ; wIndex=matched interface, wLength=512
     mov rdi, XHCI_CTRL_BUF_ADDR
     mov rcx, 512
     mov r8d, 0x22000681         ; bmRequestType=0x81, GET_DESCRIPTOR, wValue=0x2200
-    mov r9d, 0x02000000         ; wIndex=0, wLength=512
+    movzx r9d, byte [usb_interface_num]
+    or r9d, 0x02000000          ; wIndex=matched interface, wLength=512
     call usb_control_transfer_in
     test eax, eax
     jz .skip_hid_parse          ; If it fails, fall through to boot protocol
@@ -334,6 +591,7 @@ usb_hid_init_body:
     call xhci_configure_endpoint
     test eax, eax
     jz .fail
+    STAGE 9
 
     ; Serial: 'O' (OK)
     mov dx, 0x3F8
@@ -345,12 +603,18 @@ usb_hid_init_body:
     call xhci_flush_events
 
     mov byte [usb_mouse_active], 1
+    STAGE 10
+    lea rsi, [rel szUsbLogActive]
+    call usb_log_str
+    call usb_log_crlf
 
     ; Save slot1 info before possibly init-ing slot2
     mov al, [xhci_slot_id]
     mov [usb_slot1_id], al
     mov al, [xhci_int_ep_dci]
     mov [usb_int_ep1_dci], al
+    mov al, [xhci_port_num]
+    mov [usb_slot1_port], al
 
     ; Try to find and init a second USB HID device on a different port.
     ; IMPORTANT: do this BEFORE queuing slot1 reads so that slot2 control
@@ -381,7 +645,25 @@ usb_hid_init_body:
     mov byte [usb_no_xhci], 1
 
 .fail:
+    ; Primary probing prefers pointer HID so a keyboard on an earlier port does
+    ; not hide the mouse. If no pointer was usable, retry once accepting a boot
+    ; keyboard as slot1; keyboard-only and keyboard-first hardware still needs
+    ; an interrupt ring so usb_poll_mouse can feed the keyboard parser.
+    cmp byte [usb_no_xhci], 1
+    je .fail_final
+    cmp byte [usb_primary_keyboard_fallback], 0
+    jne .fail_final
+    mov byte [usb_primary_keyboard_fallback], 1
+    mov byte [usb_accept_keyboard], 1
+    mov byte [usb_ctrl_attempts], 0
+    mov dword [xhci_pci_search_start], 0
+    jmp .try_next_controller
+
+.fail_final:
     ; Serial: 'X' (Fail)
+    lea rsi, [rel szUsbLogFail]
+    call usb_log_str
+    call usb_log_crlf
     mov dx, 0x3F8
     mov al, 'X'
     out dx, al
@@ -507,6 +789,7 @@ FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
     and edx, 0x3F
     cmp edx, 32    ; TRB_TRANSFER_EVT
     jne .check_psc ; Check Port Status Change
+    inc dword [usb_dbg_evt]   ; DEBUG: count transfer events delivered
 
     ; It's a transfer event. Check completion code
     ; We already have EAX = Completion Code from xhci_poll_event
@@ -526,16 +809,34 @@ FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
     add al, '0' ; Convert low nibble to char (rough)
     out dx, al
     pop rax
-    
+    inc dword [usb_dbg_err]   ; DEBUG: count error completion codes
+    mov [usb_dbg_errcode], al
+
     jmp .critical_error
 
 .process_data:
-    ; Route to correct slot based on event's slot ID (EBX bits 31:24)
-    cmp byte [usb_slot2_active], 1
-    jne .is_slot1_data
+    ; Route to correct slot based on event's slot ID (EBX bits 31:24).
     mov edx, ebx
     shr edx, 24
     and edx, 0xFF
+
+    ; NIC slot? Hand the event to rtl8156_consume_event, which runs
+    ; handle_frame + requeues the bulk-IN. This is the single consumer of NIC
+    ; RX events — DHCP / ARP / ICMP all derive their state from frames the
+    ; consume_event path delivers, no per-syscall xHCI polling.
+    extern rtl8156_active, rtl8156_slot_id, rtl8156_consume_event
+    cmp byte [rtl8156_active], 1
+    jne .not_nic_event
+    movzx r8d, byte [rtl8156_slot_id]
+    cmp edx, r8d
+    jne .not_nic_event
+    ; EAX/EBX/ECX still hold the popped event from xhci_poll_event.
+    call rtl8156_consume_event
+    jmp .loop
+.not_nic_event:
+
+    cmp byte [usb_slot2_active], 1
+    jne .is_slot1_data
     movzx ecx, byte [usb_slot2_id]
     cmp edx, ecx
     je .process_slot2_loop
@@ -544,6 +845,13 @@ FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
     ; Process Mouse Data at XHCI_MOUSE_BUF_ADDR (slot1)
     mov rsi, XHCI_MOUSE_BUF_ADDR
 
+    ; DEBUG: snapshot first 4 report bytes + bump report counter
+    push rax
+    mov eax, [rsi]
+    mov [usb_dbg_report], eax
+    inc dword [usb_dbg_rpt]
+    pop rax
+
     ; If HID report descriptor was parsed, use it for accurate field extraction
     cmp byte [usb_use_parsed], 1
     jne .process_fixed_format
@@ -551,11 +859,18 @@ FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
     ; Skip report ID if present
     cmp byte [hid_parsed_has_report_id], 1
     jne .parsed_no_skip
+    mov al, [rsi]
+    cmp al, [hid_parsed_report_id]
+    jne .parsed_report_id_mismatch
     inc rsi
 .parsed_no_skip:
     movzx ecx, word [usb_ep_mps]
     call hid_process_touchpad_report
     mov byte [mouse_moved], 1
+    call usb_queue_mouse_read
+    jmp .loop
+
+.parsed_report_id_mismatch:
     call usb_queue_mouse_read
     jmp .loop
 
@@ -703,6 +1018,32 @@ FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
     cmp edx, 34
     jne .loop
 
+    ; Ack the PORTSC change bits for the affected port so the controller
+    ; stops re-firing the same PSCE on every poll. Per xHCI spec, PSCE
+    ; event TRB DW0 bits 31:24 carry the 1-based port number; ecx holds DW0.
+    push rax
+    push rbx
+    push rsi
+    mov eax, ecx
+    shr eax, 24
+    and eax, 0xFF
+    test eax, eax
+    jz .psc_no_ack
+    cmp al, [xhci_max_ports]
+    ja .psc_no_ack
+    dec eax                              ; 0-based index
+    shl eax, 4                           ; * 16 bytes per port
+    mov rsi, [xhci_op_base]
+    add rsi, 0x400
+    mov ebx, [rsi + rax + XHCI_PORTSC]
+    and ebx, ~XHCI_PORTSC_PED            ; PED is RW1C — don't disable port
+    ; Change bits are RW1C: reading them as 1 and writing back 1 clears them.
+    mov [rsi + rax + XHCI_PORTSC], ebx
+.psc_no_ack:
+    pop rsi
+    pop rbx
+    pop rax
+
     ; Device connected or disconnected on this controller's port.
     ; Re-enumerate on the SAME controller (don't PCI-rescan).
 .retry_init:
@@ -795,17 +1136,187 @@ FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
     ret
 
 .critical_error:
-    ; Critical XHCI error (e.g. Endpoint Halted, Babble, Transaction Error)
-    ; Trigger full re-initialization to reset controller and endpoints
+    ; XHCI completion error on a Transfer Event.
+    ; Code 6 = STALL (endpoint halted) is the common case. Per xHCI spec
+    ; 4.6.8 it can be cleared with a Reset Endpoint command + Set TR Dequeue
+    ; Pointer; no need to nuke the whole controller. Linux usbhid does the
+    ; same dance. Slot1 only — slot2 falls through to full re-init.
+    cmp byte [usb_dbg_errcode], 6
+    jne .full_reinit
+    ; Only attempt lightweight recovery if slot1 is active and the failing
+    ; event was on slot1 (avoid stepping on slot2 / NIC slot during recovery).
+    cmp byte [usb_mouse_active], 1
+    jne .full_reinit
+    call usb_recover_stall_slot1
+    test eax, eax
+    jz .full_reinit
+    jmp .loop                ; recovery succeeded — drain more events
+.full_reinit:
     jmp .retry_init  ; Use the retry logic from above
 
 .transfer_fail:
     jmp .critical_error
 
 ; ============================================================================
+; usb_hid_requeue_slot1_reads - Re-prime the mouse interrupt ring after some
+; other driver (rtl8156 NIC init) clobbered xhci_slot_id / xhci_int_ep_dci
+; AND drained pending Transfer Events with xhci_flush_events. Without this
+; the 4 reads queued in usb_hid_init complete, get flushed before
+; usb_poll_mouse sees them, and no new reads ever get queued → mouse dies.
+; Safe to call when usb_mouse_active==0 (no-op).
+; ============================================================================
+global usb_hid_requeue_slot1_reads
+usb_hid_requeue_slot1_reads:
+    cmp byte [usb_mouse_active], 1
+    jne .done
+    mov al, [usb_slot1_id]
+    mov [xhci_slot_id], al
+    mov al, [usb_int_ep1_dci]
+    mov [xhci_int_ep_dci], al
+    call usb_queue_mouse_read
+    call usb_queue_mouse_read
+    call usb_queue_mouse_read
+    call usb_queue_mouse_read
+.done:
+    ret
+
+; ============================================================================
+; usb_hid_requeue_slot1_one - Queue a SINGLE mouse interrupt read. Called from
+; rtl8156_wait_completion every time it drops a HID Transfer Event so the
+; mouse ring stays primed during long DHCP/ping waits without flooding.
+; ============================================================================
+global usb_hid_requeue_slot1_one
+usb_hid_requeue_slot1_one:
+    cmp byte [usb_mouse_active], 1
+    jne .done1
+    mov al, [usb_slot1_id]
+    mov [xhci_slot_id], al
+    mov al, [usb_int_ep1_dci]
+    mov [xhci_int_ep_dci], al
+    call usb_queue_mouse_read
+.done1:
+    ret
+
+; ============================================================================
+; usb_recover_stall_slot1 - Lightweight STALL recovery for slot1's interrupt
+; endpoint, per xHCI spec 4.6.8 + USB 2.0 9.4.5:
+;   1. Reset Endpoint command (xHCI side: EP halt → Stopped)
+;   2. CLEAR_FEATURE(ENDPOINT_HALT) on default pipe (device side: data toggle
+;      reset & un-halt; required by USB spec even if xHCI half already cleared)
+;   3. Zero the interrupt transfer ring and reset enqueue/cycle
+;   4. Set TR Dequeue Pointer command (xHCI side: arm ring at our new start)
+;   5. Requeue interrupt reads & doorbell — endpoint resumes Running
+; Returns EAX=1 on success, 0 on failure (caller should fall back to full
+; re-init). Slot1 must be active before calling.
+; ============================================================================
+global usb_recover_stall_slot1
+usb_recover_stall_slot1:
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+
+    cmp byte [usb_mouse_active], 1
+    jne .rs_fail
+
+    ; Restore slot1 ctx so shared xHCI helpers operate on the right slot/EP.
+    mov al, [usb_slot1_id]
+    mov [xhci_slot_id], al
+    mov al, [usb_int_ep1_dci]
+    mov [xhci_int_ep_dci], al
+
+    ; --- 1. xHCI Reset Endpoint command ---
+    ; DW0=0, DW1=0, DW2=0
+    ; DW3 = TRB_RESET_ENDPOINT | (SlotID << 24) | (EpID << 16)
+    xor r8d, r8d
+    xor r9d, r9d
+    xor r10d, r10d
+    movzx eax, byte [xhci_slot_id]
+    shl eax, 24
+    movzx edx, byte [xhci_int_ep_dci]
+    shl edx, 16
+    or eax, edx
+    or eax, TRB_RESET_ENDPOINT
+    mov r11d, eax
+    call xhci_submit_cmd
+    cmp eax, 1
+    jne .rs_fail
+
+    ; --- 2. CLEAR_FEATURE(ENDPOINT_HALT) on device ---
+    ; Setup packet (low dword) : bmRequestType=0x02, bRequest=0x01 (CLEAR_FEATURE),
+    ;                            wValue=0 (ENDPOINT_HALT) → 0x00000102
+    ; Setup packet (high dword): wIndex=ep_addr (e.g. 0x81), wLength=0
+    mov r8d, 0x00000102
+    movzx r9d, byte [usb_ep_addr]
+    call usb_control_transfer_nodata
+    ; Non-fatal: device may have already recovered; the xHCI Reset Endpoint
+    ; above is what un-halts the controller-side state machine.
+
+    ; --- 3. Reset the slot1 interrupt transfer ring ---
+    mov rdi, XHCI_INT_RING_ADDR
+    mov ecx, XHCI_RING_SIZE * XHCI_TRB_SIZE / 8
+    xor rax, rax
+    rep stosq
+    mov dword [xhci_int_enqueue], 0
+    mov byte [xhci_int_cycle], 1
+
+    ; --- 4. Set TR Dequeue Pointer command ---
+    ; DW0 = ring_addr_lo | DCS=1 (next TRB has cycle 1 → matches xhci_int_cycle)
+    ; DW1 = ring_addr_hi (0 — ring lives below 4G)
+    ; DW2 = StreamID:0 / SCT:0 (mouse EP isn't streaming)
+    ; DW3 = TRB_SET_TR_DEQUEUE | (SlotID << 24) | (EpID << 16)
+    mov r8d, XHCI_INT_RING_ADDR
+    or r8d, 1                              ; DCS = 1
+    xor r9d, r9d
+    xor r10d, r10d
+    movzx eax, byte [xhci_slot_id]
+    shl eax, 24
+    movzx edx, byte [xhci_int_ep_dci]
+    shl edx, 16
+    or eax, edx
+    or eax, TRB_SET_TR_DEQUEUE
+    mov r11d, eax
+    call xhci_submit_cmd
+    cmp eax, 1
+    jne .rs_fail
+
+    ; --- 5. Re-prime the interrupt ring ---
+    call usb_queue_mouse_read
+    call usb_queue_mouse_read
+
+    inc dword [usb_dbg_stall_recov]
+    mov eax, 1
+    jmp .rs_ret
+.rs_fail:
+    xor eax, eax
+.rs_ret:
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
+
+; ============================================================================
 ; usb_queue_mouse_read - Queue an interrupt transfer
 ; ============================================================================
 usb_queue_mouse_read:
+    ; Slot1 can be polled after slot2/NIC code has changed the shared xHCI
+    ; globals. Always restore the saved slot1 context before queueing/ringing.
+    cmp byte [usb_slot1_id], 0
+    je .slot1_context_ready
+    mov al, [usb_slot1_id]
+    mov [xhci_slot_id], al
+    mov al, [usb_int_ep1_dci]
+    mov [xhci_int_ep_dci], al
+.slot1_context_ready:
     ; Normal TRB for data transfer
     ; DWord 0, 1: Buffer Address
     mov r8d, XHCI_MOUSE_BUF_ADDR
@@ -931,8 +1442,16 @@ FN_BEGIN usb_hid_init_slot2, 0, 0, FN_RET_SCALAR
     push rax
     movzx eax, byte [usb_hid_protocol]
     push rax
+    movzx eax, byte [usb_interface_num]
+    push rax
 
+    mov byte [usb_find_report_hid], 0
     call usb_find_endpoint
+    test eax, eax
+    jnz .slot2_endpoint_ok
+    mov byte [usb_find_report_hid], 1
+    call usb_find_endpoint
+.slot2_endpoint_ok:
     test eax, eax
     je .slot2_restore_fail
 
@@ -950,8 +1469,12 @@ FN_BEGIN usb_hid_init_slot2, 0, 0, FN_RET_SCALAR
     mov [usb_ep2_interval], al
     mov al, [usb_hid_protocol]
     mov [usb_hid_protocol2], al
+    mov al, [usb_interface_num]
+    mov [usb_interface2_num], al
 
     ; Restore slot1 ep vars
+    pop rax
+    mov [usb_interface_num], al
     pop rax
     mov [usb_hid_protocol], al
     pop rax
@@ -973,12 +1496,12 @@ FN_BEGIN usb_hid_init_slot2, 0, 0, FN_RET_SCALAR
 
     ; SET_PROTOCOL(Value=0 => Boot Protocol)
     mov r8d, 0x00000B21
-    mov r9d, 0x00000000
+    movzx r9d, byte [usb_interface2_num]
     call usb_control_transfer_nodata
 
     ; SET_IDLE(Value=0 => infinite duration)
     mov r8d, 0x00000A21
-    mov r9d, 0x00000000
+    movzx r9d, byte [usb_interface2_num]
     call usb_control_transfer_nodata
 
 .slot2_skip_set_protocol:
@@ -997,6 +1520,8 @@ FN_BEGIN usb_hid_init_slot2, 0, 0, FN_RET_SCALAR
     mov [usb_slot2_id], al
     mov al, [xhci_int_ep_dci]
     mov [usb_int_ep2_dci], al
+    mov al, [xhci_port_num]
+    mov [usb_slot2_port], al
 
     ; Restore slot1 XHCI state
     mov al, [usb_slot1_id]
@@ -1017,6 +1542,8 @@ FN_BEGIN usb_hid_init_slot2, 0, 0, FN_RET_SCALAR
     jmp .slot2_ok
 
 .slot2_restore_fail:
+    pop rax
+    mov [usb_interface_num], al
     pop rax
     mov [usb_hid_protocol], al
     pop rax
@@ -1162,21 +1689,18 @@ usb_control_transfer_nodata:
 ; usb_wait_completion - Wait for status stage completion
 ; ============================================================================
 usb_wait_completion:
-    ; PIT-based 1-second timeout + CPU spin fallback
+    ; PIT-based 1-second timeout (tick-only: CPU-spin fallbacks fire far too
+    ; early on fast real silicon and cause false control-transfer timeouts)
     ; Use rsi for deadline - xhci_poll_event saves/restores rsi internally
     push rbx
     push rcx
     push rsi
     mov rsi, [tick_count]
     add rsi, 100                 ; 100 ticks = 1 second at 100Hz
-    mov ecx, 20000000            ; ~10M iterations max spin fallback
 .poll:
     call xhci_poll_event         ; rsi preserved by xhci_poll_event (push/pop rsi inside)
     test eax, eax
     jnz .done
-
-    dec ecx
-    jz .fail_timeout
 
     mov rax, [tick_count]
     cmp rax, rsi                 ; rsi = deadline (not corrupted by xhci_poll_event)
@@ -1258,13 +1782,24 @@ usb_find_endpoint:
     jne .not_hid_interface
 
     mov al, [rsi + rdx + 7]
-    cmp al, 1
-    jne .accept_hid_interface
+    cmp al, 2                   ; boot mouse
+    je .accept_hid_interface
+    cmp al, 1                   ; boot keyboard, allowed only for slot2
+    jne .check_report_hid
     cmp byte [usb_accept_keyboard], 1
+    jne .not_hid_interface
+    jmp .accept_hid_interface
+
+.check_report_hid:
+    test al, al                  ; report protocol / vendor-specific HID
+    jne .not_hid_interface
+    cmp byte [usb_find_report_hid], 1
     jne .not_hid_interface
 
 .accept_hid_interface:
     mov [usb_hid_protocol], al
+    mov al, [rsi + rdx + 2]       ; bInterfaceNumber for class requests
+    mov [usb_interface_num], al
     mov ebx, 1                   ; Set "found HID" flag - look for interrupt IN next
     jmp .next_desc
 
@@ -1324,15 +1859,67 @@ usb_find_endpoint:
     xor eax, eax
     ret
 
+; ============================================================================
+; usb_try_known_mouse_endpoint - Fallback for simple boot mice whose Windows
+; descriptor binding is known but whose real-hardware config walk failed.
+; VID_17EF/PID_602E is "USB Optical Mouse": HID boot mouse, EP1 IN, 4-byte
+; interrupt report. QEMU passthrough confirms the same packet size.
+; Returns EAX=1 if endpoint globals were filled.
+; ============================================================================
+usb_try_known_mouse_endpoint:
+    cmp word [usb_device_vid], 0x17EF
+    jne .no
+    cmp word [usb_device_pid], 0x602E
+    jne .no
+    cmp byte [usb_accept_keyboard], 1
+    je .no
+    mov byte [usb_hid_protocol], 2
+    mov byte [usb_interface_num], 0
+    mov byte [usb_ep_addr], 0x81
+    mov word [usb_ep_mps], 4
+    mov byte [usb_ep_interval], 10
+    mov eax, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
 section .data
+; --- DEBUG: USB mouse diagnostic counters (read by usb_debug_overlay) ---
+global usb_dbg_evt, usb_dbg_psc, usb_dbg_err, usb_dbg_rpt
+global usb_dbg_report, usb_dbg_errcode, usb_dbg_stage
+global usb_dbg_stall_recov
+usb_dbg_evt:     dd 0      ; transfer events delivered to poll loop
+usb_dbg_psc:     dd 0      ; port-status-change events seen (reserved)
+usb_dbg_err:     dd 0      ; error completion codes
+usb_dbg_rpt:     dd 0      ; slot1 reports processed
+usb_dbg_stall_recov: dd 0  ; successful per-EP STALL recoveries (no full reinit)
+usb_dbg_report:  dd 0      ; last 4 raw report bytes
+usb_dbg_errcode: db 0      ; last error completion code
+; enumeration stage reached: 1=xhciOK 2=portOK 3=slotEnabled 4=addressed
+; 5=devDesc 6=cfgDesc 7=endpointFound 8=configSet 9=epConfigured 10=active
+usb_dbg_stage:   db 0
+; cross-pass high-water mark of usb_dbg_stage; never reset, so it shows the
+; furthest the boot pass got even after later retries reset usb_dbg_stage.
+global usb_dbg_stage_max
+usb_dbg_stage_max: db 0
+
 global usb_mouse_active
 global usb_no_xhci
+global usb_hid_protocol, usb_ep_addr, usb_ep_mps, init_retry_counter
+global usb_hid_protocol2
+global usb_slot1_id, usb_slot2_active
+global usb_slot1_port, usb_slot2_port
+global usb_hid_port_owned
 usb_mouse_active: db 0
 usb_no_xhci:      db 0           ; 1 = no XHCI hardware found, stop retrying
 usb_hid_protocol: db 0
+usb_device_vid:   dw 0
+usb_device_pid:   dw 0
 usb_ep_addr:      db 0
 usb_ep_mps:       dw 0
 usb_ep_interval:  db 0
+usb_interface_num: db 0
 init_retry_counter:  dd 0
 spp_portsc_counter:  dd 0
 usb_ctrl_attempts: db 0          ; Number of XHCI controllers tried this init cycle
@@ -1340,9 +1927,13 @@ usb_ctrl_attempts: db 0          ; Number of XHCI controllers tried this init cy
 ; Slot 1 saved state (used when init-ing slot 2)
 usb_slot1_id:     db 0
 usb_int_ep1_dci:  db 0
+usb_slot1_port:   db 0           ; 1-based xHCI port number for slot1 (0 = unused)
+usb_slot2_port:   db 0           ; 1-based xHCI port number for slot2 (0 = unused)
 
 usb_use_parsed:   db 0           ; 1 = HID report descriptor parsed
 usb_accept_keyboard: db 0        ; 0 = primary probe wants pointer HID, 1 = allow keyboard
+usb_primary_keyboard_fallback: db 0 ; retry primary probe accepting keyboard
+usb_find_report_hid: db 0        ; 1 = second pass may claim report-protocol HID
 
 ; Slot 2 device info
 usb_slot2_active: db 0
@@ -1351,6 +1942,7 @@ usb_int_ep2_dci:  db 0
 usb_ep2_addr:     db 0
 usb_ep2_mps:      dw 0
 usb_ep2_interval: db 0
+usb_interface2_num: db 0
 usb_hid_protocol2: db 0
 
 ; USB keyboard state
@@ -1392,6 +1984,29 @@ section .bss
 usb_kb_prev_keys: resb 6
 
 section .text
+; ============================================================================
+; usb_hid_port_owned - returns EAX=1 if 1-based port in DIL is claimed by an
+; active HID slot (slot1 or slot2), EAX=0 otherwise.
+; ============================================================================
+usb_hid_port_owned:
+    xor eax, eax
+    test dil, dil
+    jz .no
+    cmp byte [usb_mouse_active], 1
+    jne .check2
+    cmp dil, [usb_slot1_port]
+    jne .check2
+    mov eax, 1
+    ret
+.check2:
+    cmp byte [usb_slot2_active], 1
+    jne .no
+    cmp dil, [usb_slot2_port]
+    jne .no
+    mov eax, 1
+.no:
+    ret
+
 ; ============================================================================
 ; usb_parse_keyboard_report - Parse USB HID boot keyboard report, push to kb_buffer
 ; RSI = 8-byte report: [modifier, reserved, key0..key5]
@@ -1524,3 +2139,26 @@ szUsbEnableSlot db "USB: Enabling Slot...", 0
 szUsbAddress    db "USB: Addressing Device...", 0
 szUsbGetDesc    db "USB: Getting Descriptor...", 0
 szUsbConfig     db "USB: Getting Config...", 0
+
+usb_log_name        db "USBLOG  TXT"
+szUsbLogHeader     db "USB HID probe log", 0
+szUsbExpectedMouse db "Windows OK mouse: VID_17EF PID_602E mouhid", 0
+szUsbLogXhciOk     db "XHCI init OK", 0
+szUsbLogNoXhci     db "No more XHCI controllers", 0
+szUsbLogNoPort     db "No connected port on controller", 0
+szUsbLogPort       db "Port=0x", 0
+szUsbLogSpeed      db "Speed=0x", 0
+szUsbLogSlot       db "Slot=0x", 0
+szUsbLogVid        db "VID=0x", 0
+szUsbLogPid        db "PID=0x", 0
+szUsbLogProto      db "HID protocol=0x", 0
+szUsbLogEp         db "Interrupt IN EP=0x", 0
+szUsbLogMps        db "MPS=0x", 0
+szUsbLogInterval   db "Interval=0x", 0
+szUsbLogConfigured db "Set configuration OK", 0
+szUsbLogActive     db "USB mouse active", 0
+szUsbLogFail       db "USB HID init failed", 0
+
+USB_LOG_BUF_SIZE   equ 4096
+usb_log_len        dd 0
+usb_log_buf        times USB_LOG_BUF_SIZE db 0

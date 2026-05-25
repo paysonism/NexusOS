@@ -13,31 +13,30 @@ extern scr_taskbar_y, scr_clock_x, scr_clock_y
 extern scr_start_btn_y, scr_start_menu_y
 extern scr_tb_btn_y, scr_bat_ind_x, scr_bat_ind_y
 
-; Draw one start menu item: design-system icon + label text at row %1.
-; Y positions are computed at run time so the menu floats above whatever
-; row the taskbar is currently on.
-%macro MENU_ITEM 3
-    mov rdi, %2
-    mov rsi, START_MENU_X + 8
-    mov edx, [scr_start_menu_y]
-    add edx, 8 + MENU_ITEM_H * %1
-    call nx_icon_blit
-    mov rdi, START_MENU_X + 36
-    mov esi, [scr_start_menu_y]
-    add esi, 10 + MENU_ITEM_H * %1
-    mov rdx, %3
-    mov ecx, COLOR_TEXT_BLACK
-    mov r8d, MENU_COLOR_BG
-    call render_text
-%endmacro
+; Start menu geometry. Item count, height, and per-item layout are all
+; derived from the single `menu_entries` table at the bottom of this file
+; — to add a row, append one MENU_ENTRY there; nothing else needs touching.
+START_MENU_W      equ 200
+START_MENU_X      equ 4
+MENU_ITEM_H       equ 28
+MENU_PAD_TOP      equ 8
+MENU_PAD_BOTTOM   equ 8
+MENU_COLOR_BG     equ COLOR_SURFACE
+MENU_COLOR_HL     equ COLOR_ACCENT
 
-START_MENU_W    equ 200
-START_MENU_H    equ 228
-START_MENU_X    equ 4
-MENU_ITEM_H     equ 28
-MENU_COLOR_BG   equ COLOR_SURFACE
-MENU_COLOR_HL   equ COLOR_ACCENT
-MENU_ITEM_COUNT equ 7
+; Per-entry layout. Keep MENU_ENTRY_SIZE a power-of-friendly small struct.
+MENU_ENTRY_SIZE   equ 24      ; icon(8) + label(8) + app(1) + flags(1) + pad(6)
+MENU_OFF_ICON     equ 0
+MENU_OFF_LABEL    equ 8
+MENU_OFF_APP      equ 16
+MENU_OFF_FLAGS    equ 17
+
+MENU_FLAG_SEP_ABOVE equ 1     ; draw a thin separator line above this row
+MENU_FLAG_DIM       equ 2     ; render label in gray instead of black
+
+; Count + height come from the table — see menu_entries / menu_entries_end.
+MENU_ITEM_COUNT equ (menu_entries_end - menu_entries) / MENU_ENTRY_SIZE
+START_MENU_H    equ (MENU_PAD_TOP + MENU_ITEM_H * MENU_ITEM_COUNT + MENU_PAD_BOTTOM)
 
 ; Taskbar button layout
 TB_BTN_START_X  equ (START_BTN_X + START_BTN_W + 8)  ; after start button
@@ -91,11 +90,23 @@ extern time_minutes
 extern nx_icon_about_16
 extern nx_icon_close_16
 extern nx_icon_explorer_16
+extern nx_icon_file_16
 extern nx_icon_notepad_16
 extern nx_icon_paint_16
 extern nx_icon_settings_16
 extern nx_icon_start_16
+extern nx_icon_taskmgr_16
 extern nx_icon_terminal_16
+extern app_bmp_draw
+extern app_hl_about_draw
+extern app_hl_explorer_draw
+extern app_hl_explorer_properties_draw
+extern app_hl_notepad_draw
+extern app_hl_paint_draw
+extern app_hl_settings_draw
+extern app_hl_taskmgr_draw
+extern app_terminal_draw
+extern app_security_probe_draw
 
 ; Draw the taskbar + start menu
 FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
@@ -171,6 +182,30 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
     mov ecx, TB_BTN_H
     call render_rect
 
+    ; Focus indicator: a narrow accent strip, not a dark text background.
+    mov rax, [wm_focused_window]
+    cmp eax, r12d
+    jne .tb_no_focus_strip
+    mov edi, r13d
+    mov esi, [scr_tb_btn_y]
+    mov edx, 3
+    mov ecx, TB_BTN_H
+    mov r8d, COLOR_ACCENT
+    call render_rect
+.tb_no_focus_strip:
+
+    ; Draw app icon from the window's draw callback.
+    mov rdi, rbx
+    call tb_icon_for_window
+    test rax, rax
+    jz .tb_skip_icon
+    mov rdi, rax
+    lea esi, [r13d + 7]
+    mov edx, [scr_tb_btn_y]
+    add edx, 6
+    call nx_icon_blit
+.tb_skip_icon:
+
     ; Draw button border (1px lighter top edge)
     ; Draw window title text (truncated to fit)
     lea rdx, [rbx + WIN_OFF_TITLE]
@@ -178,20 +213,21 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
     cmp byte [rdx], 0
     je .tb_skip_text
     mov edi, r13d
-    add edi, 6                   ; padding from left
+    add edi, 28                  ; room for icon + padding
     mov esi, [scr_tb_btn_y]
     add esi, 7
     mov ecx, COLOR_TEXT_BLACK
-    ; Background color for text depends on focus
+    ; Match the text background to the button fill so inactive/minimized
+    ; buttons do not show dark boxes behind titles.
     mov r8d, COLOR_CHROME_FACE
     mov rax, [wm_focused_window]
     cmp eax, r12d
     jne .tb_txt_bg_ok
-    mov r8d, 0x003355AA
+    mov r8d, COLOR_SURFACE
 .tb_txt_bg_ok:
     test qword [rbx + WIN_OFF_FLAGS], WF_MINIMIZED
     jz .tb_txt_bg_ok2
-    mov r8d, 0x00222244
+    mov r8d, COLOR_CHROME_FACE
 .tb_txt_bg_ok2:
     call render_text
 .tb_skip_text:
@@ -293,35 +329,61 @@ FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
     mov rcx, COLOR_BEVEL_DK
     call draw_hline
 
-    MENU_ITEM 0, nx_icon_explorer_16, szMenuExplorer
-    MENU_ITEM 1, nx_icon_terminal_16, szMenuTerm
-    MENU_ITEM 2, nx_icon_notepad_16, szMenuNotepad
-    MENU_ITEM 3, nx_icon_settings_16, szMenuSettings
-    MENU_ITEM 4, nx_icon_paint_16, szMenuPaint
-    MENU_ITEM 5, nx_icon_settings_16, szMenuTaskMgr
+    ; Iterate the entry table — one row per entry, with optional separator
+    ; above and dim color, both driven by the per-entry flags byte.
+    lea rbx, [rel menu_entries]
+    xor r12d, r12d                       ; r12 = row index
+.menu_row_loop:
+    cmp r12d, MENU_ITEM_COUNT
+    jge .menu_rows_done
 
-    ; --- Separator ---
+    movzx r14d, byte [rbx + MENU_OFF_FLAGS]
+
+    ; Optional separator above this row (drawn in the top padding slot)
+    test r14d, MENU_FLAG_SEP_ABOVE
+    jz .no_sep
     mov rdi, START_MENU_X + 8
     mov esi, [scr_start_menu_y]
-    add esi, 8 + MENU_ITEM_H * 6
+    mov eax, r12d
+    imul eax, MENU_ITEM_H
+    add esi, eax
+    add esi, MENU_PAD_TOP
     mov rdx, START_MENU_W - 16
     mov rcx, 1
     mov r8d, 0x00555588
     call render_rect
+.no_sep:
 
-    ; --- Menu Item: About NexusOS ---
-    mov rdi, nx_icon_about_16
+    ; Icon at (X+8, menu_y + pad + row*H)
+    mov rdi, [rbx + MENU_OFF_ICON]
     mov rsi, START_MENU_X + 8
     mov edx, [scr_start_menu_y]
-    add edx, 12 + MENU_ITEM_H * 6
+    mov eax, r12d
+    imul eax, MENU_ITEM_H
+    add edx, eax
+    add edx, MENU_PAD_TOP
     call nx_icon_blit
+
+    ; Label text 2px below the icon line; pick color per flags
     mov rdi, START_MENU_X + 36
     mov esi, [scr_start_menu_y]
-    add esi, 14 + MENU_ITEM_H * 6
-    mov rdx, szMenuAbout
+    mov eax, r12d
+    imul eax, MENU_ITEM_H
+    add esi, eax
+    add esi, MENU_PAD_TOP + 2
+    mov rdx, [rbx + MENU_OFF_LABEL]
+    mov ecx, COLOR_TEXT_BLACK
+    test r14d, MENU_FLAG_DIM
+    jz .label_color_ok
     mov ecx, COLOR_TEXT_GRAY
+.label_color_ok:
     mov r8d, MENU_COLOR_BG
     call render_text
+
+    add rbx, MENU_ENTRY_SIZE
+    inc r12d
+    jmp .menu_row_loop
+.menu_rows_done:
 
 .no_menu:
     pop r14
@@ -557,6 +619,57 @@ tb_draw_plug_icon:
     pop r14
     ret
 
+; tb_icon_for_window: RDI=window struct -> RAX=16px icon pointer.
+; The window manager does not store an app id yet, so taskbar icons are mapped
+; from each window's draw callback. Unknown document/viewer windows fall back
+; to the generic file icon.
+tb_icon_for_window:
+    mov rax, [rdi + WIN_OFF_DRAWFN]
+    cmp rax, app_hl_explorer_draw
+    je .explorer
+    cmp rax, app_hl_explorer_properties_draw
+    je .explorer
+    cmp rax, app_terminal_draw
+    je .terminal
+    cmp rax, app_hl_notepad_draw
+    je .notepad
+    cmp rax, app_hl_settings_draw
+    je .settings
+    cmp rax, app_hl_paint_draw
+    je .paint
+    cmp rax, app_hl_about_draw
+    je .about
+    cmp rax, app_hl_taskmgr_draw
+    je .taskmgr
+    cmp rax, app_security_probe_draw
+    je .about
+    cmp rax, app_bmp_draw
+    je .file
+.file:
+    mov rax, nx_icon_file_16
+    ret
+.explorer:
+    mov rax, nx_icon_explorer_16
+    ret
+.terminal:
+    mov rax, nx_icon_terminal_16
+    ret
+.notepad:
+    mov rax, nx_icon_notepad_16
+    ret
+.settings:
+    mov rax, nx_icon_settings_16
+    ret
+.paint:
+    mov rax, nx_icon_paint_16
+    ret
+.about:
+    mov rax, nx_icon_about_16
+    ret
+.taskmgr:
+    mov rax, nx_icon_taskmgr_16
+    ret
+
 ; Handle click on taskbar / start menu
 ; RDI = Mouse X, RSI = Mouse Y
 ; Returns: RAX = 0 (not handled), 1 (handled, no app), or 2..6 (menu item 0..4 clicked)
@@ -598,8 +711,10 @@ FN_BEGIN tb_handle_click, 0, 0, FN_RET_SCALAR
 
     ; Close menu and return the app id for this menu row.
     mov byte [tb_start_menu_open], 0
-    lea rcx, [rel menu_app_ids]
-    movzx rax, byte [rcx + rax]
+    mov rcx, MENU_ENTRY_SIZE
+    mul rcx                       ; rax = row * MENU_ENTRY_SIZE
+    lea rcx, [rel menu_entries]
+    movzx rax, byte [rcx + rax + MENU_OFF_APP]
     jmp .tb_click_ret
 
 .close_menu:
@@ -800,13 +915,15 @@ FN_BEGIN tb_handle_rclick, 0, 0, FN_RET_SCALAR
     cmp eax, MENU_ITEM_COUNT
     jge .rc_not_handled
 
-    ; eax = menu row index. Look up the app id; keep the row for Y placement.
-    push rax
-    lea rcx, [rel menu_app_ids]
-    movzx edx, byte [rcx + rax]
+    ; eax = menu row index. Look up the app id; keep the row in r9 for Y placement.
+    mov r9d, eax                  ; r9 = row index (preserved)
+    mov rcx, MENU_ENTRY_SIZE
+    mul rcx                       ; rax = row * MENU_ENTRY_SIZE
+    lea rcx, [rel menu_entries]
+    movzx edx, byte [rcx + rax + MENU_OFF_APP]
     mov byte [sm_submenu_app], dl
     mov dword [sm_submenu_x], START_MENU_X + START_MENU_W + 2
-    pop rcx                   ; rcx = menu row index
+    mov ecx, r9d
     imul ecx, MENU_ITEM_H
     add ecx, [scr_start_menu_y]
     add ecx, 4
@@ -954,13 +1071,45 @@ szMenuNotepad  db "Notepad", 0
 szMenuSettings db "Settings", 0
 szMenuPaint    db "Paint", 0
 szMenuTaskMgr  db "Task Manager", 0
+szMenuPing     db "Networking", 0
+szMenuMedia    db "Media Player", 0
 szMenuAbout    db "About NexusOS", 0
 
-; Maps a start-menu row index (0..MENU_ITEM_COUNT-1) to a kernel app id.
-menu_app_ids   db 2, 3, 4, 5, 6, 9, 7
+; ============================================================================
+; Start menu entry table — single source of truth for the menu.
+; To add a row: append one MENU_ENTRY line. Everything else (item count,
+; menu height, draw loop, click hit-testing, app dispatch) updates automatically.
+;
+; MENU_ENTRY <icon ptr>, <label ptr>, <app id>, <flags>
+;   flags = 0, MENU_FLAG_SEP_ABOVE, MENU_FLAG_DIM, or a bitwise OR
+; ============================================================================
+%macro MENU_ENTRY 4
+    dq %1
+    dq %2
+    db %3
+    db %4
+    times 6 db 0
+%endmacro
+
+menu_entries:
+    MENU_ENTRY nx_icon_explorer_16, szMenuExplorer, 2,  0
+    MENU_ENTRY nx_icon_terminal_16, szMenuTerm,     3,  0
+    MENU_ENTRY nx_icon_notepad_16,  szMenuNotepad,  4,  0
+    MENU_ENTRY nx_icon_settings_16, szMenuSettings, 5,  0
+    MENU_ENTRY nx_icon_paint_16,    szMenuPaint,    6,  0
+    MENU_ENTRY nx_icon_taskmgr_16,  szMenuTaskMgr,  9,  0
+    MENU_ENTRY nx_icon_terminal_16, szMenuPing,     10, 0
+    MENU_ENTRY nx_icon_paint_16,    szMenuMedia,    11, 0
+    MENU_ENTRY nx_icon_about_16,    szMenuAbout,    7,  (MENU_FLAG_SEP_ABOVE | MENU_FLAG_DIM)
+menu_entries_end:
 
 global tb_start_menu_open
 tb_start_menu_open db 0
+
+; Exported so display_recompute_layout can anchor the menu to the taskbar
+; using the correct height for the current entry count.
+global tb_start_menu_h
+tb_start_menu_h dd START_MENU_H
 
 ; Start menu submenu state
 global sm_submenu_open

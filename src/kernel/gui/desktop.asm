@@ -33,6 +33,7 @@ extern nx_icon_explorer_48
 extern nx_icon_notepad_48
 extern nx_icon_paint_48
 extern nx_icon_settings_48
+extern nx_icon_taskmgr_48
 extern nx_icon_terminal_48
 
 ; ============================================================================
@@ -235,9 +236,9 @@ desktop_remove_icon:
 section .data
 
 ; Desktop icon table: up to MAX_DESK_ICONS app IDs (0=empty)
-; Default: Explorer(2), Terminal(3), Notepad(4), Task Manager(9)
+; Default: Explorer(2), Terminal(3), Notepad(4), Task Manager(9), Ping(10)
 desktop_icons:
-    db 2, 3, 4, 9, 0, 0, 0, 0
+    db 2, 3, 4, 9, 10, 0, 0, 0
 
 ; Icon info table: indexed by (app_id - 2), 16 bytes each
 ; Format: dq label_ptr, dq icon48_ptr
@@ -265,7 +266,10 @@ icon_table:
     dq nx_icon_about_48
     ; App 9: Task Manager
     dq szTaskMgr
-    dq nx_icon_settings_48
+    dq nx_icon_taskmgr_48
+    ; App 10: Ping
+    dq szPing
+    dq nx_icon_terminal_48
 
 szMyPC       db "My PC", 0
 szTerminal   db "Terminal", 0
@@ -274,5 +278,6 @@ szSettings   db "Settings", 0
 szPaint      db "Paint", 0
 szAbout      db "About", 0
 szTaskMgr    db "Task Mgr", 0
+szPing       db "Network", 0
 
 section .text
