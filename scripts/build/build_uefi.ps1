@@ -117,7 +117,7 @@ Write-Host "  OK - APPS.BIN ($sz bytes)" -ForegroundColor Green
 # 3. Create data disk image with FAT16 filesystem (for ATA PIO access by kernel)
 Write-Host '[3/3] Creating FAT16 data disk (data.img)...' -ForegroundColor Yellow
 $dataImgPath = Join-Path $BUILD_DIR 'data.img'
-$targetSize = 10 * 1024 * 1024   # 10MB
+$targetSize = 12 * 1024 * 1024   # 12MB (bumped from 10MB to fit DMCUB firmware blobs)
 $imgBytes = New-Object byte[] $targetSize
 
 # FAT16 partition starts where the kernel's FAT16_PART_LBA points. Keep this
@@ -278,6 +278,24 @@ if (Test-Path $bootAnimPath) {
     Write-DirEntry ($rootDirOff + $entryIdx * 32) "BOOTANIM" "NBA" 0x20 $bootAnimCluster $bootAnimData.Length
     $entryIdx++
     Write-Host "  + BOOTANIM.NBA ($($bootAnimData.Length) bytes)" -ForegroundColor DarkGray
+}
+
+# DMCUB firmware blobs (AMD DCN). NexusOS uses these to bring up the
+# display microcontroller from a known-clean state instead of inheriting
+# whatever IPS state BIOS left. See assets/firmware/README.md.
+$REPO_ROOT = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+foreach ($fw in @(
+    @{ src = 'assets/firmware/DCN35DMC.BIN'; name = 'DCN35DMC'; ext = 'BIN' },
+    @{ src = 'assets/firmware/DCN314.BIN';   name = 'DCN314';   ext = 'BIN' }
+)) {
+    $fwPath = Join-Path $REPO_ROOT $fw.src
+    if (Test-Path $fwPath) {
+        $fwData = [System.IO.File]::ReadAllBytes($fwPath)
+        $fwCluster = Write-FileData $fwData
+        Write-DirEntry ($rootDirOff + $entryIdx * 32) $fw.name $fw.ext 0x20 $fwCluster $fwData.Length
+        $entryIdx++
+        Write-Host "  + $($fw.name).$($fw.ext) ($($fwData.Length) bytes)" -ForegroundColor DarkGray
+    }
 }
 
 # Copy FAT1 to FAT2

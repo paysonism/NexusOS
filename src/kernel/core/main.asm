@@ -2290,6 +2290,16 @@ real_boot_diag_dump:
     extern amd_dcn_dmub_cw6_top
     extern amd_dcn_dmub_cw6_offset_lo
     extern amd_dcn_dmub_cw6_offset_hi
+    extern amd_dcn_fw_probe
+    extern amd_dcn_fw_status
+    extern amd_dcn_fw_size
+    extern amd_dcn_fw_inst_const_bytes
+    extern amd_dcn_fw_region_size
+    extern amd_dcn_fw_trace_buf_size
+    extern amd_dcn_fw_version
+    extern amd_dcn_fw_shared_state_size
+    extern amd_dcn_fw_shared_features
+    extern amd_dcn_fw_feature_bits
     extern amd_dcn_dmub_state_flags
     extern amd_dcn_dmub_rings_arm
     extern amd_dcn_dmub_ring_status
@@ -2529,6 +2539,50 @@ real_boot_diag_dump:
     lea rsi, [s_dmub_cw6_ohi]
     call ovl_puts
     mov edx, [amd_dcn_dmub_cw6_offset_hi]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; DMCUB firmware blob probe (read-only). Locates DCN35DMC.BIN on the
+    ; ramdisk and parses dmub_fw_meta_info. Phase 2 will use these sizes
+    ; to allocate work regions for a full reset+load+release.
+    call amd_dcn_fw_probe
+    lea rdi, [ovl_buf]
+    lea rsi, [s_fw_a]
+    call ovl_puts
+    mov edx, [amd_dcn_fw_status]
+    call ovl_puth32
+    lea rsi, [s_fw_size]
+    call ovl_puts
+    mov edx, [amd_dcn_fw_size]
+    call ovl_puth32
+    lea rsi, [s_fw_inst]
+    call ovl_puts
+    mov edx, [amd_dcn_fw_inst_const_bytes]
+    call ovl_puth32
+    lea rsi, [s_fw_ver]
+    call ovl_puts
+    mov edx, [amd_dcn_fw_version]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_fw_b]
+    call ovl_puts
+    mov edx, [amd_dcn_fw_region_size]
+    call ovl_puth32
+    lea rsi, [s_fw_trace]
+    call ovl_puts
+    mov edx, [amd_dcn_fw_trace_buf_size]
+    call ovl_puth32
+    lea rsi, [s_fw_ss]
+    call ovl_puts
+    mov edx, [amd_dcn_fw_shared_state_size]
+    call ovl_puth32
+    lea rsi, [s_fw_feat]
+    call ovl_puts
+    mov edx, [amd_dcn_fw_feature_bits]
     call ovl_puth32
     mov byte [rdi], 0
     call diag_emit_line
@@ -3826,6 +3880,14 @@ s_dmub_cw6      db "DMUB cw6 base=", 0
 s_dmub_cw6_top  db " top=", 0
 s_dmub_cw6_olo  db " offLo=", 0
 s_dmub_cw6_ohi  db " offHi=", 0
+s_fw_a          db "FW stat=", 0
+s_fw_size       db " size=", 0
+s_fw_inst       db " inst=", 0
+s_fw_ver        db " ver=", 0
+s_fw_b          db "FW region=", 0
+s_fw_trace      db " trace=", 0
+s_fw_ss         db " ss=", 0
+s_fw_feat       db " feat=", 0
 s_dmub_gp2    db "DMUB gp2 dataOut=", 0
 s_dmub_gppolls db " polls=", 0
 s_dmub_gpstart db " t0=", 0
