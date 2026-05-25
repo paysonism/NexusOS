@@ -2286,6 +2286,10 @@ real_boot_diag_dump:
     extern amd_dcn_dmub_timer
     extern amd_dcn_dmub_fb_base_reg
     extern amd_dcn_dmub_fb_offset_reg
+    extern amd_dcn_dmub_cw6_base
+    extern amd_dcn_dmub_cw6_top
+    extern amd_dcn_dmub_cw6_offset_lo
+    extern amd_dcn_dmub_cw6_offset_hi
     extern amd_dcn_dmub_state_flags
     extern amd_dcn_dmub_rings_arm
     extern amd_dcn_dmub_ring_status
@@ -2503,6 +2507,28 @@ real_boot_diag_dump:
     lea rsi, [s_dmub_gpresp]
     call ovl_puts
     mov edx, [amd_dcn_dmub_gpint_response]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; CW6 shared-state region (read-only). BIOS-loaded firmware programs this
+    ; with the dmub_shared_state region; needed for IPS-exit signaling.
+    lea rdi, [ovl_buf]
+    lea rsi, [s_dmub_cw6]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cw6_base]
+    call ovl_puth32
+    lea rsi, [s_dmub_cw6_top]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cw6_top]
+    call ovl_puth32
+    lea rsi, [s_dmub_cw6_olo]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cw6_offset_lo]
+    call ovl_puth32
+    lea rsi, [s_dmub_cw6_ohi]
+    call ovl_puts
+    mov edx, [amd_dcn_dmub_cw6_offset_hi]
     call ovl_puth32
     mov byte [rdi], 0
     call diag_emit_line
@@ -3796,6 +3822,10 @@ s_dmub_outfb  db " outFb=", 0
 s_dmub_gpstat db " gpStat=", 0
 s_dmub_gpreq  db " gpReq=", 0
 s_dmub_gpresp db " gpResp=", 0
+s_dmub_cw6      db "DMUB cw6 base=", 0
+s_dmub_cw6_top  db " top=", 0
+s_dmub_cw6_olo  db " offLo=", 0
+s_dmub_cw6_ohi  db " offHi=", 0
 s_dmub_gp2    db "DMUB gp2 dataOut=", 0
 s_dmub_gppolls db " polls=", 0
 s_dmub_gpstart db " t0=", 0
