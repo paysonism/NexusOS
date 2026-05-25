@@ -292,6 +292,17 @@ amd_dcn_probe:
     mov [amd_dcn_dmub_fb_base_reg], eax
     mov eax, [rsi + AMD_DCN314_DCN_VM_FB_OFFSET]
     mov [amd_dcn_dmub_fb_offset_reg], eax
+    ; CW6 region maps the dmub_shared_state region (IPS driver/firmware
+    ; signal blocks). BIOS-loaded firmware programs this. Read-only here:
+    ; gives us the system phys of shared_state for future IPS-exit work.
+    mov eax, [rsi + AMD_DCN314_DMCUB_REGION3_CW6_BASE]
+    mov [amd_dcn_dmub_cw6_base], eax
+    mov eax, [rsi + AMD_DCN314_DMCUB_REGION3_CW6_TOP]
+    mov [amd_dcn_dmub_cw6_top], eax
+    mov eax, [rsi + AMD_DCN314_DMCUB_REGION3_CW6_OFFSET]
+    mov [amd_dcn_dmub_cw6_offset_lo], eax
+    mov eax, [rsi + AMD_DCN314_DMCUB_REGION3_CW6_OFFSET_HIGH]
+    mov [amd_dcn_dmub_cw6_offset_hi], eax
     call amd_dcn_dmub_prepare_mailbox
     call amd_dcn_dmub_gpint_ips_debug_wake
     call amd_dcn_dmub_send_outbox1_enable
@@ -1018,6 +1029,10 @@ global amd_dcn_dmub_undef_fault
 global amd_dcn_dmub_timer
 global amd_dcn_dmub_fb_base_reg
 global amd_dcn_dmub_fb_offset_reg
+global amd_dcn_dmub_cw6_base
+global amd_dcn_dmub_cw6_top
+global amd_dcn_dmub_cw6_offset_lo
+global amd_dcn_dmub_cw6_offset_hi
 global amd_dcn_dmub_state_flags
 global amd_dcn_dmub_rings_arm
 global amd_dcn_dmub_ring_status
@@ -1072,6 +1087,10 @@ amd_dcn_dmub_undef_fault:   dd 0
 amd_dcn_dmub_timer:         dd 0
 amd_dcn_dmub_fb_base_reg:   dd 0
 amd_dcn_dmub_fb_offset_reg: dd 0
+amd_dcn_dmub_cw6_base:      dd 0
+amd_dcn_dmub_cw6_top:       dd 0
+amd_dcn_dmub_cw6_offset_lo: dd 0
+amd_dcn_dmub_cw6_offset_hi: dd 0
 amd_dcn_dmub_state_flags:   dd 0
 amd_dcn_dmub_rings_arm:     db 1
                             times 3 db 0
@@ -1131,6 +1150,12 @@ AMD_DCN314_DMCUB_REGION3_CW4_BASE equ 0xD9A4
 AMD_DCN314_DMCUB_REGION3_CW4_TOP equ 0xD9C4
 AMD_DCN314_DMCUB_REGION3_CW4_OFFSET equ 0xD9F4
 AMD_DCN314_DMCUB_REGION3_CW4_OFFSET_HIGH equ 0xD9F8
+; CW6 byte offsets (reg indices 0x01ab/0x01b3/0x01c1/0x01c2 from
+; dcn_3_1_4_offset.h, computed via (SEG2_base + idx)*4 with SEG2=0x34C0):
+AMD_DCN314_DMCUB_REGION3_CW6_BASE        equ 0xD9AC
+AMD_DCN314_DMCUB_REGION3_CW6_TOP         equ 0xD9CC
+AMD_DCN314_DMCUB_REGION3_CW6_OFFSET      equ 0xDA04
+AMD_DCN314_DMCUB_REGION3_CW6_OFFSET_HIGH equ 0xDA08
 AMD_DCN314_DMCUB_INBOX1_BASE   equ 0xDA50
 AMD_DCN314_DMCUB_INBOX1_SIZE   equ 0xDA54
 AMD_DCN314_DMCUB_INBOX1_WPTR   equ 0xDA58
