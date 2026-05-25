@@ -33,3 +33,4 @@ admin_*.rsc
 
 # Dropped source archives after extraction into source-owned folders
 NexusOS Design System.zip
+dist/
