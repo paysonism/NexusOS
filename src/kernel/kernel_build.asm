@@ -113,6 +113,8 @@ section .text
 section .text
 %include "src/kernel/drivers/amd_dcn.asm"
 section .text
+%include "src/kernel/drivers/amd_dcn_fw.asm"
+section .text
 %include "src/kernel/drivers/rtl8139.asm"
 section .text
 %include "src/kernel/drivers/xhci.asm"
