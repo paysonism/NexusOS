@@ -3,7 +3,11 @@
 ; Combines all kernel components into a single binary
 ; ============================================================================
 [bits 64]
-[org 0x100000]
+; Pull KERNEL_LOAD_ADDR in early so [org] can use it. boot_memory.inc is guarded
+; against re-inclusion (BOOT_MEMORY_INC), so downstream includes that pull it
+; via constants.inc are unaffected.
+%include "boot_memory.inc"
+[org KERNEL_LOAD_ADDR]
 
 ; Define macros to ignore extern/global directives in included files
 ; Using 1-* allows the macro to ignore any number of arguments (comma separated)
@@ -111,10 +115,11 @@ section .text
 section .text
 %include "src/kernel/drivers/amd_display.asm"
 section .text
-%include "src/kernel/drivers/amd_dcn.asm"
-section .text
-%include "src/kernel/drivers/amd_dcn_fw.asm"
-section .text
+; AMD DCN/DMUB and GFX11 bring-up subsystems retired 2026-05-26.
+; Source preserved under deprecated/780M_IGPU/. See deprecated/README.md
+; for the deprecation policy. Do NOT add -dNEXUS_DIAG_LEGACY or
+; -dNEXUS_GFX_BRINGUP to any build — the gated source still in main.asm
+; references symbols that no longer link in the active tree.
 %include "src/kernel/drivers/rtl8139.asm"
 section .text
 %include "src/kernel/drivers/xhci.asm"

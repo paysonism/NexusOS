@@ -508,6 +508,33 @@
 ;   field. Used by a window's *creator* to pass a small bit of context to a
 ;   freshly created window whose drawfn will run in a different app slot
 ;   (e.g. Explorer → Properties window: pass the file-row index).
+; SYS_MEDIA_BLIT_SCALED(win_id, src_bgra, packed_dims, reserve_bottom_px, alpha_key)
+;   Secure aspect-preserving nearest-neighbor blit of a user-supplied BGRA
+;   buffer into the client area of the named window.
+;
+;   packed_dims = (src_w << 16) | src_h, each half ∈ [1, 4096]. Packed so
+;   the syscall fits NexusHL's 6-argument syscall() arity.
+;
+;   The kernel-side stub validates that:
+;     * src_w, src_h ∈ [1, 4096]
+;     * src_w * src_h * 4 ≤ 64 MB
+;     * src_ptr+byte_len lies entirely in the caller's slot or user blob
+;     * win_id < MAX_WINDOWS
+;     * reserve_bottom_px is clamped to scr_height
+;     * alpha_key reduced to {0,1}
+;   Returns 0 on success, -1 on any rejection.
+;   Designed for the Media Player codecs (NIC/NBA/BMP-via-scratch/SVG-via-
+;   svg2) so the per-codec draw fn can stay in user-mode NexusHL.
+%macro SYS_MEDIA_BLIT_SCALED 5
+    mov rax, 66
+    mov rdi, %1
+    mov rsi, %2
+    mov rdx, %3
+    mov r10, %4
+    mov r8,  %5
+    syscall
+%endmacro
+
 %macro SYS_WM_SET_USER_ARG 2
     mov rax, 65
     mov rdi, %1

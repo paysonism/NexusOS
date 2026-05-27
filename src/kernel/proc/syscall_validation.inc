@@ -27,8 +27,15 @@ sc_range_in_bounds:
     ret
 
 ; RDI=ptr, RSI=len -> EAX=1 if range is inside the current app slot or the
-; built-in user blob.
+; built-in user blob. Zero-length ranges are rejected at the top: a 0-length
+; "valid" pointer is meaningless and combined with caller-side int-overflow
+; (len*bpp truncating to 0) it would let bogus huge ranges slip past.
 sc_validate_user_range:
+    test rsi, rsi
+    jnz .uvr_nonzero
+    xor eax, eax
+    ret
+.uvr_nonzero:
     push rdi
     push rsi
     push r8
@@ -136,7 +143,10 @@ sc_validate_dir_entry_handle:
 sc_validate_callback_target:
     test rdi, rdi
     jz .vct_ok
-    mov rsi, 16
+    ; Require 64 bytes (one cache line) of mapped code at the entry point. A
+    ; 16-byte window let a 1-byte prologue at the very last bytes of the slot
+    ; pass; a realistic function prologue is larger than that.
+    mov rsi, 64
     call sc_validate_user_range
     ret
 .vct_ok:

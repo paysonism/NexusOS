@@ -98,3 +98,62 @@ fn media_current_frame(codec, buf) {
     let ticks = syscall(SYS_TICKS);
     return (ticks * fps / 100) % n;
 }
+
+# Total duration in whole seconds. Useful for explorer property dialogs
+# and thumbnail-strip labels — anything that wants to know "how long is
+# this clip" without launching the player.
+fn media_duration_seconds(codec, buf) {
+    let n   = media_frame_count(codec, buf);
+    let fps = media_fps(codec, buf);
+    if fps == 0 { return 0; }
+    if n == 0   { return 0; }
+    return n / fps;
+}
+
+# ----------------------------------------------------------------------
+# media_blit_scaled — kernel-validated BGRA blit into a window.
+#
+# Wraps SYS_MEDIA_BLIT_SCALED (syscall #66, see src/include/syscall_user.inc
+# and src/kernel/proc/syscall.asm `.sc_media_blit_scaled`).
+#
+# The kernel stub validates EVERYTHING — buffer range, dimensions,
+# overflow, window id, reserve clamping, alpha-key normalisation — so
+# user-mode callers do not need to pre-check. Returns 0 on success or
+# -1 if any input was rejected.
+#
+# Args
+#   win_id        : window id returned by SYS_WM_CREATE
+#   src           : pointer to top-down BGRA pixels in the calling slot
+#   src_w, src_h  : dimensions in pixels, each ∈ [1, 4096]
+#   reserve_bot   : pixels at the bottom of the client area to leave
+#                   untouched (e.g. for a control bar). Clamped.
+#   alpha_key     : nonzero = skip pixels with A==0 (NIC behaviour);
+#                   zero = opaque copy (NBA behaviour).
+#
+# This is the central reusable rendering primitive — any future video,
+# slideshow, screen-share, or game preview app should call this rather
+# than reimplement the scaler in asm.
+# ----------------------------------------------------------------------
+fn media_blit_scaled(win_id, src, src_w, src_h, reserve_bot, alpha_key) {
+    # Pack dims into one arg (each side ≤ 4096 → 12 bits) so the call
+    # fits NexusHL's 6-arg syscall() ceiling.
+    let packed = (src_w << 16) | (src_h & 0xFFFF);
+    return syscall(66, win_id, src, packed, reserve_bot, alpha_key);
+}
+
+# Format a duration in seconds as "MM:SS" into the 6-byte buffer at
+# `out`. Caller is responsible for the storage. Caps at 99:59 — anything
+# longer renders as 99:59 (good enough for a single-asset preview;
+# multi-hour content can wire a wider formatter later).
+fn media_format_mmss(out, secs) {
+    if secs < 0 { secs = 0; }
+    let m = secs / 60;
+    let s = secs % 60;
+    if m > 99 { m = 99; s = 59; }
+    sb(out + 0, 48 + (m / 10));
+    sb(out + 1, 48 + (m % 10));
+    sb(out + 2, 58);                    # ':'
+    sb(out + 3, 48 + (s / 10));
+    sb(out + 4, 48 + (s % 10));
+    sb(out + 5, 0);
+}

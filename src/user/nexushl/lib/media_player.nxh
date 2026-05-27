@@ -1,0 +1,257 @@
+# ============================================================================
+# NexusHL media_player — reusable timeline widget for video apps.
+#
+# Purpose
+# -------
+# Encapsulates the parts of the Media Player UI that don't require
+# framebuffer-global access: control-bar layout constants, hit-testing,
+# scrub-position math, and a small state machine that translates UI
+# events ("user clicked the +10s button") into slot-state edits ("queue
+# a seek to frame N").
+#
+# What stays in kernel asm (and therefore NOT in this lib)
+# --------------------------------------------------------
+# The actual BGRA pixel blit and 100 Hz frame-advance live in
+# src/user/apps/media_viewer.inc because they touch `bb_addr`,
+# `scr_pitch`, and `tick_count` — none of which are reachable from a
+# Ring-3 slot. The contract between the two is the slot-state struct
+# declared by the calling app (see apps/media.nxh `state { ... }`).
+#
+# How a new app uses this lib
+# ---------------------------
+# 1. `use media_player` and `use media`.
+# 2. Declare a `state { ... }` block with the fields listed in
+#    `MEDIA_PLAYER_STATE_LAYOUT` below. The kernel renderer reads them
+#    by slot-relative offset (`slot_base + (sym - app_blob_start)`), so
+#    the names must match exactly.
+# 3. In `fn click(win, cx, cy)` call `mp_handle_click(win, cx, cy)`.
+# 4. In `fn key(win, k)` call `mp_handle_key(win, k)`.
+# 5. The kernel renderer draws the frame and the control bar — your
+#    `fn draw(win)` can stay an empty stub.
+#
+# This lib is deliberately render-free for now: control-bar drawing
+# happens kernel-side (via the existing asm helpers in media_viewer.inc)
+# so two redraw paths can't drift out of sync. A future revision that
+# adds a `SYS_MEDIA_BLIT_SCALED` syscall can move the drawing here too,
+# at which point `mp_draw_controls(win, file, frame)` will be exported
+# from this same file with no caller change.
+
+use core
+use media
+
+# ----------------------------------------------------------------------
+# Control bar layout
+#
+# Mirror of the constants in media_viewer.inc. Change one place, change
+# both — the source-guard test in scripts/test/test_source_guards.ps1
+# enforces this.
+# ----------------------------------------------------------------------
+const MEDIA_BAR_H        = 26
+const MEDIA_BTN_W        = 28
+const MEDIA_BTN_PLAY_X   = 0
+const MEDIA_BTN_BACK_X   = 28
+const MEDIA_BTN_FWD_X    = 56
+const MEDIA_SCRUB_X      = 88
+const MEDIA_TIME_W       = 56
+
+# Tick rate (PIT) and convenience constants.
+const MEDIA_TICK_HZ      = 100
+const MEDIA_SEEK_TICKS   = 1000          # 10 s @ 100 Hz
+
+# ----------------------------------------------------------------------
+# Action enum returned by mp_hit_test_controls.
+#
+# Reasoning: the click handler in an app doesn't want to know which
+# pixel rectangle the user hit, only what the hit means. Lets us add
+# new controls without touching every consumer.
+# ----------------------------------------------------------------------
+const MP_ACTION_NONE     = 0
+const MP_ACTION_TOGGLE   = 1
+const MP_ACTION_BACK_10  = 2
+const MP_ACTION_FWD_10   = 3
+const MP_ACTION_SCRUB    = 4             # extra info: target frame in retval2
+
+# ----------------------------------------------------------------------
+# State layout reference. The host app's state block must include these
+# fields in any order; the names matter, not the order.
+#
+#   mp_paused      : 4    0 = playing, 1 = paused.
+#   mp_frame       : 4    Current frame index, [0, frame_count).
+#   mp_last_tick   : 8    tick_count snapshot when mp_frame was last set.
+#   mp_no_loop     : 4    0 = loop at end (default), 1 = freeze at end.
+#   mp_seek_to     : 4    target_frame + 1 (0 means "no pending seek").
+#   mp_dragging    : 4    1 while user is mid-drag on the scrub track.
+# ----------------------------------------------------------------------
+
+# ======================================================================
+# Math helpers — pure, no state, safe to inline.
+# ======================================================================
+
+# Track width given the window's outer width. Caller should check > 0.
+fn mp_track_w(ww) {
+    return ww - UI_BORDER * 2 - MEDIA_SCRUB_X - MEDIA_TIME_W;
+}
+
+# Map an X coordinate (client-relative) on the scrub track to a frame
+# index in [0, frames). `frames` must be > 0 — caller guards. If `cx`
+# is outside the track the result is clamped to the nearer endpoint.
+fn mp_scrub_to_frame(cx, ww, frames) {
+    let tw = mp_track_w(ww);
+    if tw <= 0 { return 0; }
+    let rel = cx - MEDIA_SCRUB_X;
+    if rel < 0 { return 0; }
+    if rel >= tw { return frames - 1; }
+    return rel * frames / tw;
+}
+
+# 10-second seek delta in frames given the clip's fps.
+fn mp_seek_delta_frames(fps) {
+    if fps <= 0 { return 0; }
+    return MEDIA_SEEK_TICKS * fps / MEDIA_TICK_HZ;
+}
+
+# Seconds elapsed at the given frame index.
+fn mp_frame_to_seconds(frame, fps) {
+    if fps <= 0 { return 0; }
+    return frame / fps;
+}
+
+# ======================================================================
+# Hit testing — translate a click in client coords into an action.
+#
+# Returns the action code. For MP_ACTION_SCRUB, the caller still needs
+# `mp_scrub_to_frame` to compute the target. Splitting hit-test and
+# scrub-compute keeps both functions side-effect-free.
+# ======================================================================
+fn mp_hit_test_controls(win, cx, cy, frames) {
+    let wh = lq(win + WIN_H);
+    let ww = lq(win + WIN_W);
+    let client_h = wh - UI_TITLEBAR - UI_BORDER;
+    let bar_y = client_h - MEDIA_BAR_H;
+    if cy < bar_y { return MP_ACTION_NONE; }
+    if frames <= 0 { return MP_ACTION_NONE; }
+    if cx < MEDIA_BTN_BACK_X { return MP_ACTION_TOGGLE; }
+    if cx < MEDIA_BTN_FWD_X  { return MP_ACTION_BACK_10; }
+    if cx < MEDIA_SCRUB_X    { return MP_ACTION_FWD_10; }
+    let tw = mp_track_w(ww);
+    if tw <= 0 { return MP_ACTION_NONE; }
+    if cx >= MEDIA_SCRUB_X + tw { return MP_ACTION_NONE; }
+    return MP_ACTION_SCRUB;
+}
+
+# ======================================================================
+# State edits — the only writers to the slot's media state.
+#
+# These do not call mp_paused / mp_frame / mp_seek_to by absolute slot
+# offset; they take a `state_base` pointer that the host passes in. The
+# kernel renderer reads from the same offsets via the NexusHL-emitted
+# symbols, so as long as the host app declares the fields with the
+# canonical names, the two views see the same memory.
+# ======================================================================
+
+# Toggle play/pause given a pointer to the host's mp_paused field.
+fn mp_toggle_paused(paused_ptr) {
+    let p = lw(paused_ptr);
+    if p == 0 { sw(paused_ptr, 1); return; }
+    sw(paused_ptr, 0);
+}
+
+# Queue a seek to `frame`. The +1 bias matches the kernel renderer's
+# convention: 0 == nothing pending.
+fn mp_request_seek(seek_ptr, frame) {
+    if frame < 0 { frame = 0; }
+    sw(seek_ptr, frame + 1);
+}
+
+# ======================================================================
+# Compound: handle one click for a "standard" media app that uses the
+# canonical state-field names (mp_paused, mp_frame, mp_no_loop,
+# mp_seek_to, mp_dragging). Returns 1 if the click was consumed, 0 if
+# the caller should fall through to its own handling.
+#
+# Splitting this out means a custom app that wants, say, an extra
+# button in the bar can call mp_hit_test_controls directly and add its
+# own branch before falling into this.
+# ======================================================================
+fn mp_handle_click(win, cx, cy, file, paused_ptr, frame_ptr, no_loop_ptr, seek_ptr, dragging_ptr) {
+    let frames = lw(file + 12);
+    let fps    = lw(file + 16);
+    let act    = mp_hit_test_controls(win, cx, cy, frames);
+    if act == MP_ACTION_NONE { return 0; }
+    if act == MP_ACTION_TOGGLE {
+        mp_toggle_paused(paused_ptr);
+        return 1;
+    }
+    if act == MP_ACTION_BACK_10 {
+        let d = mp_seek_delta_frames(fps);
+        if d == 0 { return 1; }
+        let cur = lw(frame_ptr);
+        let t = cur - d;
+        if t < 0 { t = 0; }
+        mp_request_seek(seek_ptr, t);
+        return 1;
+    }
+    if act == MP_ACTION_FWD_10 {
+        let d = mp_seek_delta_frames(fps);
+        if d == 0 { return 1; }
+        let cur = lw(frame_ptr);
+        let t = cur + d;
+        if t >= frames {
+            if lw(no_loop_ptr) == 0 { t = t % frames; }
+            else { t = frames - 1; }
+        }
+        mp_request_seek(seek_ptr, t);
+        return 1;
+    }
+    if act == MP_ACTION_SCRUB {
+        let ww = lq(win + WIN_W);
+        let f  = mp_scrub_to_frame(cx, ww, frames);
+        sw(dragging_ptr, 1);
+        mp_request_seek(seek_ptr, f);
+        return 1;
+    }
+    return 0;
+}
+
+# ======================================================================
+# Key handling — mirrors mp_handle_click for keyboard shortcuts:
+#
+#   space   -> toggle play/pause
+#   a / ←   -> -10 s
+#   d / →   -> +10 s
+#   l       -> toggle loop mode
+#
+# Returns 1 if the key was consumed.
+# ======================================================================
+fn mp_handle_key(k, file, paused_ptr, frame_ptr, no_loop_ptr, seek_ptr) {
+    let ch = (k >> 8) & 0xFF;
+    if ch == 32 { mp_toggle_paused(paused_ptr); return 1; }
+    let frames = lw(file + 12);
+    if frames <= 0 { return 0; }
+    let fps = lw(file + 16);
+    let d   = mp_seek_delta_frames(fps);
+    if d == 0 { return 0; }
+    let cur = lw(frame_ptr);
+    if ch == 97 {                                # 'a'
+        let t = cur - d;
+        if t < 0 { t = 0; }
+        mp_request_seek(seek_ptr, t);
+        return 1;
+    }
+    if ch == 100 {                               # 'd'
+        let t = cur + d;
+        if t >= frames {
+            if lw(no_loop_ptr) == 0 { t = t % frames; }
+            else { t = frames - 1; }
+        }
+        mp_request_seek(seek_ptr, t);
+        return 1;
+    }
+    if ch == 108 {                               # 'l'
+        let l = lw(no_loop_ptr);
+        if l == 0 { sw(no_loop_ptr, 1); return 1; }
+        sw(no_loop_ptr, 0);
+        return 1;
+    }
+    return 0;
+}

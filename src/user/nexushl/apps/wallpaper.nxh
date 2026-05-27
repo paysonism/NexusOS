@@ -1,7 +1,20 @@
 # Native desktop wallpaper renderer. Called by the kernel WM as the
 # desktop background layer, before icons and normal windows are painted.
+#
+# Each theme pack ships its own `background.svg` (see
+# `docs/theme-pack.md`). The two strings below are the build-time copies
+# of `assets/themes/light/background.svg` and `assets/themes/dark/background.svg`;
+# they are kept as `str` literals because the on-disk loader has not yet
+# landed. When it does, this file collapses to:
+#
+#     let path = theme_active_bg_path();
+#     image_render_path(path, buf, len, 0, 0, w, h);
+#
+# and the per-theme SVG strings here disappear.
 
 use svg2
+use theme
+use image
 
 app "Wallpaper" { stack = 4096; }
 
@@ -15,18 +28,14 @@ str bloom_svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"80 45 1760 
 const BLOOM_SVG_LEN = 5690
 
 fn draw(win) {
-    let bg = desktop_bg();
+    theme_init();
     let w = display_current_width();
     let h = display_current_height();
-    if bg == DESKTOP_BG_GLASS_RIBBONS {
-        svg_render(&ribbons_svg, RIBBONS_SVG_LEN, 0, 0, w, h);
+    if theme_active() == THEME_DARK {
+        image_render(&ribbons_svg, RIBBONS_SVG_LEN, IMG_SVG, 0, 0, w, h);
         return;
     }
-    if bg == DESKTOP_BG_FROSTED_BLOOM {
-        svg_render(&bloom_svg, BLOOM_SVG_LEN, 0, 0, w, h);
-        return;
-    }
-    svg_render(&liquid_svg, LIQUID_SVG_LEN, 0, 0, w, h);
+    image_render(&bloom_svg, BLOOM_SVG_LEN, IMG_SVG, 0, 0, w, h);
 }
 
 fn click(win, x, y) { return; }

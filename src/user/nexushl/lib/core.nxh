@@ -93,6 +93,11 @@ const DISPLAY_FLAG_FPS     = 2
 # The flag is persisted today so Settings can expose the toggle ahead of
 # the scaler work.
 const DISPLAY_FLAG_STRETCH = 4
+# DESKTOP_BG_* — legacy kernel-side wallpaper enum. New code MUST go
+# through `theme.nxh` (THEME_LIGHT / THEME_DARK) instead. These constants
+# remain because the kernel still maintains a single-byte desktop_bg
+# state that boot-time code may inspect, and `theme_set()` keeps that
+# state in sync. Apps should not call desktop_set_bg directly.
 const DESKTOP_BG_LIQUID_METAL  = 0
 const DESKTOP_BG_GLASS_RIBBONS = 1
 const DESKTOP_BG_FROSTED_BLOOM = 2

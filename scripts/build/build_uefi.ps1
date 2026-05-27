@@ -3,7 +3,11 @@ param(
     [switch]$Trace,
     [ValidateSet('Default', 'Cache32Max')]
     [string]$PerfProfile = 'Default',
-    [switch]$NoFbWc          # Phase A baseline: skip fbperf WC arm+activate
+    [switch]$NoFbWc,         # Phase A baseline: skip fbperf WC arm+activate
+    [switch]$CopyToE         # Copy built ESP\EFI tree to E:\ for boot from removable media.
+    # GFX/DCN bring-up flags (-Gfx, -GfxWave3, -GfxWave3L, -GfxImuKick,
+    # -DiagLegacy) were retired 2026-05-26 along with the AMD 780M iGPU
+    # subsystem. Source preserved under deprecated/780M_IGPU/.
 )
 
 $ErrorActionPreference = 'Stop'
@@ -117,7 +121,7 @@ Write-Host "  OK - APPS.BIN ($sz bytes)" -ForegroundColor Green
 # 3. Create data disk image with FAT16 filesystem (for ATA PIO access by kernel)
 Write-Host '[3/3] Creating FAT16 data disk (data.img)...' -ForegroundColor Yellow
 $dataImgPath = Join-Path $BUILD_DIR 'data.img'
-$targetSize = 12 * 1024 * 1024   # 12MB (bumped from 10MB to fit DMCUB firmware blobs)
+$targetSize = 24 * 1024 * 1024   # 24MB — Phoenix GFX firmware set (~2.5MB) + DCN/RLC blobs + BOOTANIM
 $imgBytes = New-Object byte[] $targetSize
 
 # FAT16 partition starts where the kernel's FAT16_PART_LBA points. Keep this
@@ -270,6 +274,16 @@ $logoCluster = Write-FileData $bmpData
 Write-DirEntry ($rootDirOff + $entryIdx * 32) "LOGO" "BMP" 0x20 $logoCluster $bmpData.Length
 $entryIdx++
 
+# Wallpaper SVG sample for Media Player. 8.3 name: RIBBONS.SVG
+$ribbonsSvgPath = Join-Path $Root 'src\resources\wallpapers\glass-ribbons.svg'
+if (Test-Path $ribbonsSvgPath) {
+    $ribbonsSvgData = [System.IO.File]::ReadAllBytes($ribbonsSvgPath)
+    $ribbonsSvgCluster = Write-FileData $ribbonsSvgData
+    Write-DirEntry ($rootDirOff + $entryIdx * 32) "RIBBONS" "SVG" 0x20 $ribbonsSvgCluster $ribbonsSvgData.Length
+    $entryIdx++
+    Write-Host "  + RIBBONS.SVG ($($ribbonsSvgData.Length) bytes)" -ForegroundColor DarkGray
+}
+
 # Boot animation file
 $bootAnimPath = Join-Path $BUILD_DIR 'BOOTANIM.NBA'
 if (Test-Path $bootAnimPath) {
@@ -280,23 +294,8 @@ if (Test-Path $bootAnimPath) {
     Write-Host "  + BOOTANIM.NBA ($($bootAnimData.Length) bytes)" -ForegroundColor DarkGray
 }
 
-# DMCUB firmware blobs (AMD DCN). NexusOS uses these to bring up the
-# display microcontroller from a known-clean state instead of inheriting
-# whatever IPS state BIOS left. See assets/firmware/README.md.
-$REPO_ROOT = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-foreach ($fw in @(
-    @{ src = 'assets/firmware/DCN35DMC.BIN'; name = 'DCN35DMC'; ext = 'BIN' },
-    @{ src = 'assets/firmware/DCN314.BIN';   name = 'DCN314';   ext = 'BIN' }
-)) {
-    $fwPath = Join-Path $REPO_ROOT $fw.src
-    if (Test-Path $fwPath) {
-        $fwData = [System.IO.File]::ReadAllBytes($fwPath)
-        $fwCluster = Write-FileData $fwData
-        Write-DirEntry ($rootDirOff + $entryIdx * 32) $fw.name $fw.ext 0x20 $fwCluster $fwData.Length
-        $entryIdx++
-        Write-Host "  + $($fw.name).$($fw.ext) ($($fwData.Length) bytes)" -ForegroundColor DarkGray
-    }
-}
+# AMD DCN/Phoenix firmware blob copy retired 2026-05-26 along with the
+# 780M iGPU subsystem. Source preserved under deprecated/780M_IGPU/firmware/.
 
 # Copy FAT1 to FAT2
 [Array]::Copy($imgBytes, $fat1Off, $imgBytes, $fat2Off, $fatSizeSects * $bytesPerSect)
@@ -333,9 +332,9 @@ try {
     Write-Host "  WARN - ESP\DATA.IMG locked; keeping existing copy" -ForegroundColor Yellow
 }
 
-# Guard: if DATA.IMG exceeds the loader's DATA_IMG_MAX_SIZE (16 MiB today)
+# Guard: if DATA.IMG exceeds the loader's DATA_IMG_MAX_SIZE (32 MiB today)
 # the kernel will reject it at boot. Catch that at build time instead.
-$dataImgMax = 16 * 1024 * 1024
+$dataImgMax = 32 * 1024 * 1024
 if ($espDataImgBytes.Length -gt $dataImgMax) {
     Write-Host "  FAILED - DATA.IMG ($($espDataImgBytes.Length) bytes) exceeds DATA_IMG_MAX_SIZE ($dataImgMax). Bump src/include/boot_memory.inc." -ForegroundColor Red
     exit 1
@@ -351,3 +350,26 @@ Write-Host '    APPS.BIN     (NexusHL app blob)' -ForegroundColor Gray
 Write-Host '    DATA.IMG     (FAT16 ramdisk for real hardware)' -ForegroundColor Gray
 Write-Host "    $dataImgPath  (FAT16 data disk for QEMU IDE)" -ForegroundColor Gray
 Write-Host ''
+
+# ---------------------------------------------------------------------------
+# Copy built ESP tree to E:\ so the user can boot from removable media.
+# Runs by default; pass -CopyToE:$false to skip (e.g. when E: is unmounted).
+# ---------------------------------------------------------------------------
+if ($CopyToE -or -not $PSBoundParameters.ContainsKey('CopyToE')) {
+    if (Test-Path 'E:\') {
+        Write-Host '[copy] Mirroring ESP -> E:\EFI\BOOT\ ...' -ForegroundColor Yellow
+        try {
+            $eEfi = 'E:\EFI\BOOT'
+            New-Item -Path $eEfi -ItemType Directory -Force | Out-Null
+            Copy-Item "$ESP\BOOTX64.EFI" $eEfi -Force
+            Copy-Item "$ESP\KERNEL.BIN"  $eEfi -Force
+            Copy-Item "$ESP\APPS.BIN"    $eEfi -Force
+            Copy-Item "$ESP\DATA.IMG"    $eEfi -Force
+            Write-Host '  OK - E:\EFI\BOOT\ updated (boot-ready)' -ForegroundColor Green
+        } catch {
+            Write-Host "  WARN - copy to E:\ failed: $_" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host '  (skip E:\ copy — drive not mounted)' -ForegroundColor DarkGray
+    }
+}

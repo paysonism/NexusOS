@@ -77,7 +77,13 @@ ramdisk_init:
     jz .ri_done
 
     mov rdi, rax                ; base
-    mov esi, FAT16_PART_LBA     ; LBA base (matches fat16.asm partition origin)
+    ; The UEFI loader ships the *stripped* FAT16 partition to the ESP
+    ; (build_uefi.ps1 skips the (KERNEL_START_SECTOR + KERNEL_SECTORS)
+    ; zero header before WriteAllBytes), so byte 0 of the buffer is the BPB.
+    ; fat16.asm computes LBAs in whole-disk coordinates and so always offsets
+    ; by FAT16_PART_LBA; register the ramdisk at that LBA base so the BPB
+    ; request (LBA FAT16_PART_LBA) maps to byte 0 of the buffer.
+    mov esi, FAT16_PART_LBA
     call ramdisk_register
 
 .ri_done:
@@ -165,24 +171,30 @@ ramdisk_intercept_read:
     push rdx
     push r8
     push r9
-    push r10
+    push r11
 
-    mov r10, rsi                ; save dst
+    ; Save dst in r11 (NOT r10) — ramdisk_classify's header documents that
+    ; it clobbers r10 (uses it to hold lba_base). Pre-2026-05-26 this used
+    ; r10 and the dst pointer was silently overwritten with FAT16_PART_LBA,
+    ; making the memcpy write into low memory and leaving FAT16_SECTOR_BUF
+    ; untouched — the BPB read appeared to succeed but the buffer never
+    ; got the data, so fat16_init bailed at the signature check.
+    mov r11, rsi
     call ramdisk_classify
     cmp eax, 1
     jne .ir_done                ; outside (0) or partial overlap (-1)
 
-    ; memcpy(r10, ramdisk_base + r8, r9)
+    ; memcpy(r11, ramdisk_base + r8, r9)
     mov rsi, [ramdisk_base]
     add rsi, r8
-    mov rdi, r10
+    mov rdi, r11
     mov rcx, r9
     cld
     rep movsb
     mov eax, 1
 
 .ir_done:
-    pop r10
+    pop r11
     pop r9
     pop r8
     pop rdx
@@ -201,16 +213,17 @@ ramdisk_intercept_write:
     push rdx
     push r8
     push r9
-    push r10
+    push r11
 
-    mov r10, rsi                ; save src
+    ; Save src in r11 (not r10 — see intercept_read for the bug history).
+    mov r11, rsi
     call ramdisk_classify
     cmp eax, 1
     jne .iw_done
 
     mov rdi, [ramdisk_base]
     add rdi, r8
-    mov rsi, r10
+    mov rsi, r11
     mov rcx, r9
     cld
     rep movsb
@@ -224,7 +237,7 @@ ramdisk_intercept_write:
     mov eax, 1
 
 .iw_done:
-    pop r10
+    pop r11
     pop r9
     pop r8
     pop rdx

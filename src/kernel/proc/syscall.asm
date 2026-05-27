@@ -59,6 +59,13 @@ extern wm_close_window
 extern app_launch
 extern kernel_open_file_in_notepad
 extern kernel_open_file_in_media
+extern nx_media_blit_scaled
+
+; Bounds for the SYS_MEDIA_BLIT_SCALED syscall (sc_media_blit_scaled).
+; Documented at the syscall's call site; centralised here so a future
+; tuning pass (e.g. raising the limit for 8K still images) edits one place.
+MEDIA_MAX_DIM   equ 4096
+MEDIA_MAX_BYTES equ 64 * 1024 * 1024
 extern kernel_open_app_command
 extern display_set_mode
 extern cursor_init
@@ -273,7 +280,14 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     and rax, -16
     
     mov rsp, rax             ; Now on Kernel Syscall Stack
-    push r8                  ; Slot for validation and return.
+    ; Stack canary: push a 16-byte canary frame (canary + 8-byte alignment
+    ; pad) before the slot id so the slot stays at [rsp] for all existing
+    ; readers, while keeping PUSH_ALL's frame 16-byte aligned for callee ABI.
+    ; The canary is checked at every syscall exit path before SYSRET / app
+    ; return; a mismatch traps to kernel_panic_canary.
+    sub rsp, 8                                  ; alignment pad
+    push qword [rel kernel_canary]              ; canary at [rsp + 8] (after slot push)
+    push r8                                     ; Slot for validation and return.
     
     ; Push usermode context manually so PUSH_ALL has it
     push rbx
@@ -604,6 +618,15 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     ; ring-3 app from hijacking a stale slot.
     test qword [rax + WIN_OFF_FLAGS], WF_ACTIVE
     jz .sc_wm_handlers_reject
+    ; Ownership check: caller's slot must own the target window. Without
+    ; this, any app can install callbacks into any other app's window, which
+    ; — combined with l3_translate_target's blob-region remapping — turns
+    ; into cross-slot code execution at attacker-chosen offsets.
+    mov rcx, r15
+    imul rcx, APP_SLOT_SIZE
+    add rcx, [rel l3_app_arena_base_v]
+    cmp [rax + WIN_OFF_APPDATA], rcx
+    jne .sc_wm_handlers_reject
     mov [rax + WIN_OFF_CLICKFN], rsi
     mov [rax + WIN_OFF_KEYFN], rdx
     xor eax, eax
@@ -615,12 +638,11 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 
 .sc_wm_set_user_arg:
     ; rdi = win_id, rsi = 8-byte opaque value to stash at WIN_OFF_USER_ARG.
-    ; Bounds check win_id and require ACTIVE. Ownership is deliberately not
-    ; checked: the creator of a new window (different slot from the new
-    ; window's slot, since wm_create_window_ex allocates a fresh slot per
-    ; window) needs to be able to pass a small opaque arg into the new
-    ; window. The arg is just 8 bytes of scratch readable by the new
-    ; window's drawfn — no pointer authority is granted.
+    ; Bounds check win_id and require ACTIVE. Allowed iff:
+    ;   (a) caller's slot owns the target window (same-slot writer), OR
+    ;   (b) the field is still zero — first-write by the window's creator,
+    ;       which lives in a different slot than the freshly-allocated one.
+    ; Without (a)/(b) any app can clobber any active window's user_arg.
     cmp rdi, MAX_WINDOWS
     jae .sc_wm_set_user_arg_reject
     mov rax, rdi
@@ -628,6 +650,14 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     add rax, WINDOW_POOL_ADDR
     test qword [rax + WIN_OFF_FLAGS], WF_ACTIVE
     jz .sc_wm_set_user_arg_reject
+    mov rcx, r15
+    imul rcx, APP_SLOT_SIZE
+    add rcx, [rel l3_app_arena_base_v]
+    cmp [rax + WIN_OFF_APPDATA], rcx
+    je .sc_wm_set_user_arg_ok
+    cmp qword [rax + 160], 0          ; WIN_OFF_USER_ARG
+    jne .sc_wm_set_user_arg_reject
+.sc_wm_set_user_arg_ok:
     mov [rax + 160], rsi              ; WIN_OFF_USER_ARG
     xor eax, eax
     mov [rsp + ALL_RAX], rax
@@ -1090,7 +1120,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     je .sc_open_file_np_media
 .sc_open_file_np_not_bmp:
     cmp byte [rdi + 8], 'N'
-    jne .sc_open_file_np_text
+    jne .sc_open_file_np_check_svg
     cmp byte [rdi + 9], 'I'
     jne .sc_open_file_np_check_nba
     cmp byte [rdi + 10], 'C'
@@ -1100,6 +1130,22 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     cmp byte [rdi + 9], 'B'
     jne .sc_open_file_np_text
     cmp byte [rdi + 10], 'A'
+    je .sc_open_file_np_media
+    jmp .sc_open_file_np_text
+.sc_open_file_np_check_svg:
+    cmp byte [rdi + 8], 'S'
+    jne .sc_open_file_np_check_xml
+    cmp byte [rdi + 9], 'V'
+    jne .sc_open_file_np_text
+    cmp byte [rdi + 10], 'G'
+    je .sc_open_file_np_media
+    jmp .sc_open_file_np_text
+.sc_open_file_np_check_xml:
+    cmp byte [rdi + 8], 'X'
+    jne .sc_open_file_np_text
+    cmp byte [rdi + 9], 'M'
+    jne .sc_open_file_np_text
+    cmp byte [rdi + 10], 'L'
     je .sc_open_file_np_media
 .sc_open_file_np_text:
     call kernel_open_file_in_notepad
@@ -1410,12 +1456,16 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 .sc_blend_span_argb:
     ; rdi = x, rsi = y, rdx = len (pixels), r10 = ARGB src buffer.
     ; Batches one scanline run: replaces `len` per-pixel blend syscalls.
-    mov edx, [rsp + ALL_RDX]
-    test edx, edx
-    jle .sc_blend_span_argb_done
+    ; 64-bit + unsigned length math so len*4 cannot wrap a 32-bit register
+    ; and slip a huge range through with byte-len=0.
+    mov edx, [rsp + ALL_RDX]          ; zero-extends into rdx
+    test rdx, rdx
+    jz .sc_blend_span_argb_done
+    cmp rdx, 0x100000                 ; cap at 1M pixels — far above any real scanline
+    ja .sc_blend_span_argb_done
     mov rdi, [rsp + ALL_R10]          ; src buffer ptr
-    mov esi, edx
-    shl esi, 2                        ; byte length = len * 4
+    mov rsi, rdx
+    shl rsi, 2                        ; byte length = len * 4 (64-bit, safe)
     call sc_validate_user_range
     test eax, eax
     jz .sc_blend_span_argb_done
@@ -1433,13 +1483,16 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 
 .sc_blend_span_argb_screen:
     ; rdi = x, rsi = y, rdx = len (pixels), r10 = ARGB src buffer.
-    ; mix-blend-mode: screen variant of sc_blend_span_argb.
+    ; mix-blend-mode: screen variant of sc_blend_span_argb. See _argb above
+    ; for why the length math is 64-bit unsigned with an explicit cap.
     mov edx, [rsp + ALL_RDX]
-    test edx, edx
-    jle .sc_blend_span_argb_screen_done
+    test rdx, rdx
+    jz .sc_blend_span_argb_screen_done
+    cmp rdx, 0x100000
+    ja .sc_blend_span_argb_screen_done
     mov rdi, [rsp + ALL_R10]
-    mov esi, edx
-    shl esi, 2
+    mov rsi, rdx
+    shl rsi, 2
     call sc_validate_user_range
     test eax, eax
     jz .sc_blend_span_argb_screen_done
@@ -1457,13 +1510,16 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 
 .sc_blend_span_argb_multiply:
     ; rdi = x, rsi = y, rdx = len (pixels), r10 = ARGB src buffer.
-    ; mix-blend-mode: multiply variant of sc_blend_span_argb.
+    ; mix-blend-mode: multiply variant of sc_blend_span_argb. See _argb above
+    ; for why the length math is 64-bit unsigned with an explicit cap.
     mov edx, [rsp + ALL_RDX]
-    test edx, edx
-    jle .sc_blend_span_argb_multiply_done
+    test rdx, rdx
+    jz .sc_blend_span_argb_multiply_done
+    cmp rdx, 0x100000
+    ja .sc_blend_span_argb_multiply_done
     mov rdi, [rsp + ALL_R10]
-    mov esi, edx
-    shl esi, 2
+    mov rsi, rdx
+    shl rsi, 2
     call sc_validate_user_range
     test eax, eax
     jz .sc_blend_span_argb_multiply_done
@@ -1477,6 +1533,123 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     call raster_sc_release_target
 .sc_blend_span_argb_multiply_done:
     mov qword [rsp + ALL_RAX], 0
+    jmp .done
+
+; ---------------------------------------------------------------------------
+; sc_media_blit_scaled — aspect-preserving BGRA blit into a window's client
+; area. Used by the Media Player (and any future timeline-bearing app) so
+; the codec dispatch and control-bar drawing can live in user-mode NexusHL
+; instead of being trapped in kernel asm.
+;
+; Args (already loaded from caller registers):
+;   rdi = window_id (low 32 bits)
+;   rsi = src_ptr (BGRA buffer in caller's slot)
+;   rdx = packed dims: (src_w << 16) | src_h, each in [1, 4096]
+;   r10 = reserve_bottom_px (0..scr_height, clamped)
+;   r8  = alpha_key (any nonzero treated as 1)
+; Returns: 0 on success, -1 if any input is rejected.
+;
+; Dims are packed so the syscall fits in NexusHL's 6-argument syscall()
+; arity. Both halves are validated as if they had been separate args —
+; bounding happens before any arithmetic on them.
+;
+; Security invariants
+; -------------------
+;  * src_w / src_h bounded to [1, MEDIA_MAX_DIM] (4096). Caps the divide
+;    inputs in nx_media_blit_scaled and the byte-range computed below.
+;  * src_w * src_h * 4 computed in 64-bit and bounded to MEDIA_MAX_BYTES
+;    (64 MB) before being handed to sc_validate_user_range, so a hostile
+;    caller cannot induce arithmetic overflow that would wrap the range
+;    check.
+;  * src_ptr range must lie entirely within the caller's app slot or the
+;    built-in user blob (sc_validate_user_range — same predicate used by
+;    sc_blend_span_argb).
+;  * window_id < MAX_WINDOWS. The window struct address is computed from
+;    a bounded index so a forged id cannot redirect the scaler's writes
+;    elsewhere.
+;  * reserve_bottom_px is clamped to scr_height, so an absurd value
+;    cannot make the scaler's internal client_h go negative and walk
+;    backwards through memory.
+;  * alpha_key is reduced to {0,1} by `cmp/setnz` — any caller-supplied
+;    bit pattern lands on one of the two intended paths.
+; ---------------------------------------------------------------------------
+.sc_media_blit_scaled:
+    ; Unpack dims: rdx = (src_w << 16) | src_h.
+    mov eax, edx
+    shr eax, 16                              ; src_w
+    mov ecx, edx
+    and ecx, 0xFFFF                          ; src_h
+
+    ; Bound each half.
+    test eax, eax
+    jz .sc_media_blit_reject
+    cmp eax, MEDIA_MAX_DIM
+    ja .sc_media_blit_reject
+    test ecx, ecx
+    jz .sc_media_blit_reject
+    cmp ecx, MEDIA_MAX_DIM
+    ja .sc_media_blit_reject
+
+    ; byte_len = src_w * src_h * 4 in 64-bit; reject overflow or > cap.
+    mov ebx, eax                             ; stash src_w
+    mov r11d, ecx                            ; stash src_h
+    imul rax, rcx                            ; rax = w*h (fits in 64 bits)
+    shl rax, 2                               ; * 4 bpp
+    cmp rax, MEDIA_MAX_BYTES
+    ja .sc_media_blit_reject
+    mov r14, rax                             ; stash byte_len
+
+    ; Validate src range — sc_validate_user_range takes (rdi=ptr, rsi=len).
+    mov rdi, rsi
+    mov rsi, r14
+    call sc_validate_user_range
+    test eax, eax
+    jz .sc_media_blit_reject
+
+    ; Validate window id (rdi at entry, reloaded fresh).
+    mov rdi, [rsp + ALL_RDI]
+    mov rax, rdi
+    shr rax, 32
+    test rax, rax
+    jnz .sc_media_blit_reject                ; high half must be zero
+    mov eax, edi
+    cmp eax, MAX_WINDOWS
+    jae .sc_media_blit_reject
+
+    ; Resolve window struct address.
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    mov r13, rax
+
+    ; Clamp reserve_bottom to scr_height.
+    mov r8, [rsp + ALL_R10]                  ; reserve_bottom_px
+    mov ecx, [scr_height]
+    cmp r8d, ecx
+    jbe .sc_media_blit_reserve_ok
+    mov r8d, ecx
+.sc_media_blit_reserve_ok:
+
+    ; Reduce alpha_key to {0,1}.
+    mov r9, [rsp + ALL_R8]                   ; alpha_key
+    xor eax, eax
+    test r9, r9
+    setnz al
+
+    ; Load scaler register contract:
+    ;   r12 = src, r13 = window, r14d = src_w, r15d = src_h,
+    ;   dl = alpha_key, r9d = reserve_bottom
+    mov r12, [rsp + ALL_RSI]
+    mov r14d, ebx
+    mov r15d, r11d
+    mov edx, eax                             ; alpha_key in dl
+    mov r9d, r8d                             ; reserve_bottom
+    call nx_media_blit_scaled
+
+    xor eax, eax
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_media_blit_reject:
+    mov qword [rsp + ALL_RAX], -1
     jmp .done
 
 .sc_net_ping4:
@@ -1744,7 +1917,17 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     call trace_syscall
 %endif
     POP_ALL
+    ; Canary check before handing back to the L3 return path. Layout
+    ; after POP_ALL: [rsp]=slot, [rsp+8]=canary. call_app_l3_return
+    ; reads slot from [rsp].
+    mov rax, [rsp + 8]
+    cmp rax, [rel kernel_canary]
+    jne .app_done_canary_bad
     jmp call_app_l3_return
+.app_done_canary_bad:
+    mov rdi, rax
+    lea rsi, [rel .app_done_canary_bad]
+    jmp kernel_panic_canary
 
 .done:
 %ifdef ENABLE_TRACE
@@ -1763,10 +1946,20 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     call trace_syscall
 %endif
     POP_ALL
+    ; Stack canary check before SYSRET. Layout after POP_ALL:
+    ;   [rsp+0]  = slot id, [rsp+8] = canary, [rsp+16] = alignment pad.
+    mov rax, [rsp + 8]
+    cmp rax, [rel kernel_canary]
+    jne .done_canary_bad
     mov edx, [rsp]
     cmp edx, MAX_WINDOWS
     jb .slot_ok_return
     xor edx, edx
+    jmp .slot_ok_return
+.done_canary_bad:
+    mov rdi, rax
+    lea rsi, [rel .done_canary_bad]
+    jmp kernel_panic_canary
 .slot_ok_return:
     imul rdx, L3_RT_SIZE
     lea rcx, [rel l3_runtime]
@@ -1981,6 +2174,9 @@ syscall_table:
     SYSCALL_ENTRY syscall_entry.sc_desktop_bg_busy,   0, 0
     SYSCALL_ENTRY syscall_entry.sc_open_file_media,   1, SC_KIND1(FN_KIND_HANDLE)
     SYSCALL_ENTRY syscall_entry.sc_wm_set_user_arg,   2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR)
+    ; sc_media_blit_scaled — secure aspect-preserving BGRA blit; src is
+    ; PTR-validated to live inside the calling slot before the scaler runs.
+    SYSCALL_ENTRY syscall_entry.sc_media_blit_scaled, 5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR)
 syscall_table_end:
 syscall_table_count equ (syscall_table_end - syscall_table) / SYSCALL_ENTRY_SIZE
 
@@ -1989,10 +2185,82 @@ FN_BEGIN test_syscall_proc, 0, 0, FN_RET_VOID
     hlt
     jmp .loop
 
+; ----------------------------------------------------------------------------
+; kernel_canary_init - seed the global stack canary from RDTSC ^ RDRAND (when
+; available). Called once from kernel_main before syscall_init so every
+; SYSCALL pushes a unique value. RDRAND failure (older CPUs, QEMU TCG) falls
+; back to RDTSC alone; a final non-zero guard prevents an all-zero canary.
+; ----------------------------------------------------------------------------
+FN_BEGIN kernel_canary_init, 0, 0, FN_RET_VOID
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    mov eax, 1
+    cpuid
+    test ecx, 1 << 30                 ; CPUID.01H:ECX.RDRAND[bit 30]
+    jz .kc_no_rdrand
+    mov ecx, 8
+.kc_try_rdrand:
+    rdrand rax
+    jc .kc_have_rdrand
+    dec ecx
+    jnz .kc_try_rdrand
+    jmp .kc_no_rdrand
+.kc_have_rdrand:
+    xor rbx, rax
+.kc_no_rdrand:
+    test rbx, rbx
+    jnz .kc_store
+    mov rbx, 0xDEADC0DEDEADC0DE
+.kc_store:
+    mov [rel kernel_canary], rbx
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    FN_END kernel_canary_init
+    ret
+
+; ----------------------------------------------------------------------------
+; kernel_panic_canary - reached only from the syscall exit paths when the
+; saved canary slot does not match kernel_canary. rdi = observed bad value,
+; rsi = approximate kernel RIP at detection. Serial-logs and halts; never
+; returns.
+; ----------------------------------------------------------------------------
+global kernel_panic_canary
+kernel_panic_canary:
+    cli
+    SER 'C'
+    SER 'A'
+    SER 'N'
+    SER 'A'
+    SER 'R'
+    SER 'Y'
+    SER ' '
+    call ser_print_hex64                ; rdi = bad canary
+    SER ' '
+    SER '@'
+    mov rdi, rsi
+    call ser_print_hex64                ; rsi = detection RIP
+    SER 13
+    SER 10
+.kpc_halt:
+    cli
+    hlt
+    jmp .kpc_halt
+
 ; --- Data/BSS Sections moved here ---
 section .data
 global syscall_count
 syscall_count: dq 0
+align 8
+global kernel_canary
+kernel_canary: dq 0
 sc_net_ping_busy: db 0
 sc_net_tcp_busy: db 0
 sc_net_dns_busy: db 0

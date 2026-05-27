@@ -111,7 +111,7 @@ Assert-Match $windowPath 'cmp rax, app_media_draw[\s\S]*call app_media_draw' 'Me
 Assert-Match $launchPath 'kernel_open_file_in_notepad:[\s\S]*WIN_OFF_X\], 560[\s\S]*WIN_OFF_Y' 'Notepad windows opened from Explorer must leave the Explorer list visible for more file opens.'
 Assert-Match $launchPath 'kernel_open_file_in_media:[\s\S]*APP_SLOT_BMP_FILE_SZ[\s\S]*0x3141424E[\s\S]*APP_SLOT_BMP_FILE_OFF \+ 12' 'Media opener must clamp NBA frame_count to the bytes loaded into the slot buffer.'
 Assert-Match $mediaViewerPath 'app_hl_media_mp_frame - app_blob_start[\s\S]*nx_media_draw_nba_controls' 'Media Player NBA renderer must use per-window frame state and draw controls.'
-Assert-Match $nxhMediaPath 'fn click\(win, cx, cy\)[\s\S]*APP_SLOT_BMP_FILE_OFF[\s\S]*sw\(&mp_frame' 'Media Player click handler must support timeline seeking.'
+Assert-Match $nxhMediaPath 'fn click\(win, cx, cy\)[\s\S]*APP_SLOT_BMP_FILE_OFF[\s\S]*mp_handle_click' 'Media Player click handler must delegate to media_player lib (mp_handle_click) so the timeline widget stays reusable across apps.'
 Assert-Match $bootAnimGenPath 'poster if i == 0 else render_frame' 'BOOTANIM.NBA frame 0 must be a non-black poster for Media Player preview.'
 Assert-Match $corePath 'FN_BEGIN process_mouse[\s\S]*call mouse_check_moved[\s\S]*cmp al, \[process_mouse_last_buttons\][\s\S]*mov \[process_mouse_last_buttons\], dl' 'Mouse processing must notice button-only changes so release events clear held-click state.'
 Assert-Match $corePath '\.pk_key_lclick:[\s\S]*call wm_handle_mouse_event[\s\S]*\.pk_kc_handled:[\s\S]*mov byte \[mouse_buttons\], 0[\s\S]*xor edx, edx[\s\S]*call wm_handle_mouse_event' 'Keyboard/serial left-click must send both mouse down and mouse up so later Explorer clicks are not treated as a held button.'
@@ -137,5 +137,50 @@ Assert-Match $launchPath 'app_hl_explorer_key' 'Explorer launch must install the
 Assert-Match $nxhNotepadPath 'WM passes coordinates relative to the client area' 'NexusHL Notepad must document the WM client-coordinate ABI.'
 Assert-Match $nxhExplorerPath 'szOpenerMedia[\s\S]*SYS_OPEN_FILE_MEDIA' 'Explorer Properties must expose Media Player for native media files.'
 Assert-Match $launchPath 'kernel_open_file_in_notepad:[\s\S]*Notepad is a text editor[\s\S]*\.kop_check_nba[\s\S]*je \.kop_fail' 'Kernel Notepad opener must reject known binary media formats.'
+
+Write-Host '[guards] Checking theme pack vs runtime palette sync...' -ForegroundColor Yellow
+$themeLibPath  = Join-Path $Root 'src\user\nexushl\lib\theme.nxh'
+$themeGuiPath  = Join-Path $Root 'src\user\nexushl\lib\gui.nxh'
+$themeLightXml = Join-Path $Root 'assets\themes\light\theme.xml'
+$themeDarkXml  = Join-Path $Root 'assets\themes\dark\theme.xml'
+
+# Cross-check distinctive palette values across the three places they live:
+# (1) assets/themes/<id>/theme.xml -- the on-disk pack (source of truth once
+#     the disk loader lands), (2) theme.nxh seed_* functions -- the runtime
+#     palette today, (3) gui.nxh UI_COL_* -- the light-mode reference
+#     constants. Drift between any two silently re-skins half the OS.
+$lightAnchors = @(
+    @{ Name = 'bg_base';     Hex24 = 'F5F6FA' },
+    @{ Name = 'accent';      Hex24 = '2A6FFF' },
+    @{ Name = 'text';        Hex24 = '0F141E' },
+    @{ Name = 'error';       Hex24 = 'E5474D' }
+)
+foreach ($a in $lightAnchors) {
+    Assert-Match $themeLightXml "0x$($a.Hex24)" "light/theme.xml is missing the $($a.Name) anchor (0x$($a.Hex24)) -- palette has drifted out of sync with theme.nxh."
+    Assert-Match $themeLibPath  "0x00$($a.Hex24)" "theme.nxh::theme_seed_light() is missing 0x00$($a.Hex24) for $($a.Name) -- drift vs light/theme.xml."
+    Assert-Match $themeGuiPath  "0x00$($a.Hex24)" "gui.nxh UI_COL_* is missing 0x00$($a.Hex24) for $($a.Name) -- drift vs theme.nxh."
+}
+
+$darkAnchors = @(
+    @{ Name = 'bg_base'; Hex24 = '121419' },
+    @{ Name = 'accent';  Hex24 = '4FACFE' },
+    @{ Name = 'text';    Hex24 = 'E6E9EF' }
+)
+foreach ($a in $darkAnchors) {
+    Assert-Match $themeDarkXml "0x$($a.Hex24)" "dark/theme.xml is missing the $($a.Name) anchor (0x$($a.Hex24)) -- drift vs theme.nxh."
+    Assert-Match $themeLibPath "0x00$($a.Hex24)" "theme.nxh::theme_seed_dark() is missing 0x00$($a.Hex24) for $($a.Name) -- drift vs dark/theme.xml."
+}
+
+# The theme_palette backing buffer must stay sized at PALETTE_BYTES (128).
+# A reformat that changes the literal length silently corrupts color
+# lookups for high indices, so we check the exact width here.
+$themeLibContent = Get-Content -Path $themeLibPath -Raw
+if ($themeLibContent -notmatch '(?m)^str theme_palette = "(?<lit>[^"]*)";') {
+    throw 'theme.nxh must declare a single-line `str theme_palette = "..."` buffer.'
+}
+$litLen = $Matches['lit'].Length
+if ($litLen -ne 128) {
+    throw "theme.nxh theme_palette literal must be exactly 128 bytes (PALETTE_BYTES); found $litLen."
+}
 
 Write-Host '[guards] PASS' -ForegroundColor Green
