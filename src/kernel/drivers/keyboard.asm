@@ -119,6 +119,13 @@ keyboard_handler:
     ; release in the normal flow and would otherwise fire forever.
     test dl, dl
     jz .skip_repeat_arm
+    ; Also skip arming on USB-HID-active systems: BIOS legacy USB->PS/2 SMM
+    ; emulation injects presses without matching releases, so arming repeat
+    ; from this path leaves a key (commonly '7') stuck spamming forever.
+    cmp byte [usb_hid_protocol], 0
+    jne .skip_repeat_arm
+    cmp byte [usb_hid_protocol2], 0
+    jne .skip_repeat_arm
     mov [kb_repeat_scancode], al
     mov [kb_repeat_ascii], dl
     mov r8d, [tick_count]
@@ -254,9 +261,28 @@ keyboard_repeat_tick:
     push rdx
     push r8
 
+    ; Software autorepeat is a PS/2-only model. On USB-HID-active boxes the
+    ; BIOS legacy USB->PS/2 SMM emulation can inject stray scancodes (with no
+    ; matching release) that arm kb_repeat_* and then spam the buffer
+    ; forever — surfaces as e.g. a stuck '7' once a text-input UI gets focus.
+    ; If HID is driving the keyboard, ignore any stale repeat arm and clear it.
+    cmp byte [usb_hid_protocol], 0
+    jne .rep_disable
+    cmp byte [usb_hid_protocol2], 0
+    jne .rep_disable
+
     movzx eax, byte [kb_repeat_scancode]
     test eax, eax
     jz .rep_done
+    jmp .rep_have_key
+
+.rep_disable:
+    mov byte [kb_repeat_scancode], 0
+    mov byte [kb_repeat_ascii], 0
+    mov dword [kb_repeat_next_tick], 0
+    jmp .rep_done
+
+.rep_have_key:
 
     mov ecx, [tick_count]
     mov ebx, [kb_repeat_next_tick]

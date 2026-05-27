@@ -11,7 +11,15 @@ VBE_INFO_ADDR       equ 0x9000
 BOOT_DRIVE_ADDR     equ 0x9100
 PAGE_TABLE_ADDR     equ 0x70000
 SMP_TRAMPOLINE_ADDR equ 0x8000
+; KASLR: build_uefi.ps1 -Kaslr re-assembles the kernel at a second base by
+; passing -dKERNEL_BASE_OVERRIDE=<addr>; the override exists only so the build
+; can diff two ORGs to derive a fixup table. The runtime base is picked by the
+; loader at boot. See tools/build/extract_kaslr_fixups.py.
+%ifdef KERNEL_BASE_OVERRIDE
+KERNEL_LOAD_ADDR    equ KERNEL_BASE_OVERRIDE
+%else
 KERNEL_LOAD_ADDR    equ 0x100000
+%endif
 KERNEL_STACK_TOP    equ 0xC00000
 IDT_ADDR            equ 0xC10000
 KERNEL_DATA_ADDR    equ 0xC20000
@@ -55,10 +63,16 @@ WALLPAPER_CACHE1_ADDR equ (WALLPAPER_CACHE0_ADDR + WALLPAPER_CACHE_BYTES)
 WALLPAPER_CACHE2_ADDR equ (WALLPAPER_CACHE1_ADDR + WALLPAPER_CACHE_BYTES)
 WALLPAPER_CACHE_ADDR  equ WALLPAPER_CACHE0_ADDR  ; legacy alias for cache users
 BACK_BUFFER_SAVE_ADDR equ (WALLPAPER_CACHE2_ADDR + WALLPAPER_CACHE_BYTES + 0x100000)
+BOOT_ANIM_BUF_ADDR    equ (BACK_BUFFER_SAVE_ADDR + BOOT_BACK_BUFFER_SIZE + 0x100000)
+BOOT_ANIM_BUF_SIZE    equ 0x1000000
 
 ; App arena 4KB page tables. The arena is split into 4KB pages (one PT per
 ; covered PDE) so the kernel can mark only the running slot's pages USER and
-; enforce W^X per page. 8 PTs cover the 16 MiB arena (0x75000..0x7CFFF).
+; enforce W^X per page. APP_SLOT_COUNT PTs cover the full arena
+; (APP_SLOT_COUNT * APP_SLOT_SIZE bytes); today that's 12 PTs spanning
+; 0x75000..0x80FFF for the 24 MiB arena. The UEFI loader claims PT_BASE..+17
+; pages (PML4 + 2*PDPT + PD0 + PT0 + 12 app PTs); the BIOS loader relocates
+; PD3 to 0x81000 to keep this region contiguous.
 APP_ARENA_PT_BASE     equ 0x75000
 ARENA_SLOT_PAGES      equ (APP_SLOT_SIZE / 0x1000) ; 512 4KB pages per slot
 
@@ -93,7 +107,7 @@ VBE_APP_ARENA_SIZE_OFF equ 0x48
 ; reads up to the registered size (so a smaller actual file is fine).
 VBE_RAMDISK_BASE_OFF   equ 0x50
 VBE_RAMDISK_SIZE_OFF   equ 0x58
-DATA_IMG_MAX_SIZE      equ 0x1000000   ; 16 MiB cap
+DATA_IMG_MAX_SIZE      equ 0x2000000   ; 32 MiB cap — bumped 2026-05-26 to fit Phoenix GFX FW set
 
 ; --- Persistent storage backing (Phase 1 contract) ------------------------
 ; The UEFI loader, while firmware services are still available, resolves

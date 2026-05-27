@@ -571,9 +571,11 @@ app_open_file:
     ;   "BMP" → legacy BMP viewer (kept for back-compat)
     ;   "NIC" → Media Player (native still image)
     ;   "NBA" → Media Player (native animation)
+    ;   "SVG" → Media Player (subset rasteriser; see media_viewer.inc §6)
+    ;   "XML" → Media Player (renders as plain text view)
     ;
     ; Adding a new media format = one new compare block here that jumps to
-    ; app_open_file_in_media, plus a codec row in media_viewer.asm.
+    ; app_open_file_in_media, plus a codec row in media_viewer.inc §2.
     cmp byte [rdi + 8], 'B'
     jne .not_bmp
     cmp byte [rdi + 9], 'M'
@@ -583,7 +585,7 @@ app_open_file:
     jmp app_open_file_in_bmpview
 .not_bmp:
     cmp byte [rdi + 8], 'N'
-    jne .not_native_media
+    jne .check_svg
     cmp byte [rdi + 9], 'I'
     jne .check_nba
     cmp byte [rdi + 10], 'C'
@@ -593,6 +595,22 @@ app_open_file:
     cmp byte [rdi + 9], 'B'
     jne .not_native_media
     cmp byte [rdi + 10], 'A'
+    jne .not_native_media
+    jmp app_open_file_in_media
+.check_svg:
+    cmp byte [rdi + 8], 'S'
+    jne .check_xml
+    cmp byte [rdi + 9], 'V'
+    jne .not_native_media
+    cmp byte [rdi + 10], 'G'
+    jne .not_native_media
+    jmp app_open_file_in_media
+.check_xml:
+    cmp byte [rdi + 8], 'X'
+    jne .not_native_media
+    cmp byte [rdi + 9], 'M'
+    jne .not_native_media
+    cmp byte [rdi + 10], 'L'
     jne .not_native_media
     jmp app_open_file_in_media
 .not_native_media:
@@ -1357,11 +1375,15 @@ kernel_open_file_in_notepad:
 ; Returns RAX = window id, or -1 on launch failure / read failure.
 ; ============================================================================
 global kernel_open_file_in_media
+extern media_nba_full_window_id
+MEDIA_NBA_FULL_BUF    equ BOOT_ANIM_BUF_ADDR
+MEDIA_NBA_FULL_BUF_SZ equ 0x1000000
 kernel_open_file_in_media:
     push rbx
     push r12
     push r13
     push r14
+    push r15
 
     mov r12, rdi                      ; dir entry ptr
 
@@ -1405,14 +1427,46 @@ kernel_open_file_in_media:
     cmp eax, -1
     je .kom_fail
     mov ebx, eax
+    mov r15d, ebx
 
-    ; APP_SLOT_BMP_FILE_SZ intentionally caps the synchronous load so opening
-    ; a large NBA file does not stall the desktop. Clamp the in-slot header's
-    ; frame_count to the complete frames actually loaded; BOOTANIM.NBA then
-    ; shows a stable first-frame preview instead of the renderer walking past
-    ; the slot buffer and painting white/garbage.
+    ; APP_SLOT_BMP_FILE_SZ intentionally caps the generic synchronous load.
+    ; NBA files can be much larger than a slot-local media buffer, so load the
+    ; full clip into the boot-animation scratch buffer and leave the real NBA
+    ; header in the slot for controls/hit-testing. The renderer switches to
+    ; MEDIA_NBA_FULL_BUF only for this window id.
     cmp dword [r14 + APP_SLOT_BMP_FILE_OFF], 0x3141424E ; 'NBA1'
     jne .kom_loaded
+    mov qword [media_nba_full_window_id], -1
+    mov rdi, r12
+    mov rsi, MEDIA_NBA_FULL_BUF
+    mov edx, MEDIA_NBA_FULL_BUF_SZ
+    call fat16_read_file
+    cmp eax, 20
+    jbe .kom_nba_clamp_slot
+    mov r11, MEDIA_NBA_FULL_BUF
+    cmp dword [r11], 0x3141424E
+    jne .kom_nba_clamp_slot
+    mov ebx, eax
+    ; Refresh the slot header from the full buffer in case the short initial
+    ; read was ever changed to header-only.
+    mov eax, [r11 + 0]
+    mov [r14 + APP_SLOT_BMP_FILE_OFF + 0], eax
+    mov eax, [r11 + 4]
+    mov [r14 + APP_SLOT_BMP_FILE_OFF + 4], eax
+    mov eax, [r11 + 8]
+    mov [r14 + APP_SLOT_BMP_FILE_OFF + 8], eax
+    mov eax, [r11 + 12]
+    mov [r14 + APP_SLOT_BMP_FILE_OFF + 12], eax
+    mov eax, [r11 + 16]
+    mov [r14 + APP_SLOT_BMP_FILE_OFF + 16], eax
+    mov [media_nba_full_window_id], r13
+    jmp .kom_nba_validate_loaded
+
+.kom_nba_clamp_slot:
+    ; Full-buffer load failed. Fall back to the slot-local bytes and clamp
+    ; frame_count so the renderer never walks past the 256 KiB slot buffer.
+    mov ebx, r15d
+.kom_nba_validate_loaded:
     cmp ebx, 20
     jbe .kom_nba_no_frames
     mov eax, [r14 + APP_SLOT_BMP_FILE_OFF + 4]
@@ -1441,6 +1495,7 @@ kernel_open_file_in_media:
 .kom_loaded:
 
     mov rax, r13
+    pop r15
     pop r14
     pop r13
     pop r12
@@ -1449,6 +1504,7 @@ kernel_open_file_in_media:
 
 .kom_fail:
     mov rax, -1
+    pop r15
     pop r14
     pop r13
     pop r12

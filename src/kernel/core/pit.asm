@@ -22,6 +22,145 @@ pit_init:
     mov dword [time_seconds], 0
     mov dword [time_minutes], 0
     mov dword [time_hours], 12
+
+    call cmos_read_time
+    ret
+
+; ----------------------------------------------------------------------------
+; cmos_read_time
+; Seeds time_seconds/minutes/hours from the CMOS RTC. Handles BCD vs binary
+; and 12-hour mode (PM bit 0x80 on hour register). Reads twice and retries
+; until two consecutive reads agree, to avoid tearing across an RTC update.
+; Clobbers rax, rbx, rcx, rdx, r8.
+; ----------------------------------------------------------------------------
+cmos_read_time:
+    ; Wait until Update-In-Progress clears.
+.wait_uip:
+    mov al, 0x0A
+    out 0x70, al
+    in  al, 0x71
+    test al, 0x80
+    jnz .wait_uip
+
+    ; First read: sec/min/hour into bl/bh/cl
+    mov al, 0x00
+    out 0x70, al
+    in  al, 0x71
+    mov bl, al
+    mov al, 0x02
+    out 0x70, al
+    in  al, 0x71
+    mov bh, al
+    mov al, 0x04
+    out 0x70, al
+    in  al, 0x71
+    mov cl, al
+
+    ; Second read; loop until it matches.
+.reread:
+    mov al, 0x0A
+    out 0x70, al
+    in  al, 0x71
+    test al, 0x80
+    jnz .reread
+
+    mov al, 0x00
+    out 0x70, al
+    in  al, 0x71
+    mov dl, al
+    cmp dl, bl
+    jne .copy_and_retry
+
+    mov al, 0x02
+    out 0x70, al
+    in  al, 0x71
+    mov dh, al
+    cmp dh, bh
+    jne .copy_and_retry2
+
+    mov al, 0x04
+    out 0x70, al
+    in  al, 0x71
+    cmp al, cl
+    je  .stable
+
+    mov cl, al
+    jmp .reread
+
+.copy_and_retry2:
+    mov bh, dh
+    jmp .reread
+.copy_and_retry:
+    mov bl, dl
+    jmp .reread
+
+.stable:
+    ; Read Status Register B to learn format.
+    mov al, 0x0B
+    out 0x70, al
+    in  al, 0x71
+    mov r8b, al              ; r8b = status B
+
+    ; Strip PM flag from hour now, remember it.
+    xor ch, ch               ; ch = pm_flag (0 or 1)
+    test r8b, 0x02           ; bit 1 set => 24-hour
+    jnz .h24
+    test cl, 0x80
+    jz  .no_pm
+    and cl, 0x7F
+    mov ch, 1
+.no_pm:
+.h24:
+    ; If BCD (bit 2 == 0), convert.
+    test r8b, 0x04
+    jnz .binary
+
+    ; sec
+    mov al, bl
+    call bcd_to_bin
+    mov bl, al
+    ; min
+    mov al, bh
+    call bcd_to_bin
+    mov bh, al
+    ; hour
+    mov al, cl
+    call bcd_to_bin
+    mov cl, al
+
+.binary:
+    ; Apply PM if 12-hour: hour 12 PM stays 12; 1-11 PM => +12; 12 AM => 0.
+    test r8b, 0x02
+    jnz .store               ; 24-hour, nothing to do
+    cmp cl, 12
+    jne .not12
+    test ch, ch
+    jnz .store               ; 12 PM -> 12
+    xor cl, cl               ; 12 AM -> 0
+    jmp .store
+.not12:
+    test ch, ch
+    jz .store
+    add cl, 12
+
+.store:
+    movzx eax, bl
+    mov [time_seconds], eax
+    movzx eax, bh
+    mov [time_minutes], eax
+    movzx eax, cl
+    mov [time_hours], eax
+    ret
+
+; al = BCD byte -> al = binary
+bcd_to_bin:
+    mov dl, al
+    and dl, 0x0F
+    shr al, 4
+    and al, 0x0F
+    mov dh, 10
+    mul dh                   ; ax = al * 10
+    add al, dl
     ret
 
 global pit_handler

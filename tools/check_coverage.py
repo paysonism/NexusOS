@@ -23,12 +23,16 @@ DATA_GLOBAL_ALLOW = {
     "wm_drag_preview_w",
     "wm_drag_preview_h",
     "syscall_count",
+    "kernel_canary",
 }
 
 CONTROL_ALLOW = {
     # The raw SYSCALL landing path must not call helpers until it has switched
     # to the per-slot kernel stack. It emits syscall trace records after PUSH_ALL.
     "syscall_entry",
+    # Panic landing pad: reached only on canary mismatch, halts the CPU. Cannot
+    # safely run FN_BEGIN trace push/call sequence on a corrupted stack frame.
+    "kernel_panic_canary",
 }
 
 

@@ -138,6 +138,9 @@ extern render_text
 extern smp_core_states
 extern cpu_tsc_per_tick
 extern app_hl_taskmgr_draw
+extern app_media_draw
+extern app_hl_media_mp_paused
+extern app_blob_start
 
 ; GUI
 extern wm_init
@@ -168,6 +171,7 @@ extern render_save_backbuffer
 extern display_flip_rect
 extern call_app_l3
 extern dispatch_app_callback           ; Stage 2d cross-core chokepoint
+extern l3_slot_base
 extern bb_addr
 extern fb_addr
 extern scr_pitch
@@ -220,6 +224,9 @@ WIN_OFF_KEYFN   equ 120
 WIN_OFF_CLICKFN equ 128
 WIN_OFF_APPDATA equ 136
 WIN_OFF_DRAGFN  equ 144         ; optional fn(win, client_x, client_y) fired while left button held
+
+APP_SLOT_BMP_FILE_OFF equ 0x17D000
+NBA1_MAGIC            equ 0x3141424E
 
 ; FPS overlay region
 FPS_REGION_X    equ 8
@@ -1238,8 +1245,10 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     extern gdt64_init
     extern tss_init
     extern syscall_init
+    extern kernel_canary_init
     call gdt64_init
     call tss_init
+    call kernel_canary_init
     call syscall_init
 
     extern scheduler_init
@@ -1990,6 +1999,10 @@ real_boot_diag_dump:
     call ovl_puts
     mov edx, [pci_gpu_amd_display_class]
     call ovl_puth32
+    lea rsi, [s_diag_cmd]
+    call ovl_puts
+    mov edx, [pci_gpu_amd_display_cmd]
+    call ovl_puth32
     mov byte [rdi], 0
     call diag_emit_line
 
@@ -2077,7 +2090,59 @@ real_boot_diag_dump:
     mov byte [rdi], 0
     call diag_emit_line
 
-    ; ---- FBPERF block ----
+    ; FS diagnostic — confirms whether the UEFI loader registered DATA.IMG
+    ; as a ramdisk and whether fat16_init mounted it. If rdBase=0 the loader
+    ; never published the region (AllocatePages failed or file missing);
+    ; if fatTot=0 the BPB read failed even with the ramdisk present.
+    extern fat16_total_sects, fat16_file_count_val
+    extern ramdisk_active, ramdisk_base
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_fs]
+    call ovl_puts
+    mov rdx, [abs VBE_INFO_ADDR + VBE_RAMDISK_BASE_OFF]
+    call diag_puth64
+    lea rsi, [s_diag_fs_sz]
+    call ovl_puts
+    mov rdx, [abs VBE_INFO_ADDR + VBE_RAMDISK_SIZE_OFF]
+    call diag_puth64
+    lea rsi, [s_diag_fs_tot]
+    call ovl_puts
+    mov edx, [fat16_total_sects]
+    call ovl_puth32
+    lea rsi, [s_diag_fs_n]
+    call ovl_puts
+    mov edx, [fat16_file_count_val]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; Second FS line: ramdisk_active flag + first qword at rdBase
+    ; (should be 0x2020534F5355584E because LE of "NEXUSOS " starting at +3,
+    ; so qword at +0 is 0x4E5558534F539090EB → in display 'EB903C904E5558534F53'? actually
+    ; the BPB bytes 0..7 = EB 3C 90 4E 45 58 55 53; qword LE = 0x5355584E903C90EB).
+    ; And first qword at FAT16_SECTOR_BUF (what fat16_init saw after read).
+    lea rdi, [ovl_buf]
+    lea rsi, [s_diag_fs2]
+    call ovl_puts
+    movzx edx, byte [ramdisk_active]
+    call ovl_putu
+    lea rsi, [s_diag_fs2_b0]
+    call ovl_puts
+    mov rax, [abs VBE_INFO_ADDR + VBE_RAMDISK_BASE_OFF]
+    test rax, rax
+    jz .fs2_skip_b0
+    mov rdx, [rax]
+    call diag_puth64
+.fs2_skip_b0:
+    lea rsi, [s_diag_fs2_sb]
+    call ovl_puts
+    mov rdx, [abs 0x1A00000]            ; FAT16_SECTOR_BUF first qword
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+%ifdef NEXUS_DIAG_LEGACY
+    ; ---- FBPERF block (legacy diag — landed 2026-05-25; off by default) ----
     lea rdi, [ovl_buf]
     lea rsi, [s_fbp_hdr]
     call ovl_puts
@@ -2232,11 +2297,13 @@ real_boot_diag_dump:
 .fbp_mtrr_done:
     pop rcx
     pop rbx
+%endif ; NEXUS_DIAG_LEGACY (FBPERF)
 
-    ; Save rbx/rcx around DCN+EC additions (we clobber them).
+    ; Save rbx/rcx around DCN+EC+GFX additions (we clobber them).
     push rbx
     push rcx
-    ; ---- DCN probe (read-only) ----
+%ifdef NEXUS_DIAG_LEGACY
+    ; ---- DCN probe (read-only; parked — DMUB bring-up paused) ----
     extern amd_dcn_probe
     extern amd_dcn_bar0
     extern amd_dcn_mmio_ok
@@ -2862,6 +2929,488 @@ real_boot_diag_dump:
     call diag_emit_hexbytes
     mov byte [rdi], 0
     call diag_emit_line
+%endif ; NEXUS_DIAG_LEGACY (DCN/IP/EC)
+
+%ifdef NEXUS_GFX_BRINGUP
+    ; ---- GFX11 bring-up (H/I/J). See docs/gpu-bringup.md. ----
+    extern gfx_bringup
+    extern gfx_last_stage
+    extern gpu_bringup_state
+    extern gpu_bar0_base
+    extern gpu_doorbell_base
+    extern smu_last_result
+    extern smu_last_msg_id
+    extern smn_r32
+    extern gmc_fault_status
+
+    ; Precondition for the SMN proxy: PCI MEM-decode + bus-master must be
+    ; enabled on the AMD display device, and BAR0 needs the UC alias.
+    ; Both are done by amd_dcn_probe. When NEXUS_DIAG_LEGACY is off
+    ; (the 2026-05-25 DMUB-park default) the diag block doesn't call it,
+    ; so we must call it explicitly here or every SMN read returns
+    ; 0xFFFFFFFF and writes black-hole (BAR decode disabled).
+    extern amd_dcn_probe
+    call amd_dcn_probe
+    call gfx_bringup
+    ; al = post-walk state (0..4, 0xFF on early-bar failure)
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_gfx_hdr]
+    call ovl_puts
+    movzx edx, byte [gpu_bringup_state]
+    call ovl_putu
+    lea rsi, [s_gfx_stage]
+    call ovl_puts
+    movzx edx, byte [gfx_last_stage]
+    call ovl_putu                       ; ASCII letter shown as decimal
+    lea rsi, [s_gfx_smu]
+    call ovl_puts
+    mov edx, [smu_last_result]
+    call ovl_puth32
+    lea rsi, [s_gfx_fault]
+    call ovl_puts
+    mov edx, [gmc_fault_status]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_gfx_bar]
+    call ovl_puts
+    mov rdx, [gpu_bar0_base]
+    call diag_puth64
+    lea rsi, [s_gfx_db]
+    call ovl_puts
+    mov rdx, [gpu_doorbell_base]
+    call diag_puth64
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; Raw SMN probe + SMU TestMessage echo. smn_r32 takes its arg in edi,
+    ; which is also the overlay-buffer pointer for ovl_*; we save/restore
+    ; rdi around every SMN call.
+    extern smu_test_echo
+    extern smu_disallow_result
+    lea rdi, [ovl_buf]
+    lea rsi, [s_gfx_smn]
+    call ovl_puts
+    push rdi                         ; preserve buffer pointer
+    mov  edi, 0x03B10A68             ; SMN_MP1_C2PMSG_90
+    call smn_r32
+    pop  rdi
+    mov  edx, eax
+    call ovl_puth32
+    lea rsi, [s_gfx_smn_idx]
+    call ovl_puts
+    push rdi
+    mov  edi, 0x03B10A08             ; SMN_MP1_C2PMSG_66
+    call smn_r32
+    pop  rdi
+    mov  edx, eax
+    call ovl_puth32
+    lea rsi, [s_gfx_smn_arg]
+    call ovl_puts
+    push rdi
+    mov  edi, 0x03B10A48             ; SMN_MP1_C2PMSG_82
+    call smn_r32
+    pop  rdi
+    mov  edx, eax
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; SMU test echo + DisallowGfxOff result (both populated by stage H).
+    lea rdi, [ovl_buf]
+    lea rsi, [s_gfx_test]
+    call ovl_puts
+    mov  edx, [smu_test_echo]
+    call ovl_puth32
+    lea rsi, [s_gfx_dis]
+    call ovl_puts
+    mov  edx, [smu_disallow_result]
+    call ovl_puth32
+    lea rsi, [s_gfx_msgid]
+    call ovl_puts
+    mov  edx, [smu_last_msg_id]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; GMC sub-stage diag: where I died, ACK readback, CNTL readback,
+    ; fault address.
+    extern gmc_substep
+    extern gmc_invalidate_ack_seen
+    extern gmc_cntl_readback
+    extern gmc_fault_addr_lo
+    extern gmc_fault_addr_hi
+    lea rdi, [ovl_buf]
+    lea rsi, [s_gmc_sub]
+    call ovl_puts
+    movzx edx, byte [gmc_substep]
+    call ovl_putu
+    lea rsi, [s_gmc_ack]
+    call ovl_puts
+    mov  edx, [gmc_invalidate_ack_seen]
+    call ovl_puth32
+    lea rsi, [s_gmc_cntl]
+    call ovl_puts
+    mov  edx, [gmc_cntl_readback]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_gmc_faddr]
+    call ovl_puts
+    mov  edx, [gmc_fault_addr_hi]
+    call ovl_puth32
+    mov  edx, [gmc_fault_addr_lo]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; CP ring readbacks (J). If state>=4 these confirm CP regs accept
+    ; writes. If they read 0xFFFFFFFF or 0 the CP block is gated.
+    extern cp_ring_substep
+    extern cp_rb0_cntl_readback
+    extern cp_rb0_base_readback
+    extern cp_rb0_rptr_readback
+    lea rdi, [ovl_buf]
+    lea rsi, [s_cp_sub]
+    call ovl_puts
+    movzx edx, byte [cp_ring_substep]
+    call ovl_putu
+    lea rsi, [s_cp_cntl]
+    call ovl_puts
+    mov  edx, [cp_rb0_cntl_readback]
+    call ovl_puth32
+    lea rsi, [s_cp_base]
+    call ovl_puts
+    mov  edx, [cp_rb0_base_readback]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; PSP Wave-3 diagnostics. These are populated only when K is armed via
+    ; NEXUS_GFX_WAVE3_FIRE; otherwise they remain zero and prove dormancy.
+    extern psp_substep
+    extern psp_fw_substep
+    extern psp_solution_status
+    extern psp_boot_status
+    extern psp_c2pmsg33_raw
+    extern psp_c2pmsg35_raw
+    extern psp_sos_version
+    extern psp_c2pmsg64_raw
+    extern psp_c2pmsg67_raw
+    extern psp_last_cmd
+    extern psp_last_resp
+    extern psp_tmr_status
+    extern psp_fw_status
+    extern psp_rlc_size
+    extern psp_rlc_ack
+    extern psp_rlc_fw_addr_lo
+    extern psp_rlc_fw_addr_hi
+    lea rdi, [ovl_buf]
+    lea rsi, [s_psp_step]
+    call ovl_puts
+    movzx edx, byte [psp_substep]
+    call ovl_putu
+    lea rsi, [s_psp_fwstep]
+    call ovl_puts
+    movzx edx, byte [psp_fw_substep]
+    call ovl_putu
+    lea rsi, [s_psp_sol]
+    call ovl_puts
+    mov  edx, [psp_solution_status]
+    call ovl_puth32
+    lea rsi, [s_psp_boot]
+    call ovl_puts
+    mov  edx, [psp_boot_status]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_psp_c33]
+    call ovl_puts
+    mov  edx, [psp_c2pmsg33_raw]
+    call ovl_puth32
+    lea rsi, [s_psp_c35]
+    call ovl_puts
+    mov  edx, [psp_c2pmsg35_raw]
+    call ovl_puth32
+    lea rsi, [s_psp_sos]
+    call ovl_puts
+    mov  edx, [psp_sos_version]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_psp_c64]
+    call ovl_puts
+    mov  edx, [psp_c2pmsg64_raw]
+    call ovl_puth32
+    lea rsi, [s_psp_c67]
+    call ovl_puts
+    mov  edx, [psp_c2pmsg67_raw]
+    call ovl_puth32
+    lea rsi, [s_psp_cmd]
+    call ovl_puts
+    mov  edx, [psp_last_cmd]
+    call ovl_puth32
+    lea rsi, [s_psp_resp]
+    call ovl_puts
+    mov  edx, [psp_last_resp]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_psp_tmr]
+    call ovl_puts
+    mov  edx, [psp_tmr_status]
+    call ovl_puth32
+    lea rsi, [s_psp_fwstat]
+    call ovl_puts
+    mov  edx, [psp_fw_status]
+    call ovl_puth32
+    lea rsi, [s_psp_rlcsz]
+    call ovl_puts
+    mov  edx, [psp_rlc_size]
+    call ovl_puth32
+    lea rsi, [s_psp_rlcack]
+    call ovl_puts
+    mov  edx, [psp_rlc_ack]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_psp_rlcaddr]
+    call ovl_puts
+    mov  edx, [psp_rlc_fw_addr_hi]
+    call ovl_puth32
+    mov  edx, [psp_rlc_fw_addr_lo]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; ---- Task L: CP PFP/ME/MEC PSP acks + un-halt + NOP retire ----
+    extern psp_cp_substep
+    extern psp_cp_last_type
+    extern psp_pfp_size
+    extern psp_pfp_ack
+    extern psp_me_size
+    extern psp_me_ack
+    extern psp_mec_size
+    extern psp_mec_ack
+    extern cp_me_cntl_pre
+    extern cp_me_cntl_post
+    extern cp_nop_substep
+    extern cp_nop_rptr_seen
+    extern cp_nop_wptr_target
+    extern gfx_last_stage
+    extern gpu_bringup_state
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_l_step]
+    call ovl_puts
+    movzx edx, byte [psp_cp_substep]
+    call ovl_putu
+    lea rsi, [s_l_type]
+    call ovl_puts
+    mov  edx, [psp_cp_last_type]
+    call ovl_puth32
+    lea rsi, [s_l_stage]
+    call ovl_puts
+    movzx edx, byte [gfx_last_stage]
+    call ovl_putu
+    lea rsi, [s_l_state]
+    call ovl_puts
+    movzx edx, byte [gpu_bringup_state]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_l_pfp]
+    call ovl_puts
+    mov  edx, [psp_pfp_size]
+    call ovl_puth32
+    lea rsi, [s_l_ack]
+    call ovl_puts
+    mov  edx, [psp_pfp_ack]
+    call ovl_puth32
+    lea rsi, [s_l_me]
+    call ovl_puts
+    mov  edx, [psp_me_size]
+    call ovl_puth32
+    lea rsi, [s_l_ack]
+    call ovl_puts
+    mov  edx, [psp_me_ack]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_l_mec]
+    call ovl_puts
+    mov  edx, [psp_mec_size]
+    call ovl_puth32
+    lea rsi, [s_l_ack]
+    call ovl_puts
+    mov  edx, [psp_mec_ack]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_l_cme_pre]
+    call ovl_puts
+    mov  edx, [cp_me_cntl_pre]
+    call ovl_puth32
+    lea rsi, [s_l_cme_post]
+    call ovl_puts
+    mov  edx, [cp_me_cntl_post]
+    call ovl_puth32
+    lea rsi, [s_l_nop_sub]
+    call ovl_puts
+    movzx edx, byte [cp_nop_substep]
+    call ovl_putu
+    lea rsi, [s_l_rptr]
+    call ovl_puts
+    mov  edx, [cp_nop_rptr_seen]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; MP0 SMN segment probe retired 2026-05-26 — see amd_gfx.asm. Replaced
+    ; with a Phoenix-aware note so the boot screen reflects current strategy.
+    lea rdi, [ovl_buf]
+    lea rsi, [s_phx_note]
+    call ovl_puts
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; ---- IP discovery scan results ------------------------------------------
+    extern ip_disc_found
+    extern ip_disc_scan_addr
+    extern ip_disc_bin_size
+    extern ip_disc_version
+    extern ip_disc_num_dies
+    extern ip_disc_mp0_base
+    extern ip_disc_mp1_base
+    extern ip_disc_gc_base
+    extern ip_disc_mmhub_base
+    extern ip_disc_dcn_base
+    extern ip_disc_imu_base
+    extern ip_disc_vram_hit_offset
+    lea rdi, [ovl_buf]
+    lea rsi, [s_ipd_hdr]
+    call ovl_puts
+    movzx edx, byte [ip_disc_found]
+    call ovl_putu
+    lea rsi, [s_ipd_at]
+    call ovl_puts
+    mov  rdx, [ip_disc_scan_addr]
+    call diag_puth64
+    lea rsi, [s_ipd_ver]
+    call ovl_puts
+    movzx edx, word [ip_disc_version]
+    call ovl_puth32
+    lea rsi, [s_ipd_dies]
+    call ovl_puts
+    movzx edx, word [ip_disc_num_dies]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    lea rdi, [ovl_buf]
+    lea rsi, [s_ipd_mp0]
+    call ovl_puts
+    mov  edx, [ip_disc_mp0_base]
+    call ovl_puth32
+    lea rsi, [s_ipd_mp1]
+    call ovl_puts
+    mov  edx, [ip_disc_mp1_base]
+    call ovl_puth32
+    lea rsi, [s_ipd_gc]
+    call ovl_puts
+    mov  edx, [ip_disc_gc_base]
+    call ovl_puth32
+    lea rsi, [s_ipd_imu]
+    call ovl_puts
+    mov  edx, [ip_disc_imu_base]
+    call ovl_puth32
+    lea rsi, [s_ipd_vram]
+    call ovl_puts
+    mov  edx, [ip_disc_vram_hit_offset]
+    call ovl_puth32
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; ---- IMU autoload TOC state ---------------------------------------------
+    extern imu_autoload_count
+    extern imu_autoload_total_size
+    extern imu_autoload_missing
+    extern imu_autoload_last_type
+    extern imu_autoload_status
+    extern imu_autoload_fat_count
+    extern imu_autoload_first_name
+    lea rdi, [ovl_buf]
+    lea rsi, [s_imu_hdr]
+    call ovl_puts
+    mov  edx, [imu_autoload_count]
+    call ovl_putu
+    lea rsi, [s_imu_total]
+    call ovl_puts
+    mov  edx, [imu_autoload_total_size]
+    call ovl_puth32
+    lea rsi, [s_imu_miss]
+    call ovl_puts
+    mov  edx, [imu_autoload_missing]
+    call ovl_puth32
+    lea rsi, [s_imu_last]
+    call ovl_puts
+    mov  edx, [imu_autoload_last_type]
+    call ovl_putu
+    lea rsi, [s_imu_kick]
+    call ovl_puts
+    movzx edx, byte [imu_autoload_status]
+    call ovl_putu
+    mov byte [rdi], 0
+    call diag_emit_line
+
+    ; FAT sanity: file count + first dir entry name. If fat_count == 0 or
+    ; the first name is empty, the walk had nothing to iterate. If the
+    ; first name looks like "BOOTANIMNBA" or similar, FAT is alive — and
+    ; the issue is in our name table or compare path.
+    lea rdi, [ovl_buf]
+    lea rsi, [s_fat_hdr]
+    call ovl_puts
+    mov  edx, [imu_autoload_fat_count]
+    call ovl_putu
+    lea rsi, [s_fat_first]
+    call ovl_puts
+    ; Append 11 bytes of imu_autoload_first_name verbatim.
+    mov  rcx, 11
+    lea  rsi, [imu_autoload_first_name]
+.fat_name_loop:
+    test rcx, rcx
+    jz   .fat_name_done
+    mov  al, [rsi]
+    test al, al
+    jz   .fat_name_done
+    mov  [rdi], al
+    inc  rdi
+    inc  rsi
+    dec  rcx
+    jmp  .fat_name_loop
+.fat_name_done:
+    mov byte [rdi], 0
+    call diag_emit_line
+%endif
 
     pop rcx
     pop rbx
@@ -3529,6 +4078,7 @@ render_frame:
     jmp .rf_wallpaper_busy_present
 .rf_no_wallpaper_render:
     call taskmgr_live_refresh
+    call media_live_refresh
     ; Caret blink previously dirtied the whole scene every 300ms, forcing a
     ; full desktop repaint 3x/sec even when idle. That alone burned ~30% of a
     ; core on real hardware. Track the phase for any code that wants to read
@@ -3753,6 +4303,57 @@ taskmgr_live_refresh:
     pop rax
     ret
 
+; Mark the scene dirty while a visible Media Player window is actively playing
+; an NBA clip. The draw callback cannot reliably re-arm scene_dirty itself:
+; render_frame clears scene_dirty after wm_draw_desktop returns, so a flag set
+; from inside app_media_draw is consumed by the same frame. This pre-draw scan
+; wakes the compositor for the next tick without depending on mouse/input.
+media_live_refresh:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+
+    mov rbx, WINDOW_POOL_ADDR
+    xor ecx, ecx
+.scan:
+    cmp ecx, MAX_WINDOWS
+    jae .done
+    test qword [rbx + WIN_OFF_FLAGS], WF_ACTIVE
+    jz .next
+    test qword [rbx + WIN_OFF_FLAGS], WF_VISIBLE
+    jz .next
+    test qword [rbx + WIN_OFF_FLAGS], WF_MINIMIZED
+    jnz .next
+    mov rax, app_media_draw
+    cmp [rbx + WIN_OFF_DRAWFN], rax
+    jne .next
+
+    mov edi, [rbx + WIN_OFF_ID]
+    call l3_slot_base
+    mov rdx, rax
+    cmp dword [rdx + APP_SLOT_BMP_FILE_OFF], NBA1_MAGIC
+    jne .next
+    cmp dword [rdx + APP_SLOT_BMP_FILE_OFF + 12], 1    ; frame_count
+    jbe .next
+    cmp dword [rdx + APP_SLOT_BMP_FILE_OFF + 16], 0    ; fps
+    je .next
+    cmp dword [rdx + app_hl_media_mp_paused - app_blob_start], 0
+    jne .next
+
+    mov byte [scene_dirty], 1
+    jmp .done
+.next:
+    add rbx, WINDOW_STRUCT_SIZE
+    inc ecx
+    jmp .scan
+.done:
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
 section .data
 szFPSPrefix db "FPS:", 0
 fps_str     times 16 db 0
@@ -3794,6 +4395,13 @@ s_diag_fb        db " fb=", 0
 s_diag_usbkb     db " usbKb=", 0
 s_diag_usbkb2    db " usbKb2=", 0
 s_diag_xhci      db " xhci=", 0
+s_diag_fs        db "FS rdBase=", 0
+s_diag_fs_sz     db " rdSize=", 0
+s_diag_fs_tot    db " fatTot=", 0
+s_diag_fs_n      db " files=", 0
+s_diag_fs2       db "FS rdAct=", 0
+s_diag_fs2_b0    db " rdQ0=", 0
+s_diag_fs2_sb    db " sbQ0=", 0
 
 s_fbp_hdr        db "FBPERF init=", 0
 s_fbp_patok      db " patSup=", 0
@@ -3823,6 +4431,82 @@ s_fbp_tsctot     db "FBPERF tscTot=", 0
 s_fbp_tscmin     db " tscMin=", 0
 s_fbp_tscmax     db " tscMax=", 0
 s_fbp_tsclast    db " tscLast=", 0
+
+; --- GFX11 bring-up diag labels ---
+s_gfx_hdr     db "GFX state=", 0
+s_gfx_stage   db " stage=", 0
+s_gfx_smu     db " smu=", 0
+s_gfx_fault   db " fault=", 0
+s_gfx_bar     db "GFX bar0=", 0
+s_gfx_db      db " db=", 0
+s_gfx_smn     db "SMN c2p90=", 0
+s_gfx_smn_idx db " c2p66=", 0
+s_gfx_smn_arg db " c2p82=", 0
+s_gfx_test    db "SMU test=", 0
+s_gfx_dis     db " disGfx=", 0
+s_gfx_msgid   db " lastMsg=", 0
+s_gmc_sub     db "GMC step=", 0
+s_gmc_ack     db " ack=", 0
+s_gmc_cntl    db " cntl=", 0
+s_gmc_faddr   db "GMC faddr=", 0
+s_cp_sub      db "CP step=", 0
+s_cp_cntl     db " cntl=", 0
+s_cp_base     db " base=", 0
+s_psp_step    db "PSP step=", 0
+s_psp_fwstep  db " fwstep=", 0
+s_psp_sol     db " sol=", 0
+s_psp_boot    db " boot=", 0
+s_psp_c33     db "PSP c33=", 0
+s_psp_c35     db " c35=", 0
+s_psp_sos     db " sos=", 0
+s_psp_c64     db "PSP c64=", 0
+s_psp_c67     db " c67=", 0
+s_psp_cmd     db " cmd=", 0
+s_psp_resp    db " resp=", 0
+s_psp_tmr     db "PSP tmr=", 0
+s_psp_fwstat  db " fwstat=", 0
+s_psp_rlcsz   db " rlcSz=", 0
+s_psp_rlcack  db " rlcAck=", 0
+s_psp_rlcaddr db "PSP rlcAddr=", 0
+
+; --- Task L (CP PFP/ME/MEC + un-halt + NOP) labels ---
+s_l_step      db "L step=", 0
+s_l_type      db " type=", 0
+s_l_stage     db " stage=", 0
+s_l_state     db " state=", 0
+s_l_pfp       db "L pfpSz=", 0
+s_l_me        db " meSz=", 0
+s_l_mec       db "L mecSz=", 0
+s_l_ack       db " ack=", 0
+s_l_cme_pre   db "L cmePre=", 0
+s_l_cme_post  db " cmePost=", 0
+s_l_nop_sub   db " nop=", 0
+s_l_rptr      db " rptr=", 0
+
+; --- MP0 SMN segment probe labels ---
+s_probe_hdr   db "MP0 PROBE done=", 0
+s_probe_seg   db "seg=", 0
+s_phx_note    db "PHX gfx_11_0_3: PSP via BAR0 MMIO (not SMN); awaiting IP-disc + FW blobs", 0
+s_imu_hdr     db "IMU autoload n=", 0
+s_imu_total   db " total=", 0
+s_imu_miss    db " miss=", 0
+s_imu_last    db " lastType=", 0
+s_imu_kick    db " kick=", 0
+s_fat_hdr     db "FAT n=", 0
+s_fat_first   db " first=", 0
+s_ipd_hdr     db "IPDISC found=", 0
+s_ipd_at      db " at=", 0
+s_ipd_ver     db " ver=", 0
+s_ipd_dies    db " dies=", 0
+s_ipd_mp0     db "IPDISC MP0=", 0
+s_ipd_mp1     db " MP1=", 0
+s_ipd_gc      db " GC=", 0
+s_ipd_imu     db " IMU=", 0
+s_ipd_vram    db " vramHit=", 0
+s_probe_c33   db " c33=", 0
+s_probe_c58   db " c58=", 0
+s_probe_c64   db " c64=", 0
+s_probe_c81   db " c81=", 0
 
 ; --- DCN read-only probe labels ---
 s_dcn_hdr     db "DCN bar0=", 0

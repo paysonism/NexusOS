@@ -18,7 +18,12 @@ param(
     [string]$UsbVendorId   = '0x0BDA',  # RTL8156 NIC
     [string]$UsbProductId  = '0x8156',
     [string]$MouseVendorId = '0x17EF',  # Lenovo Optical Mouse
-    [string]$MouseProductId= '0x602E'
+    [string]$MouseProductId= '0x602E',
+    # MSC write-back development harness. When -MscTest is given, attach
+    # build/data.img as a USB Mass Storage device on the xHCI bus so the
+    # kernel's MSC stack has something to enumerate, AND drop the legacy
+    # if=ide data.img so ATA-PIO can't shortcut the test path.
+    [switch]$MscTest
 )
 $UsbPassthrough       = -not ($NoPassthrough -or $NoNicPassthrough)
 $UsbMousePassthrough  = -not ($NoPassthrough -or $NoMousePassthrough)
@@ -68,12 +73,17 @@ Write-Host "Launching NexusOS UEFI with XHCI+HID ($PerfProfile, $GuestMemory RAM
 
 $qemuArgs = @(
     '-bios', "$BUILD\OVMF.fd",
-    '-drive', "file=$BUILD\data.img,format=raw,if=ide,index=0,media=disk",
     '-drive', "format=raw,file=fat:rw:$BUILD\esp,if=ide,index=1,media=disk",
     '-m', $GuestMemory,
     '-smp', '8,sockets=1,cores=8,threads=1',
     '-vga', 'std'
 )
+if (-not $MscTest) {
+    # Legacy QEMU dev path: data.img on IDE for ATA-PIO fallback.
+    $qemuArgs += @('-drive', "file=$BUILD\data.img,format=raw,if=ide,index=0,media=disk")
+} else {
+    Write-Host "MSC test mode: data.img attached as usb-storage (no IDE fallback)." -ForegroundColor Magenta
+}
 $displayArg = if ($Headless) { 'none' } else { 'gtk,grab-on-hover=on,show-cursor=on,window-close=on' }
 # qemu-xhci with explicit p2=USB2/p3=USB3 port counts. Default is 4/4, which
 # leaves only ports 1..4 for USB2 devices and 5..8 for USB3. Bumping both to
@@ -133,6 +143,16 @@ if ($UsbPassthrough -or $UsbMousePassthrough) {
     $qemuArgs += @('-device', 'usb-kbd')
 } else {
     $qemuArgs += @('-device', 'usb-kbd,bus=xhci0.0,port=2')
+}
+if ($MscTest) {
+    # USB Mass Storage backing for ramdisk write-back development. The drive
+    # is the same data.img the kernel currently treats as a RAM-resident
+    # FAT16 image — once the MSC stack lands, ramdisk_flush will write
+    # dirty pages back through this device instead of dropping them.
+    $qemuArgs += @(
+        '-drive', "if=none,id=msc0,format=raw,file=$BUILD\data.img",
+        '-device', 'usb-storage,bus=xhci0.0,port=3,drive=msc0,removable=on'
+    )
 }
 $qemuArgs += @(
     '-serial', $SERIAL,

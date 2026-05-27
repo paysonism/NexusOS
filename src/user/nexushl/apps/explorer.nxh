@@ -288,22 +288,52 @@ fn is_media_entry(ent) {
             if lb(ent + 10) == 80 { return 1; }
         }
     }
-    if lb(ent + 8) != 78 { return 0; }
-    if lb(ent + 9) == 73 {
-        if lb(ent + 10) == 67 { return 1; }
+    if lb(ent + 8) == 78 {
+        if lb(ent + 9) == 73 {
+            if lb(ent + 10) == 67 { return 1; }
+        }
+        if lb(ent + 9) == 66 {
+            if lb(ent + 10) == 65 { return 1; }
+        }
     }
-    if lb(ent + 9) == 66 {
-        if lb(ent + 10) == 65 { return 1; }
+    if lb(ent + 8) == 83 {
+        if lb(ent + 9) == 86 {
+            if lb(ent + 10) == 71 { return 1; }
+        }
+    }
+    if lb(ent + 8) == 88 {
+        if lb(ent + 9) == 77 {
+            if lb(ent + 10) == 76 { return 1; }
+        }
+    }
+    return 0;
+}
+
+fn is_text_media_entry(ent) {
+    if lb(ent + 8) == 83 {
+        if lb(ent + 9) == 86 {
+            if lb(ent + 10) == 71 { return 1; }
+        }
+    }
+    if lb(ent + 8) == 88 {
+        if lb(ent + 9) == 77 {
+            if lb(ent + 10) == 76 { return 1; }
+        }
     }
     return 0;
 }
 
 fn opener_count(ent) {
     if fs_is_dir(ent) == 1 { return 0; }
+    if is_text_media_entry(ent) == 1 { return 2; }
     return 1;
 }
 
 fn opener_name(idx, ent) {
+    if is_text_media_entry(ent) == 1 {
+        if idx == 0 { return &szOpenerNotepad; }
+        if idx == 1 { return &szOpenerMedia; }
+    }
     if idx == 0 {
         if is_media_entry(ent) == 1 { return &szOpenerMedia; }
         return &szOpenerNotepad;
@@ -312,6 +342,10 @@ fn opener_name(idx, ent) {
 }
 
 fn opener_open(idx, ent) {
+    if is_text_media_entry(ent) == 1 {
+        if idx == 0 { syscall(SYS_OPEN_FILE_NP, ent); return; }
+        if idx == 1 { syscall(SYS_OPEN_FILE_MEDIA, ent); return; }
+    }
     if idx == 0 {
         if is_media_entry(ent) == 1 { syscall(SYS_OPEN_FILE_MEDIA, ent); return; }
         syscall(SYS_OPEN_FILE_NP, ent);

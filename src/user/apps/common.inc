@@ -54,6 +54,7 @@ extern fat16_read_file
 extern fat16_write_file
 extern fat16_sync_root
 extern fat16_change_dir
+extern l3_slot_base
 extern bb_addr
 extern scr_pitch
 extern mouse_debug_dump

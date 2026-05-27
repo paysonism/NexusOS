@@ -38,11 +38,10 @@ extern kb_head
 extern kb_tail
 extern kb_repeat_scancode
 
-; 8 MiB scratch region for the loaded .nba file. Above SYSTEM_RESERVED_END
-; (0x5600000) so it does not clash with the wallpaper/drag caches or the
-; XHCI rings; well within the 512 GiB the UEFI loader maps.
-BOOT_ANIM_BUF       equ 0x6000000
-BOOT_ANIM_BUF_SIZE  equ 0x1000000
+; 16 MiB scratch region for the loaded .nba file. This lives above the GUI
+; backbuffer-save region and is included in SYSTEM_RESERVED_END so the page
+; allocator never hands it to runtime users.
+BOOT_ANIM_BUF       equ BOOT_ANIM_BUF_ADDR
 
 DIR_FIRST_CLUS_LO   equ 26
 DIR_FILE_SIZE       equ 28
