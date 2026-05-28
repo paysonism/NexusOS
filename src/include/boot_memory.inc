@@ -76,6 +76,80 @@ BOOT_ANIM_BUF_SIZE    equ 0x1000000
 APP_ARENA_PT_BASE     equ 0x75000
 ARENA_SLOT_PAGES      equ (APP_SLOT_SIZE / 0x1000) ; 512 4KB pages per slot
 
+; Syscall-stack PT slot. l3_syscall_stacks lives in kernel BSS, inside an
+; otherwise 2 MiB-large supervisor PDE in PD0. Both bootloaders reserve a
+; physical PT page here so the kernel can split that PDE into 4 KiB pages
+; at init time and clear PRESENT on the per-slot guard PTE. The bootloader
+; does not know the kernel BSS address — l3_install_syscall_stack_pt
+; (src/kernel/proc/usermode.asm) computes the PDE index at runtime, walks
+; CR3 to find PD0, populates this PT, and atomically swaps the PDE.
+; alignb 0x20000 on l3_syscall_stacks guarantees the array (MAX_WINDOWS *
+; L3_SYSCALL_STACK_STRIDE = 192 KiB after the shadow-stack stride widening)
+; fits in a single PDE so one PT suffices.
+SYSCALL_STACK_PT_BASE equ 0x82000
+
+; --- Paging bit constants used by W^X enforcement ------------------------
+; PAGE_NX is bit 63 of the PTE/PDE — requires EFER.NXE=1 (set by both boot
+; paths: uefi_loader.asm in the EFER fix-up, stage2.asm in the LME path).
+; A page with PAGE_NX cleared is executable iff its CS-selected segment
+; permits exec; with PAGE_NX set, instruction fetches from the page fault
+; regardless of the rest of the PTE. PAGE_PRESENT/PAGE_WRITABLE/PAGE_USER/
+; PAGE_LARGE live in src/include/constants.inc and are unchanged.
+PAGE_NX               equ (1 << 63)
+
+; --- Per-slot W^X manifest ------------------------------------------------
+; Apps declare which slot-offset range holds executable code. On every slot
+; activation (l3_apply_wx_policy), the kernel walks the slot's PT and sets
+; pages inside [code_start_off, code_end_off) to X+!W (PAGE_NX clear, W=0)
+; and all other slot pages (including the stack/shadow region) to W+NX.
+;
+; Manifest layout (lives inside the slot's metadata region [0, 512)):
+;   off 0x00 .. 0x07  L3_SLOT_MAGIC                  (existing)
+;   off 0x08 .. 0x0F  SLOT_META_WX_MANIFEST_VER      (u64)
+;   off 0x10 .. 0x17  SLOT_META_WX_CODE_START_OFF    (u64, 4KB-aligned)
+;   off 0x18 .. 0x1F  SLOT_META_WX_CODE_END_OFF      (u64, 4KB-aligned)
+;
+; Manifest versions:
+;   0 — absent. Legacy fallback: every blob page stays W+X (no NX, W=1).
+;       Stack/shadow page (and any future enforced region) still W+NX.
+;       This lets existing apps boot unchanged while individual apps
+;       migrate to declaring a manifest.
+;   1 — present. Kernel enforces strict W+NX everywhere except
+;       [code_start_off, code_end_off) which becomes X+!W. Both bounds
+;       must be 4KB-aligned and inside [L3_APP_CODE_OFF, L3_SHADOW_WIN_OFF);
+;       a malformed manifest is treated as version 0 (defensive fallback,
+;       logged on the debug serial).
+;
+; SYS_MPROTECT_WX (syscall #68) flips individual pages within the declared
+; code range between W+NX (mode 0) and X+!W (mode 1). Pages outside the
+; declared range are rejected — apps that want JIT must declare a code
+; range that covers their JIT pages.
+SLOT_META_WX_MANIFEST_VER_OFF   equ 0x08
+SLOT_META_WX_CODE_START_OFF_OFF equ 0x10
+SLOT_META_WX_CODE_END_OFF_OFF   equ 0x18
+
+; SYS_MPROTECT_WX modes (mirror in src/include/syscall_user.inc).
+MPROT_WX_MODE_WNX      equ 0       ; W=1, NX=1 (data)
+MPROT_WX_MODE_XRO      equ 1       ; W=0, NX=0 (code)
+
+; (The slot-internal constants L3_APP_CODE_OFF / L3_SHADOW_WIN_OFF are
+; defined locally in usermode.asm — NASM `equ` cannot be %ifndef-guarded,
+; so syscall.asm and any other consumer of those values must redeclare
+; them with the same expressions. Keep this comment as the canonical
+; reference for what they should be:
+;   L3_APP_CODE_OFF    = 512
+;   L3_SHADOW_WIN_OFF  = APP_SLOT_SIZE - 512)
+
+; Per-slot user-stack guard page. The user stack top is
+; L3_SHADOW_WIN_OFF - 16 = APP_SLOT_SIZE - 528 = 0x1FFDF0; the stack grows
+; down 16 KiB (L3_USER_STACK_SIZE) to 0x1FBDF0. Page containing the lowest
+; reachable byte is 0x1FB000; the page immediately below — 0x1FA000 — is
+; cleared of PAGE_PRESENT in paging setup, so a stack overflow faults into
+; isr_common_stub's guard fast path instead of clobbering slot data.
+; PTE index within the slot's PT = 0x1FA000 / 0x1000 = 0x1FA.
+L3_SLOT_USER_STACK_GUARD_OFF equ 0x1FA000
+L3_SLOT_USER_STACK_GUARD_PTE equ (L3_SLOT_USER_STACK_GUARD_OFF / 0x1000)
+
 GUI_LLC_ARENA_START equ BACK_BUFFER_ADDR
 GUI_LLC_ARENA_END   equ APP_DATA_ADDR
 
@@ -134,5 +208,60 @@ VBE_STORAGE_EXT_PTR_OFF equ 0x68   ; u64 (physical pointer to extent array)
 STORAGE_EXTENTS_ADDR    equ 0x9200   ; 4 KiB scratch for extent table
 STORAGE_EXTENTS_MAX     equ 256      ; max extents (256 * 16B = 4 KiB)
 STORAGE_EXTENT_SIZE     equ 16       ; bytes per extent entry
+
+; --- Per-slot handle table (pointer-table refactor) ----------------------
+; Indexed, slot-local table; ring 3 sees only opaque packed u32 handles —
+; same shape as iOS Mach port rights / Linux fds. As of Phase 2,
+; SYS_FS_ENTRY returns a HANDLE_KIND_DIR_ENTRY handle, the FN_KIND_HANDLE
+; validator arm calls handle_resolve, and FS syscall handlers translate
+; handle -> kernel entry pointer via sc_resolve_dir_entry_arg. Ring 3
+; reads entry fields by value through SYS_FS_ENTRY_INFO.
+;
+; Lives at slot+0x1D5000. The 16 KiB region at slot+0x1D1000..0x1D5000
+; was the legacy dir-entry snapshot cache (now unused — kept as a hole
+; for the next per-slot cache that needs it). Well below the user-stack
+; guard at slot+0x1FA000.
+L3_HANDLE_TABLE_OFF     equ 0x1D5000
+HANDLE_TABLE_CAP        equ 64
+L3_HANDLE_ENTRY_SIZE    equ 16
+L3_HANDLE_TABLE_SZ      equ (HANDLE_TABLE_CAP * L3_HANDLE_ENTRY_SIZE) ; 1 KiB
+
+; Handle kinds. 0 marks a free slot in the table; allocations always use
+; a non-zero kind so "free" is unambiguous.
+HANDLE_KIND_NONE        equ 0
+HANDLE_KIND_DIR_ENTRY   equ 1
+HANDLE_KIND_XML_NODE    equ 2     ; reserved for follow-up migration
+HANDLE_KIND_NET_SOCKET  equ 3     ; reserved
+HANDLE_KIND_WINDOW      equ 4     ; reserved (today win_id is a bare int)
+
+; Per-entry layout (16 bytes):
+;   off 0  u8  kind             (0 = free)
+;   off 1  u8  flags            (reserved)
+;   off 2  u16 generation       (monotonic; allocator wraps 0xFFFF -> 1
+;                                so a valid generation is never 0)
+;   off 4  u32 reserved
+;   off 8  u64 payload          (kind-specific)
+HANDLE_ENT_KIND_OFF     equ 0
+HANDLE_ENT_FLAGS_OFF    equ 1
+HANDLE_ENT_GEN_OFF      equ 2
+HANDLE_ENT_PAYLOAD_OFF  equ 8
+
+; Ring-3-visible u32 handle encoding:
+;   bits [ 5: 0]  slot index (0..HANDLE_TABLE_CAP-1)
+;   bits [21: 6]  generation (16-bit; must match the stored gen)
+;   bits [29:22]  kind tag    (8-bit;  must match the stored kind)
+;   bits [31:30]  magic 0b10  (rejects bare scalars/pointers misused as
+;                              handles — random ring-3 values rarely set
+;                              exactly this two-bit pattern)
+; Handle value 0 is reserved as INVALID. The allocator never returns 0
+; because (a) a fresh entry has generation >= 1 and (b) kind >= 1.
+HANDLE_INDEX_MASK       equ 0x3F
+HANDLE_GEN_SHIFT        equ 6
+HANDLE_GEN_MASK         equ 0xFFFF
+HANDLE_KIND_SHIFT       equ 22
+HANDLE_KIND_MASK        equ 0xFF
+HANDLE_MAGIC_SHIFT      equ 30
+HANDLE_MAGIC            equ 2          ; 0b10
+HANDLE_MAGIC_MASK       equ 3          ; 0b11
 
 %endif
