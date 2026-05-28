@@ -37,6 +37,10 @@ CONTROL_ALLOW = {
     # mismatch (KEPILOGUE), halts the CPU. Same constraint as the canary pad —
     # the stack frame it lands on is, by definition, suspect.
     "kernel_panic_shadow",
+    # Build-gated (-dENABLE_SHADOW_STACK_POC) shadow-stack proof harness. It
+    # switches RSP onto a syscall stack and calls a protected stub by hand, so
+    # it cannot run the FN_BEGIN trace push/call sequence.
+    "shadow_stack_poc_run",
 }
 
 

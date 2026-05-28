@@ -4,6 +4,8 @@ param(
     [ValidateSet('Default', 'Cache32Max')]
     [string]$PerfProfile = 'Default',
     [switch]$NoFbWc,         # Phase A baseline: skip fbperf WC arm+activate
+    [switch]$NoKaslr,        # Disable KASLR (random kernel base per boot). KASLR is on by default since 2026-05-27 after multi-boot QEMU verification.
+    [switch]$ShadowStackPoc, # Build-gated kernel shadow-stack proof harness (debug only). Trips KEPILOGUE on a corrupted return address at boot; never ship.
     [switch]$CopyToE         # Copy built ESP\EFI tree to E:\ for boot from removable media.
     # GFX/DCN bring-up flags (-Gfx, -GfxWave3, -GfxWave3L, -GfxImuKick,
     # -DiagLegacy) were retired 2026-05-26 along with the AMD 780M iGPU
@@ -35,6 +37,18 @@ if ($PerfProfile -eq 'Cache32Max') {
 if ($NoFbWc) {
     $KernelDefines += '-dFBPERF_NO_WC'
     Write-Host '  (FBPERF: WC activation DISABLED -- Phase A baseline build)' -ForegroundColor Magenta
+}
+if ($ShadowStackPoc) {
+    $KernelDefines += '-dENABLE_SHADOW_STACK_POC'
+    Write-Host '  (SHADOW: kernel shadow-stack PoC trip ENABLED -- debug only)' -ForegroundColor Magenta
+}
+if (-not $NoKaslr) {
+    # Loader-only switch: kernel assembles transparently at the chosen ORG;
+    # only the loader's slide-picker is gated.
+    $LoaderDefines += '-dENABLE_KASLR'
+    Write-Host '  (KASLR: enabled — kernel will load at a random base each boot)' -ForegroundColor Magenta
+} else {
+    Write-Host '  (KASLR: DISABLED via -NoKaslr — slide forced to 0)' -ForegroundColor Yellow
 }
 $KernelDefines += '-dNEXUS_SMP'
 $KernelDefines += '-dNEXUS_CACHE32_AP_STARTUP'
@@ -94,29 +108,59 @@ if ($LASTEXITCODE -ne 0) {
 $sz = (Get-Item "$ESP\BOOTX64.EFI").Length
 Write-Host "  OK - BOOTX64.EFI ($sz bytes)" -ForegroundColor Green
 
-# 2. Assemble Kernel -> KERNEL.BIN
-Write-Host '[2/2] Assembling Kernel...' -ForegroundColor Yellow
-$ErrorActionPreference = 'Continue'
-& $NASM @KernelDefines -w-pp-macro-redef-multi -f bin -o "$ESP\KERNEL.BIN" -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" -I "$BUILD_DIR\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
-$ErrorActionPreference = 'Stop'
-if ($LASTEXITCODE -ne 0) {
-    Write-Host '  FAILED' -ForegroundColor Red
-    exit 1
-}
-$sz = (Get-Item "$ESP\KERNEL.BIN").Length
-Write-Host "  OK - KERNEL.BIN ($sz bytes)" -ForegroundColor Green
+# 2. Assemble Kernel TWICE for diff-relocation KASLR.
+#
+# Even when -Kaslr is OFF on the loader side we still wrap the kernel in the
+# KASLR container so the loader has a uniform input format. With KASLR off the
+# loader picks slide=0, which must reproduce the legacy "loaded at 0x100000"
+# behavior byte-for-byte at runtime.
+#
+# Pass A: ORG = 0x100000 (the runtime base when slide=0)
+# Pass B: ORG = 0x200000 (slide of +0x100000)
+# Differ on exactly the qwords that hold absolute label references; the
+# extractor diffs them into a fixup table and wraps Pass A as the payload.
+Write-Host '[2/2] Assembling Kernel (two-pass for KASLR fixup table)...' -ForegroundColor Yellow
+$kernelA = Join-Path $BUILD_DIR 'KERNEL.A.RAW'
+$kernelB = Join-Path $BUILD_DIR 'KERNEL.B.RAW'
 
-# 2b. Extract app blob -> APPS.BIN and strip bytes from KERNEL.BIN.
-Write-Host '[2b] Extracting APPS.BIN...' -ForegroundColor Yellow
-& powershell -NoProfile -File (Join-Path $Root 'tools\build\extract_apps.ps1') `
-    -KernelPath "$ESP\KERNEL.BIN" `
-    -OutPath "$ESP\APPS.BIN"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host '  FAILED' -ForegroundColor Red
+$ErrorActionPreference = 'Continue'
+& $NASM -O0 @KernelDefines -w-pp-macro-redef-multi -f bin -o $kernelA -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" -I "$BUILD_DIR\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
+$ErrorActionPreference = 'Stop'
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED (pass A)' -ForegroundColor Red; exit 1 }
+$szA = (Get-Item $kernelA).Length
+Write-Host "  OK - pass A @0x100000 ($szA bytes)" -ForegroundColor Green
+
+$ErrorActionPreference = 'Continue'
+& $NASM -O0 @KernelDefines '-dKERNEL_BASE_OVERRIDE=0x200000' -w-pp-macro-redef-multi -f bin -o $kernelB -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" -I "$BUILD_DIR\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
+$ErrorActionPreference = 'Stop'
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED (pass B)' -ForegroundColor Red; exit 1 }
+$szB = (Get-Item $kernelB).Length
+Write-Host "  OK - pass B @0x200000 ($szB bytes)" -ForegroundColor Green
+if ($szA -ne $szB) {
+    Write-Host "  FAILED - pass A/B size mismatch ($szA vs $szB). ORG-dependent sizing in kernel sources?" -ForegroundColor Red
     exit 1
 }
+
+# 2b. Extract APPS.BIN from pass A BEFORE wrapping. The extractor scans for
+# byte markers in the raw kernel image; the KASLR container header would shift
+# those offsets out from under any downstream consumer that expects them.
+Write-Host '[2b] Extracting APPS.BIN (from pass A)...' -ForegroundColor Yellow
+& powershell -NoProfile -File (Join-Path $Root 'tools\build\extract_apps.ps1') `
+    -KernelPath $kernelA `
+    -OutPath "$ESP\APPS.BIN"
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red; exit 1 }
 $sz = (Get-Item "$ESP\APPS.BIN").Length
 Write-Host "  OK - APPS.BIN ($sz bytes)" -ForegroundColor Green
+
+# 2c. Diff A vs B, wrap pass A + fixup table into KERNEL.BIN.
+# In -Kaslr mode the loader uses the embedded app blob because it is covered
+# by the same kernel fixup table; APPS.BIN remains the non-KASLR app source.
+Write-Host '[2c] Building KASLR fixup table and wrapping KERNEL.BIN...' -ForegroundColor Yellow
+& python (Join-Path $Root 'tools\build\extract_kaslr_fixups.py') `
+    --a $kernelA --b $kernelB --out "$ESP\KERNEL.BIN"
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red; exit 1 }
+$sz = (Get-Item "$ESP\KERNEL.BIN").Length
+Write-Host "  OK - KERNEL.BIN ($sz bytes, wrapped)" -ForegroundColor Green
 
 # 3. Create data disk image with FAT16 filesystem (for ATA PIO access by kernel)
 Write-Host '[3/3] Creating FAT16 data disk (data.img)...' -ForegroundColor Yellow
