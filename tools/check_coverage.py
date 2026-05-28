@@ -33,6 +33,10 @@ CONTROL_ALLOW = {
     # Panic landing pad: reached only on canary mismatch, halts the CPU. Cannot
     # safely run FN_BEGIN trace push/call sequence on a corrupted stack frame.
     "kernel_panic_canary",
+    # Shadow-stack panic landing pad: reached only on a shadow/return-address
+    # mismatch (KEPILOGUE), halts the CPU. Same constraint as the canary pad —
+    # the stack frame it lands on is, by definition, suspect.
+    "kernel_panic_shadow",
 }
 
 
