@@ -2704,6 +2704,7 @@ sc_load_arg_for_validation:
 ; pointer). Saves and restores RCX, RDX, RSI, R8, R9, R10 so handlers can
 ; chain straight into the FS worker without re-loading them.
 sc_resolve_dir_entry_arg:
+    KPROLOGUE                           ; shadow-stack guard (syscall-stack only)
     push rcx
     push rdx
     push rsi
@@ -2731,7 +2732,7 @@ sc_resolve_dir_entry_arg:
     pop rdx
     pop rcx
     mov eax, 1
-    ret
+    KEPILOGUE
 .rdea_fail:
     pop r10
     pop r9
@@ -2740,7 +2741,7 @@ sc_resolve_dir_entry_arg:
     pop rdx
     pop rcx
     xor eax, eax
-    ret
+    KEPILOGUE
 
 %define SC_KIND1(a) (a)
 %define SC_KIND2(a,b) ((a) | ((b) << 2))
