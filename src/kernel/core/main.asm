@@ -168,9 +168,13 @@ extern render_restore_backbuffer
 extern render_restore_dirty_backbuffer
 extern render_mark_dirty
 extern render_save_backbuffer
+extern render_save_dirty_backbuffer
 extern display_flip_rect
 extern call_app_l3
 extern dispatch_app_callback           ; Stage 2d cross-core chokepoint
+extern cpi_verify_callback             ; CPI-lite: validate tagged callback ptrs
+extern media_direct_present
+extern media_direct_presented
 extern l3_slot_base
 extern bb_addr
 extern fb_addr
@@ -1246,9 +1250,21 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     extern tss_init
     extern syscall_init
     extern kernel_canary_init
+    extern l3_install_syscall_stack_pt
     call gdt64_init
     call tss_init
     call kernel_canary_init
+    ; Split the PDE covering l3_syscall_stacks into 4 KiB pages and punch
+    ; per-slot guard pages BEFORE the first syscall path is wired up.
+    call l3_install_syscall_stack_pt
+%ifdef ENABLE_SHADOW_STACK_POC
+    ; Build-gated shadow-stack proof harness. Runs a protected frame on the
+    ; now-mapped slot-0 syscall stack, smashes its return address, and expects
+    ; KEPILOGUE to trap to kernel_panic_shadow ("SHADOW ..." + halt). Never
+    ; present in release builds.
+    extern shadow_stack_poc_run
+    call shadow_stack_poc_run
+%endif
     call syscall_init
 
     extern scheduler_init
@@ -3738,7 +3754,15 @@ serial_forward_input:
     mov rax, r8
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov r9, [rax + WIN_OFF_KEYFN]
+    push rax
+    push rdx
+    mov rdi, [rax + WIN_OFF_KEYFN]
+    mov rsi, rax
+    mov rdx, WIN_OFF_KEYFN
+    call cpi_verify_callback
+    mov r9, rax
+    pop rdx
+    pop rax
     test r9, r9
     jz .input_done
 
@@ -3958,7 +3982,13 @@ FN_BEGIN process_keyboard, 0, 0, FN_RET_SCALAR
     mov rax, r8
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov r9, [rax + WIN_OFF_KEYFN]
+    push rax
+    mov rdi, [rax + WIN_OFF_KEYFN]
+    mov rsi, rax
+    mov rdx, WIN_OFF_KEYFN
+    call cpi_verify_callback
+    mov r9, rax
+    pop rax
     test r9, r9
     jz .pk_done
     mov rsi, rax
@@ -4265,16 +4295,20 @@ render_frame:
     ret
 
 ; Task Manager displays live counters, so keep it repainting while open even
-; when no input event has dirtied the desktop. Throttle to ~10Hz to avoid
-; forcing a full desktop redraw every render-frame tick.
+; when no input event has dirtied the desktop. Keep the cadence low: this path
+; dirties the whole desktop, so a high refresh rate makes Task Manager itself
+; show up as idle CPU load.
 taskmgr_live_refresh:
     push rax
     push rbx
     push rcx
+    push rdx
+    push rsi
+    push rdi
     mov rcx, [tick_count]
     mov rax, rcx
     sub rax, [taskmgr_last_refresh_tick]
-    cmp rax, 10
+    cmp rax, 100
     jb .done
     mov [taskmgr_last_refresh_tick], rcx
     mov rbx, WINDOW_POOL_ADDR
@@ -4291,6 +4325,23 @@ taskmgr_live_refresh:
     mov rax, app_hl_taskmgr_draw
     cmp [rbx + WIN_OFF_DRAWFN], rax
     jne .next
+    test qword [rbx + WIN_OFF_FLAGS], WF_FOCUSED
+    jz .mark_scene_dirty
+    mov rdi, [rbx + WIN_OFF_ID]
+    call cursor_hide
+    call wm_draw_window
+    mov edi, [rbx + WIN_OFF_X]
+    mov esi, [rbx + WIN_OFF_Y]
+    mov edx, [rbx + WIN_OFF_W]
+    mov ecx, [rbx + WIN_OFF_H]
+    call render_mark_dirty
+    call render_save_dirty_backbuffer
+    call render_flush
+    mov edi, [mouse_x]
+    mov esi, [mouse_y]
+    call cursor_draw
+    jmp .done
+.mark_scene_dirty:
     mov byte [scene_dirty], 1
     jmp .done
 .next:
@@ -4298,21 +4349,28 @@ taskmgr_live_refresh:
     inc ecx
     jmp .scan
 .done:
+    pop rdi
+    pop rsi
+    pop rdx
     pop rcx
     pop rbx
     pop rax
     ret
 
-; Mark the scene dirty while a visible Media Player window is actively playing
-; an NBA clip. The draw callback cannot reliably re-arm scene_dirty itself:
-; render_frame clears scene_dirty after wm_draw_desktop returns, so a flag set
-; from inside app_media_draw is consumed by the same frame. This pre-draw scan
-; wakes the compositor for the next tick without depending on mouse/input.
+; Repaint a focused Media Player NBA window only when it has real work: a seek
+; is pending, the first timer seed is needed, or the next source frame is due.
+; The focused fast path redraws and flushes just the window rectangle, avoiding
+; a full desktop repaint/flip for every video frame.
 media_live_refresh:
     push rax
     push rbx
     push rcx
     push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
 
     mov rbx, WINDOW_POOL_ADDR
     xor ecx, ecx
@@ -4332,6 +4390,7 @@ media_live_refresh:
     mov edi, [rbx + WIN_OFF_ID]
     call l3_slot_base
     mov rdx, rax
+    mov r9, rax
     cmp dword [rdx + APP_SLOT_BMP_FILE_OFF], NBA1_MAGIC
     jne .next
     cmp dword [rdx + APP_SLOT_BMP_FILE_OFF + 12], 1    ; frame_count
@@ -4341,6 +4400,75 @@ media_live_refresh:
     cmp dword [rdx + app_hl_media_mp_paused - app_blob_start], 0
     jne .next
 
+    cmp dword [rdx + app_hl_media_mp_seek_to - app_blob_start], 0
+    jne .wake
+
+    mov r8, [rdx + app_hl_media_mp_last_tick - app_blob_start]
+    test r8, r8
+    jz .wake
+
+    ; interval_ticks = max(1, 100 / fps). This preserves native clip FPS up to
+    ; the 100 Hz PIT cadence.
+    mov eax, 100
+    xor edx, edx
+    mov edi, [r9 + APP_SLOT_BMP_FILE_OFF + 16]
+    div edi
+    test eax, eax
+    jnz .interval_ok
+    mov eax, 1
+.interval_ok:
+    mov r10, [tick_count]
+    sub r10, r8
+    cmp r10d, eax
+    jb .next
+
+.wake:
+    cmp byte [scene_dirty], 0
+    jne .mark_scene_dirty
+    test qword [rbx + WIN_OFF_FLAGS], WF_FOCUSED
+    jz .mark_scene_dirty
+    call cursor_hide
+    mov byte [media_direct_present], 1
+    mov byte [media_direct_presented], 0
+    mov rdi, rbx
+    call app_media_draw
+    mov byte [media_direct_present], 0
+    cmp byte [media_direct_presented], 1
+    je .direct_presented
+    mov edi, [rbx + WIN_OFF_X]
+    add edi, BORDER_WIDTH
+    mov esi, [rbx + WIN_OFF_Y]
+    add esi, TITLEBAR_HEIGHT
+    mov edx, [rbx + WIN_OFF_W]
+    sub edx, BORDER_WIDTH * 2
+    mov ecx, [rbx + WIN_OFF_H]
+    sub ecx, TITLEBAR_HEIGHT
+    sub ecx, BORDER_WIDTH
+    call render_mark_dirty
+    call render_save_dirty_backbuffer
+    call render_flush
+    jmp .draw_cursor_done
+.direct_presented:
+    ; Video pixels and fill-rect controls were already mirrored to GOP/VRAM.
+    ; Flush only the small control strip so draw_string time text is visible.
+    mov edi, [rbx + WIN_OFF_X]
+    add edi, BORDER_WIDTH
+    mov esi, [rbx + WIN_OFF_Y]
+    add esi, [rbx + WIN_OFF_H]
+    sub esi, BORDER_WIDTH
+    sub esi, 26
+    mov edx, [rbx + WIN_OFF_W]
+    sub edx, BORDER_WIDTH * 2
+    mov ecx, 26
+    call render_mark_dirty
+    call render_save_dirty_backbuffer
+    call render_flush
+.draw_cursor_done:
+    mov edi, [mouse_x]
+    mov esi, [mouse_y]
+    call cursor_draw
+    jmp .done
+.mark_scene_dirty:
     mov byte [scene_dirty], 1
     jmp .done
 .next:
@@ -4348,6 +4476,11 @@ media_live_refresh:
     inc ecx
     jmp .scan
 .done:
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
     pop rdx
     pop rcx
     pop rbx

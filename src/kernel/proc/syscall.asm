@@ -3062,6 +3062,53 @@ kernel_panic_shadow:
     hlt
     jmp .kps_halt
 
+%ifdef ENABLE_SHADOW_STACK_POC
+; ----------------------------------------------------------------------------
+; shadow_stack_poc_run - build-gated proof harness for the kernel shadow stack.
+; Called once from kmain after l3_install_syscall_stack_pt (so the slot-0
+; syscall stack and its parallel shadow page are mapped). It switches RSP onto
+; slot 0's syscall stack, calls a shadow-protected stub that deliberately
+; smashes its own saved return address, and confirms KEPILOGUE traps to
+; kernel_panic_shadow. Serial output:
+;   "POCS"            harness started
+;   "SHADOW <bad> ! <expected>" + halt   -> guard working (expected outcome)
+;   "POCF"            corruption NOT caught -> guard broken (regression)
+; Never compiled into release builds (see build_uefi.ps1 -ShadowStackPoc).
+; ----------------------------------------------------------------------------
+extern l3_syscall_stack_top
+global shadow_stack_poc_run
+shadow_stack_poc_run:
+    SER 'P'
+    SER 'O'
+    SER 'C'
+    SER 'S'
+    SER 13
+    SER 10
+    mov [rel shadow_poc_saved_rsp], rsp
+    xor edi, edi
+    call l3_syscall_stack_top           ; rax = slot 0 syscall stack top (mapped)
+    mov rsp, rax
+    call shadow_poc_trip                ; expected: never returns (panics)
+    ; Reached only if the shadow check FAILED to fire.
+    mov rsp, [rel shadow_poc_saved_rsp]
+    SER 'P'
+    SER 'O'
+    SER 'C'
+    SER 'F'
+    SER 13
+    SER 10
+    ret
+
+; Shadow-protected frame: KPROLOGUE mirrors the true return address into the
+; parallel shadow page, we then overwrite the on-stack copy, and KEPILOGUE
+; must detect the divergence before returning.
+shadow_poc_trip:
+    KPROLOGUE
+    mov rax, 0xDEADBEEFCAFEBABE
+    mov [rsp], rax                      ; smash the saved return address
+    KEPILOGUE                           ; -> kernel_panic_shadow on mismatch
+%endif
+
 ; --- Data/BSS Sections moved here ---
 section .data
 global syscall_count
@@ -3069,6 +3116,9 @@ syscall_count: dq 0
 align 8
 global kernel_canary
 kernel_canary: dq 0
+%ifdef ENABLE_SHADOW_STACK_POC
+shadow_poc_saved_rsp: dq 0
+%endif
 sc_net_ping_busy: db 0
 sc_net_tcp_busy: db 0
 sc_net_dns_busy: db 0
