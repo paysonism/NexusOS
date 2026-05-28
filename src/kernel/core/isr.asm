@@ -28,6 +28,9 @@ extern trace_dump_serial
 extern trace_dump_screen
 extern l3_app_arena_base_v
 extern l3_app_arena_size_v
+extern l3_syscall_stacks
+extern kernel_canary
+extern kernel_panic_canary
 
 ; ============================================================================
 ; Exception ISR Stubs (0-31)
@@ -75,27 +78,99 @@ FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
     lock inc dword [rel nested_exc_count]
     cmp dword [rel nested_exc_count], 1
     ja isr_nested_halt
-    
+
+    sub rsp, 8                                  ; canary alignment pad
+    push qword [rel kernel_canary]              ; canary push
     PUSH_ALL
+
+    ; Stack-guard fast path: on a page fault whose CR2 falls on a per-slot
+    ; user-stack guard page (one 4KB page below the user stack of any of
+    ; the APP_SLOT_COUNT slots), log "STKG=<slot>" and abort the slot
+    ; instead of the verbose register dump. Falls through to the dump for
+    ; every other fault.
+    cmp qword [rsp + 136], 14
+    jne .not_stack_guard
+    mov rax, cr2
+    mov r10, [rel l3_app_arena_base_v]
+    sub rax, r10
+    jc .check_syscall_guard
+    mov r10, rax
+    shr r10, 21                        ; r10 = slot index
+    cmp r10, APP_SLOT_COUNT
+    jae .check_syscall_guard
+    and rax, APP_SLOT_SIZE - 1
+    and rax, ~0xFFF                    ; page-aligned offset within slot
+    cmp rax, L3_SLOT_USER_STACK_GUARD_OFF
+    jne .check_syscall_guard
+    SER 'S'
+    SER 'T'
+    SER 'K'
+    SER 'G'
+    SER '='
+    mov rdi, r10
+    call ser_print_hex64
+    SER 13
+    SER 10
+    ; If from ring 3, hand off to the existing slot-abort tail. From ring 0
+    ; this is a kernel bug — halt loudly (the nested-exc guard already fired).
+    mov rax, [rsp + 160]               ; saved CS
+    and rax, 3
+    cmp rax, 3
+    je .exc_ring3_abort
+    jmp isr_nested_halt
+.check_syscall_guard:
+    ; Per-slot syscall-stack guard. l3_install_syscall_stack_pt clears
+    ; PAGE_PRESENT on the two guard pages of each MAX_WINDOWS * STRIDE-byte
+    ; slot (+0x0000 below the shadow stack, +0x2000 below the syscall stack);
+    ; an overflow off the bottom of either stack lands here. Syscall stacks
+    ; are kernel-context only, so a hit from anywhere means kernel halt
+    ; after logging the slot id.
+    mov rax, cr2
+    mov r10, l3_syscall_stacks
+    sub rax, r10
+    jc .not_stack_guard
+    mov r10, MAX_WINDOWS * L3_SYSCALL_STACK_STRIDE
+    cmp rax, r10
+    jae .not_stack_guard
+    mov r10, rax
+    shr r10, 14                        ; r10 = slot index (STRIDE = 16384 = 1<<14)
+    and rax, L3_SYSCALL_STACK_STRIDE - 1
+    and rax, ~0xFFF                    ; page-aligned offset within slot
+    cmp rax, 0x2000
+    je .syscall_guard_hit              ; +0x2000 guard (below syscall stack)
+    test rax, rax
+    jnz .not_stack_guard               ; non-zero & not 0x2000 = real stack page
+.syscall_guard_hit:
+    SER 'S'
+    SER 'Y'
+    SER 'S'
+    SER 'G'
+    SER '='
+    mov rdi, r10
+    call ser_print_hex64
+    SER 13
+    SER 10
+    jmp isr_nested_halt
+.not_stack_guard:
 
     ; Print Info: X<#>[@<RIP>#<CS>!<RSP>]
     SER 'X'
-    mov rdi, [rsp + 120]
-    call ser_print_hex64
-    SER '@'
     mov rdi, [rsp + 136]
     call ser_print_hex64
+    SER '@'
+    mov rdi, [rsp + 152]
+    call ser_print_hex64
     SER '#'
-    mov rdi, [rsp + 144]
+    mov rdi, [rsp + 160]
     call ser_print_hex64
     SER 'E'
-    mov rdi, [rsp + 128]
+    mov rdi, [rsp + 144]
     call ser_print_hex64
     SER 'R'
     mov rdi, cr2
     call ser_print_hex64
     SER '!'
-    mov rdi, [rsp + 160]
+    mov rdi, [rsp + 176]
     call ser_print_hex64
     SER 13
     SER 10
@@ -161,7 +236,7 @@ FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
     mov dword [rdi], 0x000000FF
     mov dword [rdi+4], 0x000000FF
     mov dword [rdi+8], 0x000000FF
-    mov rax, [rsp + 120]
+    mov rax, [rsp + 136]
     shl rax, 2
     add rax, 16
     add rdi, rax
@@ -169,19 +244,29 @@ FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
 
     ; If exception from Ring 3 (CS[1:0] == 3), abort the app callback
     ; instead of iretq-ing back to the faulting Ring 3 instruction.
-    mov rax, [rsp + 144]     ; saved CS on exception frame (after PUSH_ALL: 15 regs*8=120, then int#=8, errcode=8, rip=8, cs offset)
+    mov rax, [rsp + 160]     ; saved CS on exception frame (after PUSH_ALL: 15 regs*8=120, then canary+pad=16, then int#=8, errcode=8, rip=8, cs offset)
     and rax, 3
     cmp rax, 3
     je .exc_ring3_abort
 
     POP_ALL
-    add rsp, 16              ; Pop error code and interrupt number
+    mov rax, [rsp]                              ; canary check
+    cmp rax, [rel kernel_canary]
+    jne .isr_canary_bad
+    add rsp, 32              ; Pop canary, pad, error code, interrupt number
     lock dec dword [rel nested_exc_count]
     iretq
+.isr_canary_bad:
+    mov rdi, rax
+    lea rsi, [rel .isr_canary_bad]
+    jmp kernel_panic_canary
 
 .exc_ring3_abort:
     POP_ALL
-    add rsp, 16              ; RSP now points at the user RIP in the CPU frame.
+    mov rax, [rsp]                              ; canary check
+    cmp rax, [rel kernel_canary]
+    jne .isr_r3_canary_bad
+    add rsp, 32              ; Pop canary, pad, errcode, int#; RSP now at user RIP.
     mov rax, [rsp]
     sub rax, [rel l3_app_arena_base_v]
     jc .exc_ring3_slot_zero
@@ -196,6 +281,10 @@ FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
     push rax                 ; call_app_l3_return expects the app slot at [rsp].
     extern call_app_l3_return
     jmp call_app_l3_return
+.isr_r3_canary_bad:
+    mov rdi, rax
+    lea rsi, [rel .isr_r3_canary_bad]
+    jmp kernel_panic_canary
 
 ; ============================================================================
 ; IRQ Stubs (0-15 -> vectors 32-47)
@@ -216,15 +305,18 @@ IRQ_STUB 12, 44    ; PS/2 Mouse
 IRQ_STUB 13, 45    ; FPU
 IRQ_STUB 14, 46    ; Primary ATA
 IRQ_STUB 15, 47    ; Secondary ATA
+IRQ_STUB 17, 49    ; SMP workqueue wake IPI
 IRQ_STUB 18, 50    ; Advanced Touchpad (APIC)
 
 ; Common IRQ handler
 ; auto-wrapped (FN_BEGIN emits global): global irq_common_stub
 FN_DECL irq_common_stub, 0, 0, FN_RET_SCALAR
+    sub rsp, 8                                  ; canary alignment pad
+    push qword [rel kernel_canary]              ; canary push
     PUSH_ALL
 
     ; Get IRQ number from interrupt vector on stack
-    mov rax, [rsp + 120]     ; Interrupt vector number
+    mov rax, [rsp + 136]     ; Interrupt vector number
 
     ; Dispatch to device-specific handler
     cmp rax, 32
@@ -233,6 +325,8 @@ FN_DECL irq_common_stub, 0, 0, FN_RET_SCALAR
     je .irq_keyboard
     cmp rax, 44
     je .irq_mouse
+    cmp rax, 49
+    je .irq_wq_wake
     cmp rax, 50
     je .irq_apic_touchpad
 
@@ -261,6 +355,10 @@ FN_DECL irq_common_stub, 0, 0, FN_RET_SCALAR
     call pic_eoi_master
     jmp .done
 
+.irq_wq_wake:
+    call apic_eoi
+    jmp .done
+
 .send_eoi:
     ; Check if slave PIC needs EOI (IRQ >= 40)
     cmp rax, 40
@@ -280,8 +378,15 @@ FN_DECL irq_common_stub, 0, 0, FN_RET_SCALAR
 
 .done:
     POP_ALL
-    add rsp, 16              ; Pop error code and interrupt number
+    mov rax, [rsp]                              ; canary check
+    cmp rax, [rel kernel_canary]
+    jne .irq_canary_bad
+    add rsp, 32              ; Pop canary, pad, error code, interrupt number
     iretq
+.irq_canary_bad:
+    mov rdi, rax
+    lea rsi, [rel .irq_canary_bad]
+    jmp kernel_panic_canary
 
 isr_nested_halt:
     SER '!'

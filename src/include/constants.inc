@@ -120,7 +120,19 @@ COLOR_START_HOVER    equ COLOR_SURFACE_2
 MAX_WINDOWS         equ APP_SLOT_COUNT
 WINDOW_STRUCT_SIZE  equ 256          ; Bytes per window struct
 L3_USER_STACK_SIZE  equ 16384        ; 16 KB user stack per L3 window callback context
-L3_SYSCALL_STACK_SIZE equ 4096       ; 4 KB syscall stack per L3 context
+L3_SYSCALL_STACK_SIZE equ 4096       ; 4 KB usable syscall stack per L3 context
+; Per-slot footprint in l3_syscall_stacks (16 KiB stride, two guard pages):
+;   +0x0000  guard page      (PAGE_PRESENT cleared)
+;   +0x1000  shadow stack    (4 KiB, parallel return-addr mirror; see
+;                             src/include/shadow_stack.inc)
+;   +0x2000  guard page      (PAGE_PRESENT cleared)
+;   +0x3000  syscall stack   (4 KiB usable; RSP_top = base + (i+1)*STRIDE)
+; Both guards are punched by l3_install_syscall_stack_pt. The syscall stack
+; occupies the top 4 KiB; an overflow off its bottom faults into the +0x2000
+; guard. The shadow address for any syscall-stack slot is (rsp ^ 0x2000) —
+; the stride is 16 KiB-aligned so that XOR maps the live stack page to its
+; mirror page without leaving the slot.
+L3_SYSCALL_STACK_STRIDE equ 16384
 TITLEBAR_HEIGHT     equ 24
 BORDER_WIDTH        equ 2
 CLOSE_BTN_SIZE      equ 18

@@ -22,6 +22,7 @@ extern app_terminal_kernel_key
 extern app_blob_start
 extern app_blob_end
 extern app_l3_done_trampoline
+extern handle_table_clear
 ; Variables moved to the end of file to avoid segment clobbering in monolithic build.
 
 L3_APP_CODE_OFF      equ 512
@@ -31,11 +32,22 @@ L3_SLOT_META_OFF     equ 0
 L3_SLOT_MAGIC_OFF    equ 0
 L3_SLOT_TERM_CTX_OFF equ 160
 L3_SLOT_USER_STACK_TOP equ (L3_SHADOW_WIN_OFF - 16)
+; Per-slot user-stack-top randomization bounds (in-slot offset).
+; HIGH = legacy fixed top (just below shadow window, 16B-aligned).
+; LOW  = guard-floor invariant: lowest reachable byte (top - L3_USER_STACK_SIZE)
+;        must stay >= L3_SLOT_USER_STACK_GUARD_OFF + 0x1000, so the fixed guard
+;        PTE at page 0x1FA always sits one page below the live stack. At
+;        LOW = 0x1FF000 the lowest byte is exactly 0x1FB000, one page above
+;        the guard — do not lower LOW without also moving the guard PTE.
+L3_SLOT_USTACK_TOP_HIGH equ L3_SLOT_USER_STACK_TOP
+L3_SLOT_USTACK_TOP_LOW  equ (L3_SLOT_USER_STACK_GUARD_OFF + 0x1000 + L3_USER_STACK_SIZE)
+L3_SLOT_USTACK_TOP_RANGE equ (L3_SLOT_USTACK_TOP_HIGH - L3_SLOT_USTACK_TOP_LOW)
 TERM_CTX_X           equ 160
 TERM_CTX_Y           equ 168
 TERM_CTX_W           equ 176
 TERM_CTX_H           equ 184
 L3_SLOT_MAGIC        equ 0x30544F4C5358414E
+l3_syscall_stacks    equ L3_SYSCALL_STACK_ADDR
 
 %if L3_APP_BLOB_COPY_CAP > L3_SHADOW_WIN_OFF
 %error "L3 app blob copy cap must stay below the shadow/window/stack area"
@@ -124,6 +136,8 @@ FN_DECL enter_usermode, 0, 0, FN_RET_SCALAR
 .slot_ok:
     mov edi, r11d
     call l3_apply_slot_isolation
+    mov edi, r11d
+    call l3_apply_wx_policy
     push qword GDT64_USER_DATA
     mov edi, r11d
     call l3_user_stack_top
@@ -152,29 +166,203 @@ FN_BEGIN l3_slot_base, 0, 0, FN_RET_SCALAR
     add rax, [rel l3_app_arena_base_v]
     ret
 
-; l3_user_stack_top - EDI=slot -> RAX=top of user stack
+; l3_user_stack_top - EDI=slot -> RAX=top of user stack.
+; Per-slot offset is sampled in l3_randomize_user_stack_top (called from
+; l3_copy_app_blob_to_slot on every slot (re)init). A zero entry means the
+; slot has not been initialized yet; fall back to the fixed legacy top so
+; pre-slot-load callers (e.g. enter_usermode used by early tests) still work.
 FN_BEGIN l3_user_stack_top, 0, 0, FN_RET_SCALAR
-    mov eax, edi
-    imul rax, L3_USER_STACK_SIZE
-    mov rdx, [rel l3_app_arena_base_v]
-    imul rcx, rdi, APP_SLOT_SIZE
-    add rdx, rcx
-    add rdx, L3_SLOT_USER_STACK_TOP
-    sub rdx, L3_USER_STACK_SIZE
-    mov rax, rdx
-    add rax, L3_USER_STACK_SIZE
+    mov ecx, edi
+    mov rax, [rel l3_slot_ustack_off + rcx*8]
+    test rax, rax
+    jnz .l3_ust_have_off
+    mov rax, L3_SLOT_USTACK_TOP_HIGH
+.l3_ust_have_off:
+    imul rdx, rdi, APP_SLOT_SIZE
+    add rax, rdx
+    add rax, [rel l3_app_arena_base_v]
     and rax, -16
+    ret
+
+; l3_randomize_user_stack_top - EDI=slot.
+; Samples a fresh 16B-aligned in-slot stack-top offset in
+; [L3_SLOT_USTACK_TOP_LOW, L3_SLOT_USTACK_TOP_HIGH] from RDTSC ^ RDRAND
+; (RDRAND failure falls back to RDTSC, matching kernel_canary_init). Stores
+; the offset in l3_slot_ustack_off[slot] for the slot's lifetime.
+FN_BEGIN l3_randomize_user_stack_top, 0, 0, FN_RET_VOID
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push r8
+    mov r8d, edi
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    mov eax, 1
+    cpuid
+    test ecx, 1 << 30
+    jz .lrust_no_rdrand
+    mov ecx, 8
+.lrust_try_rdrand:
+    rdrand rax
+    jc .lrust_have_rdrand
+    dec ecx
+    jnz .lrust_try_rdrand
+    jmp .lrust_no_rdrand
+.lrust_have_rdrand:
+    xor rbx, rax
+.lrust_no_rdrand:
+    ; Reduce rbx to [0, RANGE] then align down to 16B and add LOW.
+    mov rax, rbx
+    xor rdx, rdx
+    mov rcx, L3_SLOT_USTACK_TOP_RANGE + 1
+    div rcx                              ; rdx = rbx mod (RANGE+1)
+    and rdx, -16
+    add rdx, L3_SLOT_USTACK_TOP_LOW
+    mov ecx, r8d
+    mov [rel l3_slot_ustack_off + rcx*8], rdx
+    pop r8
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    FN_END l3_randomize_user_stack_top
     ret
 
 ; l3_syscall_stack_top - EDI=slot -> RAX=top of syscall stack
 FN_BEGIN l3_syscall_stack_top, 0, 0, FN_RET_SCALAR
     mov eax, edi
-    imul rax, L3_SYSCALL_STACK_SIZE
-    lea rdx, [rel l3_syscall_stacks]
+    imul rax, L3_SYSCALL_STACK_STRIDE
+    mov rdx, L3_SYSCALL_STACK_ADDR
     add rax, rdx
-    add rax, L3_SYSCALL_STACK_SIZE
+    add rax, L3_SYSCALL_STACK_STRIDE       ; top = base + (i+1)*STRIDE; syscall stack is the top 4 KiB of the slot
     and rax, -16
     ret
+
+; l3_install_syscall_stack_pt - split the PDE covering l3_syscall_stacks into
+; 4 KiB pages so per-slot guard pages can be punched. Idempotent: safe to call
+; multiple times. Must run after paging is active and before any syscall (so
+; called from kmain before syscall_init).
+;
+; Algorithm:
+;   1. pde_idx = l3_syscall_stacks >> 21
+;   2. Walk CR3 -> PML4[0] -> PDPT[0] -> PD0 (BIOS PD0=0x72000, UEFI=0x73000,
+;      so we follow the pointers rather than hardcoding).
+;   3. Populate SYSCALL_STACK_PT_BASE with 512 PTEs identity-mapping the
+;      2 MiB region at (pde_idx << 21), supervisor + writable + NX.
+;   4. Clear PAGE_PRESENT on the two guard pages of each MAX_WINDOWS-sized
+;      slot (slot stride = L3_SYSCALL_STACK_STRIDE; guards at +0x0000 and
+;      +0x2000 bracket the shadow stack and the syscall stack respectively).
+;   5. Replace PD0[pde_idx] with SYSCALL_STACK_PT_BASE | PRESENT|WRITABLE
+;      (supervisor — kernel-only region).
+;   6. Flush TLB (mov cr3, cr3).
+FN_BEGIN l3_install_syscall_stack_pt, 0, 0, FN_RET_VOID
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    push r9
+
+    mov rbx, L3_SYSCALL_STACK_ADDR
+    mov rcx, rbx
+    shr rcx, 21                          ; rcx = pde_idx
+    cmp rcx, 512
+    jae .ist_done                        ; outside PD0 — bail (>1 GiB kernel)
+
+    ; Verify the whole 96 KiB array fits in one PDE (alignb 0x20000 guarantees this).
+    mov rdx, rbx
+    add rdx, MAX_WINDOWS * L3_SYSCALL_STACK_STRIDE - 1
+    shr rdx, 21
+    cmp rdx, rcx
+    jne .ist_done
+
+    ; Walk CR3 -> PML4[0] -> PDPT[0] -> PD0 base.
+    mov rdi, PAGE_TABLE_ADDR             ; CR3 / PML4
+    mov r8, [rdi]                        ; PML4[0]
+    and r8, ~0xFFF
+    mov r9, [r8]                         ; PDPT[0]
+    and r9, ~0xFFF                       ; r9 = PD0 physical base
+
+    ; Populate the syscall-stack PT: 512 PTEs over [pde<<21, (pde+1)<<21).
+    mov rdi, SYSCALL_STACK_PT_BASE
+    mov rdx, rcx
+    shl rdx, 21                          ; physical base of this PDE
+    mov rsi, 512
+.ist_fill_pt:
+    mov rax, rdx
+    or rax, 0x03                         ; PRESENT | WRITABLE (supervisor — no USER)
+    bts rax, 63                          ; NX (kernel data region)
+    mov [rdi], rax
+    add rdx, 0x1000
+    add rdi, 8
+    dec rsi
+    jnz .ist_fill_pt
+
+    ; Clear PAGE_PRESENT on the two guard pages of each 16 KiB slot: one at
+    ; slot offset +0x0000 (below the shadow stack) and one at +0x2000 (below
+    ; the syscall stack). The first slot's base PTE byte offset is
+    ; ((l3_syscall_stacks - (pde<<21)) / 0x1000) * 8; the +0x2000 guard is two
+    ; PTEs (= 16 bytes) further on; each subsequent slot is STRIDE/0x1000 PTEs
+    ; (= 32 bytes) further on.
+    mov rdx, rcx
+    shl rdx, 21
+    mov rax, rbx
+    sub rax, rdx                         ; offset of l3_syscall_stacks within PDE
+    shr rax, 12
+    shl rax, 3                           ; byte offset of slot 0's base PTE
+    add rax, SYSCALL_STACK_PT_BASE
+    mov rsi, MAX_WINDOWS
+.ist_clear_guard:
+    mov rdx, [rax]
+    and rdx, ~0x1                        ; clear PRESENT — guard at +0x0000
+    mov [rax], rdx
+    mov rdx, [rax + 16]
+    and rdx, ~0x1                        ; clear PRESENT — guard at +0x2000
+    mov [rax + 16], rdx
+    add rax, (L3_SYSCALL_STACK_STRIDE / 0x1000) * 8
+    dec rsi
+    jnz .ist_clear_guard
+
+    ; Swap PD0[pde_idx]: was 2 MiB large supervisor page; now points at the PT.
+    lea rdi, [r9 + rcx*8]
+    mov rax, SYSCALL_STACK_PT_BASE
+    or rax, 0x03                         ; PRESENT | WRITABLE (supervisor)
+    mov [rdi], rax
+
+    ; Flush TLB so the new mapping takes effect.
+    mov rax, cr3
+    mov cr3, rax
+
+%ifdef PROBE_SYSCALL_STACK_GUARD
+    ; One-shot probe: touch the guard page of slot 0. Expected behavior:
+    ; isr_common_stub catches the page fault, prints "SYSG=0000000000000000",
+    ; and halts via isr_nested_halt ("!!!"). Only built when explicitly asked
+    ; for via -dPROBE_SYSCALL_STACK_GUARD in build_uefi.ps1.
+    SER 'P'
+    SER 'R'
+    SER 'B'
+    SER 13
+    SER 10
+    lea rax, [rel l3_syscall_stacks]
+    mov qword [rax], 0          ; first byte of array == slot 0 guard page
+%endif
+
+.ist_done:
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
+    FN_END l3_install_syscall_stack_pt
 
 ; l3_apply_slot_isolation - EDI = active slot
 ; Walks the app-arena 4KB page tables and marks only the active slot's pages
@@ -216,9 +404,231 @@ FN_BEGIN l3_apply_slot_isolation, 0, 0, FN_RET_SCALAR
     pop rax
     ret
 
+; l3_apply_wx_policy - EDI = active slot
+; Walks the active slot's 4KB PT and enforces strict W^X per page:
+;
+;   * Manifest version 0 (default, set by l3_copy_app_blob_to_slot):
+;     no code range is committed yet. Every present page in the slot is
+;     forced W+NX — an unmanifested slot literally cannot execute any
+;     user code until it commits a manifest via SYS_WX_INSTALL_MANIFEST.
+;
+;   * Manifest version 1 (set by SYS_WX_INSTALL_MANIFEST after validation):
+;     strict W+NX everywhere in the slot, except pages whose slot-offset
+;     lies in [code_start_off, code_end_off) which become X+!W.
+;
+; Manifest versions other than 1, or installed bounds that fail the
+; defense-in-depth revalidation, collapse back to the version-0 posture
+; (whole slot W+NX). The function only touches the active slot's PT;
+; other slots' PTEs are left as l3_apply_slot_isolation set them. TLB is
+; flushed via CR3 reload before returning.
+;
+; Called from enter_usermode immediately after l3_apply_slot_isolation,
+; and from SYS_WX_INSTALL_MANIFEST when the running slot updates its
+; manifest. Preserves all caller registers.
+global l3_apply_wx_policy
+FN_BEGIN l3_apply_wx_policy, 0, 0, FN_RET_SCALAR
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+
+    mov r8d, edi                    ; r8d = active slot index
+    cmp r8d, MAX_WINDOWS
+    jae .wx_done                    ; bogus slot — bail
+
+    ; r9 = slot base virtual addr
+    mov eax, r8d
+    imul rax, APP_SLOT_SIZE
+    add rax, [rel l3_app_arena_base_v]
+    mov r9, rax
+
+    ; Read manifest. Magic must match — slots that have never been used by
+    ; l3_copy_app_blob_to_slot have undefined metadata, treat as legacy.
+    xor r10d, r10d                  ; r10d = effective manifest version
+    mov eax, r8d
+    mov rax, [l3_wx_manifest_ver + rax*8]
+    cmp rax, 1
+    jne .wx_have_ver
+    ; Validate manifest bounds (defense-in-depth — install syscall already
+    ; checks these, but re-validating on every activation costs ~4 compares
+    ; and protects against a future bug that bypasses the install path).
+    mov eax, r8d
+    mov rcx, [l3_wx_code_start + rax*8]
+    mov rdx, [l3_wx_code_end + rax*8]
+    test rcx, 0xFFF
+    jnz .wx_have_ver
+    test rdx, 0xFFF
+    jnz .wx_have_ver
+    cmp rcx, L3_APP_CODE_OFF
+    jb  .wx_have_ver
+    cmp rdx, L3_SHADOW_WIN_OFF
+    ja  .wx_have_ver
+    cmp rcx, rdx
+    jae .wx_have_ver
+    mov r10d, 1
+
+.wx_have_ver:
+    ; r10d == 0  -> no valid manifest: force whole slot W+NX (no code pages).
+    ; r10d == 1  -> manifest v1: [code_start_off, code_end_off) becomes X+!W.
+.wx_manifest_loop:
+    ; PT cursor for this slot: APP_ARENA_PT_BASE + slot * ARENA_SLOT_PAGES * 8
+    mov eax, r8d
+    imul rax, ARENA_SLOT_PAGES * 8
+    add rax, APP_ARENA_PT_BASE
+    mov r11, rax
+
+    ; Pre-load page-offset bounds for the legacy stack-W+NX region.
+    ; Stack lives in [L3_SLOT_USER_STACK_TOP - L3_USER_STACK_SIZE, APP_SLOT_SIZE);
+    ; force W+NX across those pages in BOTH manifest paths.
+    mov rbx, L3_SLOT_USER_STACK_TOP - L3_USER_STACK_SIZE
+    and rbx, ~0xFFF                 ; page-aligned
+
+    xor r12d, r12d                  ; page index within slot
+.wx_page_loop:
+    mov rax, [r11]
+    test al, 1                      ; PAGE_PRESENT?
+    jz .wx_next                     ; absent (guard page) — leave alone
+
+    ; rsi = byte offset of this page within slot
+    mov rsi, r12
+    shl rsi, 12
+
+    ; Stack region always W+NX.
+    cmp rsi, rbx
+    jae .wx_set_wnx
+
+    ; No manifest -> legacy permissive: blob pages keep their existing W+X
+    ; permissions. NexusHL apps interleave .text and .data in one section,
+    ; so forcing W+NX here breaks string scratches / .bss-style buffers.
+    ; Apps that want strict W^X opt in via SYS_WX_INSTALL_MANIFEST.
+    test r10d, r10d
+    jz .wx_next
+
+    mov ecx, r8d
+    cmp rsi, [l3_wx_code_start + rcx*8]
+    jb .wx_set_wnx
+    cmp rsi, [l3_wx_code_end + rcx*8]
+    jae .wx_set_wnx
+    ; Code page: clear W (bit 1) AND clear NX (bit 63) → X+!W.
+    and rax, -3                     ; ~2 sign-extended: clears bit 1
+    mov rdx, PAGE_NX
+    not rdx
+    and rax, rdx                    ; clears bit 63
+    mov [r11], rax
+    jmp .wx_next
+
+.wx_set_wnx:
+    ; Data/stack page: set W (bit 1) AND set NX (bit 63) → W+NX.
+    or rax, 2
+    mov rdx, PAGE_NX
+    or rax, rdx
+    mov [r11], rax
+
+.wx_next:
+    add r11, 8
+    inc r12d
+    cmp r12d, ARENA_SLOT_PAGES
+    jb .wx_page_loop
+
+    ; Flush TLB so the new permissions take effect before iretq / return.
+    mov rax, cr3
+    mov cr3, rax
+
+.wx_done:
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
 FN_DECL l3_install_app_done_trampoline, 0, 0, FN_RET_SCALAR
+    push rcx
+    mov ecx, edi
     call l3_slot_base
+    add rax, [rel l3_slot_code_slide + rcx*8]
     add rax, app_l3_done_trampoline - app_blob_start
+    pop rcx
+    ret
+
+; l3_randomize_code_slide - EDI=slot.
+; Samples a fresh page-aligned in-slot code slide in
+; [0, L3_APP_BLOB_COPY_CAP - blob_size] from RDTSC ^ RDRAND (RDRAND failure
+; falls back to RDTSC, matching l3_randomize_user_stack_top). Stores the slide
+; in l3_slot_code_slide[slot] for the slot's lifetime. The slide is added to
+; the slot base when the blob is copied in, so the same code/gadget addresses
+; differ across slots — an info leak in one slot reveals only that slot's
+; layout, not every slot's layout.
+FN_BEGIN l3_randomize_code_slide, 0, 0, FN_RET_VOID
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push r8
+    mov r8d, edi
+    ; max_slide_bytes = (L3_APP_BLOB_COPY_CAP - blob_size), floor-aligned to page.
+    ; If the blob is larger than the cap (shouldn't happen — l3_copy_app_blob_to_slot
+    ; truncates anyway), pin slide to 0.
+    mov rcx, L3_APP_BLOB_COPY_CAP
+    sub rcx, [rel app_blob_size_v]
+    jbe .lrcs_zero
+    shr rcx, 12                          ; rcx = number of page-positions - 1
+    inc rcx                              ; rcx = number of page-positions (>= 1)
+    ; Sample entropy.
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    mov eax, 1
+    cpuid
+    test ecx, 1 << 30
+    jz .lrcs_no_rdrand
+    mov ecx, 8
+.lrcs_try_rdrand:
+    rdrand rax
+    jc .lrcs_have_rdrand
+    dec ecx
+    jnz .lrcs_try_rdrand
+    jmp .lrcs_no_rdrand
+.lrcs_have_rdrand:
+    xor rbx, rax
+.lrcs_no_rdrand:
+    ; rdx:rax = rbx; divide by rcx (page-position count) -> remainder in rdx.
+    mov rax, L3_APP_BLOB_COPY_CAP
+    sub rax, [rel app_blob_size_v]
+    shr rax, 12
+    inc rax                              ; recompute (rcx was clobbered by cpuid)
+    mov rcx, rax
+    mov rax, rbx
+    xor rdx, rdx
+    div rcx                              ; rdx = rbx mod page-position-count
+    shl rdx, 12                          ; rdx = slide in bytes, page-aligned
+    mov ecx, r8d
+    mov [rel l3_slot_code_slide + rcx*8], rdx
+    jmp .lrcs_done
+.lrcs_zero:
+    mov ecx, r8d
+    mov qword [rel l3_slot_code_slide + rcx*8], 0
+.lrcs_done:
+    pop r8
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    FN_END l3_randomize_code_slide
     ret
 
 ; l3_copy_app_blob_to_slot - copy the built-in user blob into a slot arena
@@ -228,20 +638,62 @@ FN_BEGIN l3_copy_app_blob_to_slot, 0, 0, FN_RET_SCALAR
     push rdi
     push rsi
     push r8
+    push r9
+    mov r9d, edi
+    ; Re-randomize this slot's per-slot code slide first; the copy destination
+    ; below depends on it. Sliding the blob within the slot means a leak from
+    ; one slot doesn't reveal gadget addresses for any other slot.
+    mov edi, r9d
+    call l3_randomize_code_slide
+    mov edi, r9d
     call l3_slot_base
-    mov r8, rax
+    mov r8, rax                          ; r8 = unmodified slot base (return value)
     mov rdi, rax
+    mov eax, r9d
+    add rdi, [rel l3_slot_code_slide + rax*8]   ; copy destination = slot_base + slide
     mov rsi, [rel app_blob_base_v]
     mov rcx, [rel app_blob_size_v]
-    cmp rcx, L3_APP_BLOB_COPY_CAP
+    ; Available copy window shrinks by the slide.
+    mov rdx, L3_APP_BLOB_COPY_CAP
+    mov eax, r9d
+    sub rdx, [rel l3_slot_code_slide + rax*8]
+    cmp rcx, rdx
     jbe .copy_len_ok
-    mov rcx, L3_APP_BLOB_COPY_CAP
+    mov rcx, rdx
 .copy_len_ok:
     cld
     rep movsb
     mov rax, L3_SLOT_MAGIC
-    mov [r8 + L3_SLOT_MAGIC_OFF], rax
+    mov ecx, r9d
+    mov [l3_slot_live + rcx*8], rax
+    ; Install a default v1 W^X manifest spanning the legitimate code window
+    ; [L3_APP_CODE_OFF, L3_SHADOW_WIN_OFF). Without this, l3_apply_wx_policy
+    ; would force the whole slot W+NX and *no* user code could execute —
+    ; legacy NexusHL apps (which never call SYS_WX_INSTALL_MANIFEST) would
+    ; page-fault on the first instruction of their drawfn. Apps that want a
+    ; tighter range (e.g. excluding their .data tail) can still override via
+    ; SYS_WX_INSTALL_MANIFEST at runtime.
+    ; Zero this slot's W^X manifest. Per the spec in boot_memory.inc, manifest
+    ; version 0 means "legacy permissive" — blob pages stay W+X, only the
+    ; stack region is forced W+NX. Apps that want strict W^X opt in via
+    ; SYS_WX_INSTALL_MANIFEST. The actual permissive vs strict semantics
+    ; live in l3_apply_wx_policy below.
+    xor eax, eax
+    mov ecx, r9d
+    mov [l3_wx_manifest_ver + rcx*8], rax
+    mov [l3_wx_code_start + rcx*8], rax
+    mov [l3_wx_code_end + rcx*8], rax
+    ; Re-randomize this slot's user stack top so a leak from a sibling slot
+    ; does not predict our RSP layout for the new app's lifetime.
+    mov edi, r9d
+    call l3_randomize_user_stack_top
+    ; Phase 1 handle-table refactor: clear this slot's handle table so the
+    ; new app starts with no inherited handles from the previous occupant.
+    ; Phase 2 will wire syscalls (FAT16 dir-entry handles first) onto it.
+    mov rdi, r8
+    call handle_table_clear
     mov rax, r8
+    pop r9
     pop r8
     pop rsi
     pop rdi
@@ -260,11 +712,16 @@ FN_BEGIN l3_slot_resolve_app_ptr, 0, 0, FN_RET_SCALAR
     cmp rax, r9
     jae .slot_resolve_done
     push rdx
+    push rcx
     sub rax, r8
     mov edx, edi
     imul rdx, APP_SLOT_SIZE
     add rdx, [rel l3_app_arena_base_v]
     add rax, rdx
+    ; Apply this slot's per-slot code slide.
+    mov ecx, edi
+    add rax, [rel l3_slot_code_slide + rcx*8]
+    pop rcx
     pop rdx
 .slot_resolve_done:
     ret
@@ -284,8 +741,14 @@ FN_BEGIN l3_translate_target, 0, 0, FN_RET_SCALAR
     cmp rax, r9
     jae .try_slot_local
 
-    sub rax, r8
-    add rax, rsi
+    sub rax, r8                         ; rax = blob-relative offset
+    add rax, rsi                        ; + active slot base
+    ; Add this (active) slot's per-slot code slide. The slot index is
+    ; (rsi - arena_base) / APP_SLOT_SIZE.
+    mov r10, rsi
+    sub r10, [rel l3_app_arena_base_v]
+    shr r10, 21
+    add rax, [rel l3_slot_code_slide + r10*8]
     jmp .translate_done
 
 .try_slot_local:
@@ -298,9 +761,19 @@ FN_BEGIN l3_translate_target, 0, 0, FN_RET_SCALAR
     cmp rax, r9
     jae .translate_original
     sub rax, r8
-    and rax, APP_SLOT_SIZE - 1
+    and rax, APP_SLOT_SIZE - 1          ; in-slot offset
+    ; With per-slot code slide, the valid live-blob window is
+    ; [slide, slide + blob_size). Reject anything outside it.
+    mov r10, rsi
+    sub r10, [rel l3_app_arena_base_v]
+    shr r10, 21
+    mov r11, [rel l3_slot_code_slide + r10*8]
+    cmp rax, r11
+    jb .translate_original
+    sub rax, r11
     cmp rax, [rel app_blob_size_v]
     jae .translate_original
+    add rax, r11                        ; restore in-slot offset (incl. slide)
     add rax, rsi
     jmp .translate_done
 
@@ -384,7 +857,8 @@ FN_DECL call_app_l3, 0, 0, FN_RET_SCALAR
     call l3_slot_base
     mov [r12 + L3_RT_APP_BASE], rax
     mov rdx, L3_SLOT_MAGIC
-    cmp [rax + L3_SLOT_MAGIC_OFF], rdx
+    mov ecx, r11d
+    cmp [l3_slot_live + rcx*8], rdx
     je .translate_generic
     mov edi, r11d
     call l3_copy_app_blob_to_slot
@@ -417,6 +891,10 @@ FN_DECL call_app_l3, 0, 0, FN_RET_SCALAR
     lea r14, [rax + L3_SHADOW_WIN_OFF]
     mov [r12 + L3_RT_ARG0], r14
 .args_ready:
+%ifdef ENABLE_L3_CALL_TRACE
+    ; Per-call entry trace. Off by default: at one call per window message it
+    ; floods COM1 and the busy-wait OUT-0x3F8 stalls the render loop enough to
+    ; freeze the cursor. Re-enable with -dENABLE_L3_CALL_TRACE when needed.
     SER 'U'
     mov rdi, r13
     call ser_print_hex64
@@ -431,10 +909,13 @@ FN_DECL call_app_l3, 0, 0, FN_RET_SCALAR
     call ser_print_hex64
     SER 13
     SER 10
+%endif
 
     ; Restrict the arena so only this slot's pages are ring-3 accessible.
     mov edi, r11d
     call l3_apply_slot_isolation
+    mov edi, r11d
+    call l3_apply_wx_policy
 
     mov edi, r11d
     call l3_user_stack_top
@@ -479,6 +960,8 @@ FN_DECL call_app_l3_return, 0, 0, FN_RET_SCALAR
     call l3_runtime_ptr
     mov r12, rax
     mov r10, [r12 + L3_RT_KERNEL_RSP]
+%ifdef ENABLE_L3_CALL_TRACE
+    ; Paired with the entry trace above; same rationale for being opt-in.
     SER 'R'
     mov rdi, [r12 + L3_RT_KERNEL_RSP]
     call ser_print_hex64
@@ -496,6 +979,7 @@ FN_DECL call_app_l3_return, 0, 0, FN_RET_SCALAR
     call ser_print_hex64
     SER 13
     SER 10
+%endif
     mov rsp, [r12 + L3_RT_KERNEL_RSP]
     push qword [r12 + L3_RT_KERNEL_RFLAGS]
     popfq
@@ -533,9 +1017,28 @@ l3_app_arena_size_v: dq (MAX_WINDOWS * APP_SLOT_SIZE)
 
 ; --- BSS Section (Always last) ---
 section .bss
-alignb 4096
-global l3_syscall_stacks
-l3_syscall_stacks:   resb (MAX_WINDOWS * L3_SYSCALL_STACK_SIZE)
+; 128 KiB alignment guarantees the MAX_WINDOWS * 8 KiB = 96 KiB array fits
+; inside a single 2 MiB PDE, which lets l3_install_syscall_stack_pt swap
+; that PDE for a single 4 KiB page table.
+alignb 16
+global l3_wx_manifest_ver
+global l3_wx_code_start
+global l3_wx_code_end
+global l3_slot_live
+global l3_slot_ustack_off
+global l3_slot_code_slide
+l3_slot_live:        resq MAX_WINDOWS
+l3_wx_manifest_ver: resq MAX_WINDOWS
+l3_wx_code_start:   resq MAX_WINDOWS
+l3_wx_code_end:     resq MAX_WINDOWS
+; Per-slot user-stack-top in-slot offset (set by l3_randomize_user_stack_top
+; on every slot (re)load). Zero = uninitialized, falls back to legacy fixed top.
+l3_slot_ustack_off: resq MAX_WINDOWS
+; Per-slot code slide (set by l3_randomize_code_slide on every slot (re)load).
+; Page-aligned, in [0, L3_APP_BLOB_COPY_CAP - blob_size]. The blob is copied
+; to slot_base + slide, so a code-pointer leak in one slot only reveals that
+; slot's gadget addresses — sibling slots have independent slides.
+l3_slot_code_slide: resq MAX_WINDOWS
 alignb 16
 global l3_runtime
 ; Keep this in sync with L3_RT_SIZE above. A smaller allocation corrupts
