@@ -2528,6 +2528,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 
 ; R12=syscall table entry, PUSH_ALL frame on RSP. EAX=1 ok, 0 reject.
 sc_validate_from_table:
+    KPROLOGUE                           ; shadow-stack guard (syscall-stack only)
     push rbx
     push rcx
     push rdx
@@ -2647,13 +2648,14 @@ sc_validate_from_table:
     pop rdx
     pop rcx
     pop rbx
-    ret
+    KEPILOGUE
 
 ; R8D=arg index, returns selected argument in RDI.
 ; Frame: ret(8) + sc_validate_from_table pushes [rbx,rcx,rdx,rdi,rsi,r8,r13]
 ; (56) + outer call's ret(8) = 72 bytes between rsp and the PUSH_ALL frame.
 SC_VALIDATE_FRAME_OFF equ 72
 sc_load_arg_for_validation:
+    KPROLOGUE                           ; shadow-stack guard (syscall-stack only)
     cmp r8d, 0
     je .arg0
     cmp r8d, 1
@@ -2665,23 +2667,23 @@ sc_load_arg_for_validation:
     cmp r8d, 4
     je .arg4
     mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_R9]
-    ret
+    KEPILOGUE
 
 .arg0:
     mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_RDI]
-    ret
+    KEPILOGUE
 .arg1:
     mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_RSI]
-    ret
+    KEPILOGUE
 .arg2:
     mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_RDX]
-    ret
+    KEPILOGUE
 .arg3:
     mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_R10]
-    ret
+    KEPILOGUE
 .arg4:
     mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_R8]
-    ret
+    KEPILOGUE
 
 ; sc_resolve_dir_entry_arg — translate an untrusted user-supplied dir-entry
 ; handle into the matching real FAT16 root-cache entry pointer.
