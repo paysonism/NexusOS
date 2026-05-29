@@ -1,0 +1,29 @@
+name: Python tooling CI
+
+on:
+  push:
+    branches: ["master"]
+    paths: ["tools/**.py", ".github/workflows/python-ci.yml"]
+  pull_request:
+    branches: ["master"]
+    paths: ["tools/**.py", ".github/workflows/python-ci.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & compile (Python tooling)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Ruff
+        run: pip install ruff
+      - name: Ruff (lint)
+        run: ruff check tools --output-format=github
+        continue-on-error: true
+      - name: Byte-compile all tools
+        run: python -m compileall -q tools
