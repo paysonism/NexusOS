@@ -22,6 +22,8 @@ global fat16_list_dir
 extern ata_read_sectors
 extern ata_write_sectors
 extern ata_drive_sel
+extern kernel_canary
+extern kernel_panic_canary
 
 ; The FAT16 partition starts after the fixed BIOS kernel reservation.
 ; Keep this in constants.inc so the BIOS image builder and filesystem agree.
@@ -47,6 +49,10 @@ DIR_FIRST_CLUS_LO   equ 26        ; 2 bytes
 DIR_FILE_SIZE       equ 28         ; 4 bytes
 DIR_ENTRY_SIZE      equ 32
 
+; Snapshot-on-open (security_todo.md §5): per-slot captured dir-entry identity.
+; Layout per slot: name+ext[11] | first_cluster_lo (u16) | size (u32) = 17 bytes.
+FAT16_SNAP_STRIDE   equ 17
+
 ; Attributes
 ATTR_READ_ONLY      equ 0x01
 ATTR_HIDDEN         equ 0x02
@@ -62,6 +68,7 @@ ATTR_LFN            equ 0x0F
 FAT16_SECTOR_BUF    equ 0x1A00000   ; 512 byte sector buffer
 FAT16_FAT_CACHE     equ 0x1A01000   ; FAT table cache (up to 64KB)
 FAT16_ROOT_CACHE    equ 0x1A11000   ; Root directory cache (up to 32 sectors = 16KB)
+FAT16_ROOT_CACHE_CANARY equ FAT16_ROOT_CACHE + (FAT16_ROOT_CACHE_SECTORS * 512)
 FAT16_FILE_BUF      equ 0x1A21000   ; File read buffer (up to 64KB)
 FAT16_DIR_CACHE     equ 0x1A31000   ; Current directory listing cache
 %else
@@ -69,6 +76,7 @@ FAT16_DIR_CACHE     equ 0x1A31000   ; Current directory listing cache
 FAT16_SECTOR_BUF    equ 0xD00000   ; 512 byte sector buffer
 FAT16_FAT_CACHE     equ 0xD01000   ; FAT table cache (up to 64KB)
 FAT16_ROOT_CACHE    equ 0xD11000   ; Root directory cache (up to 32 sectors = 16KB)
+FAT16_ROOT_CACHE_CANARY equ FAT16_ROOT_CACHE + (FAT16_ROOT_CACHE_SECTORS * 512)
 FAT16_FILE_BUF      equ 0xD21000   ; File read buffer (up to 64KB)
 FAT16_DIR_CACHE     equ 0xD31000   ; Current directory listing cache
 %endif
@@ -224,6 +232,11 @@ FN_BEGIN fat16_init, 0, 0, FN_RET_SCALAR
     ja .init_fail
     call ata_read_sectors
 
+    ; Seed the root-cache guard now that kernel_canary is final, then verify the
+    ; initial load did not run past the 16KB extent.
+    call fat16_canary_seed
+    call fat16_canary_check
+
     ; Count files in root dir
     call fat16_count_root_files
 
@@ -240,6 +253,33 @@ FN_BEGIN fat16_init, 0, 0, FN_RET_SCALAR
     pop rcx
     pop rbx
     ret
+
+; Internal: seed the trailing guard qword that brackets the 16KB root/subdir
+; directory cache. ring-3 influences how much gets written into this fixed
+; buffer (on-disk root_sectors/root_entries from a user-supplied image, and
+; subdir cluster chains selected via fat16_change_dir), so a stray write past
+; the extent must be caught. Seeded once from kernel_canary after init.
+fat16_canary_seed:
+    push rax
+    mov rax, [rel kernel_canary]
+    mov [abs FAT16_ROOT_CACHE_CANARY], rax
+    pop rax
+    ret
+
+; Internal: verify the root-cache trailing guard; panic on mismatch. Called
+; after every cache fill ring-3 can shape. Saves the regs the panic ABI uses
+; so callers are unaffected on the good path.
+fat16_canary_check:
+    push rax
+    mov rax, [abs FAT16_ROOT_CACHE_CANARY]
+    cmp rax, [rel kernel_canary]
+    jne .fc_bad
+    pop rax
+    ret
+.fc_bad:
+    mov rdi, rax
+    lea rsi, [rel fat16_canary_check]
+    jmp kernel_panic_canary
 
 ; Internal: count valid files in root directory
 fat16_count_root_files:
@@ -743,6 +783,8 @@ FN_BEGIN fat16_write_file, 0, 0, FN_RET_SCALAR
     ; root directory or a loaded subdirectory.
     call fat16_flush_current_dir
 
+    ; Verify the directory-entry write did not corrupt the cache guard.
+    call fat16_canary_check
     ; Recount files
     call fat16_count_root_files
 
@@ -1265,7 +1307,9 @@ FN_BEGIN fat16_change_dir, 0, 0, FN_RET_SCALAR
     cmp edx, FAT16_ROOT_CACHE_SECTORS
     ja .cd_fail
     call ata_read_sectors
-    
+
+    ; Verify the contiguous root reload stayed within the cache extent.
+    call fat16_canary_check
     ; Reset file count
     call fat16_count_root_files
     xor eax, eax
@@ -1336,6 +1380,8 @@ FN_BEGIN fat16_change_dir, 0, 0, FN_RET_SCALAR
     jmp .cd_loop
 
 .cd_finish:
+    ; Verify the subdir cluster-chain load stayed within the cache extent.
+    call fat16_canary_check
     ; Recount files in new view
     call fat16_count_root_files
     xor eax, eax
@@ -1372,6 +1418,166 @@ FN_BEGIN fat16_get_file_size, 0, 0, FN_RET_SCALAR
 ; auto-wrapped (FN_BEGIN emits global): global fat16_sync_root
 FN_BEGIN fat16_sync_root, 0, 0, FN_RET_SCALAR
     call fat16_flush_current_dir
+    ret
+
+; ============================================================================
+; Snapshot-on-open (security_todo.md §5) — TOCTOU elimination for the
+; SYS_FS_ENTRY_INFO -> SYS_FS_READ sequence.
+;
+; SYS_FS_ENTRY_INFO resolves a per-slot dir-entry handle (carrying a
+; valid-entry INDEX) to the live FAT16 root/subdir-cache entry pointer and
+; copies {name, ext, attr, cluster, size} out by value. A later SYS_FS_READ
+; re-resolves the SAME index to whatever entry occupies that slot NOW. If a
+; rename / resize / delete (or a directory change) altered the entry between
+; the info call and the read, the index silently resolves to a DIFFERENT file
+; — a time-of-check/time-of-use window: the app validated file A, the kernel
+; reads file B.
+;
+; Defence: at SYS_FS_ENTRY_INFO, atomically capture the identifying fields
+; (name+ext, first cluster, size) of the resolved entry into a per-slot,
+; kernel-owned snapshot. At SYS_FS_READ, re-verify the live entry against that
+; snapshot; if it diverges, FAIL CLOSED (the read is rejected) — so a raced
+; rename/resize can never feed the app bytes from an entry it never inspected.
+;
+; Storage model mirrors the §7 per-slot net policy and slot_handle_quota[]:
+; parallel per-slot arrays in KERNEL BSS, OUTSIDE the ring-3 app arena, so an
+; app cannot forge or widen its own snapshot. Indexed by slot id
+; (0..APP_SLOT_COUNT-1). A per-slot "armed" byte (BSS-zero = not armed) gates
+; enforcement: a slot that never called SYS_FS_ENTRY_INFO reads exactly as
+; before (non-breaking). The 17-byte identity = name[11] | cluster[2] |
+; size[4].
+;
+; DISPATCHER WIRING (deferred — syscall.asm is owned by another change):
+;   * In .sc_fs_entry_info, AFTER sc_resolve_dir_entry_arg succeeds and RDI
+;     holds the kernel entry pointer:
+;         mov   esi, r15d            ; slot id
+;         mov   rdi, <kernel entry>  ; (already in RDI before the copy-out)
+;         call  fat16_entry_info_snapshot
+;   * In .sc_fs_read, AFTER sc_resolve_dir_entry_arg rewrites RDI to the kernel
+;     entry pointer and BEFORE fat16_read_file:
+;         mov   esi, r15d
+;         ; RDI = kernel entry ptr
+;         call  fat16_entry_snapshot_verify
+;         test  eax, eax
+;         jz    .sc_fs_read_reject
+;   Both register conventions below are chosen to drop straight into those two
+;   sites (RDI = entry ptr, ESI = slot) without disturbing the surrounding
+;   saved-arg frame. Until the wiring lands, the snapshot is never armed, so
+;   reads behave exactly as today.
+; ============================================================================
+
+; fat16_entry_info_snapshot — capture the identity of a resolved dir entry.
+;   RDI = kernel FAT16 dir-entry pointer (32-byte entry)
+;   ESI = slot id
+; Stores name[0..10] | first_cluster_lo (u16 @26) | size (u32 @28) into the
+; slot's snapshot and arms it. Out-of-range slot is ignored (no arm). Preserves
+; RDI/RSI. Clobbers RAX, RCX.
+; auto-wrapped (FN_BEGIN emits global): global fat16_entry_info_snapshot
+FN_BEGIN fat16_entry_info_snapshot, 0, 0, FN_RET_SCALAR
+    push rdi
+    push rsi
+    push rcx
+    push rdx
+    cmp esi, APP_SLOT_COUNT
+    jae .fs_snap_done
+    ; dest = fat16_entry_snap + slot * FAT16_SNAP_STRIDE
+    mov eax, esi
+    imul eax, FAT16_SNAP_STRIDE
+    lea rdx, [rel fat16_entry_snap]
+    add rdx, rax                          ; rdx = snapshot slot base
+    ; name+ext (11 bytes)
+    xor ecx, ecx
+.fs_snap_name:
+    cmp ecx, 11
+    jae .fs_snap_name_done
+    mov al, [rdi + rcx]
+    mov [rdx + rcx], al
+    inc ecx
+    jmp .fs_snap_name
+.fs_snap_name_done:
+    ; cluster_lo (u16 @26) -> snapshot +11
+    mov ax, [rdi + DIR_FIRST_CLUS_LO]
+    mov [rdx + 11], ax
+    ; size (u32 @28) -> snapshot +13
+    mov eax, [rdi + DIR_FILE_SIZE]
+    mov [rdx + 13], eax
+    ; arm this slot's snapshot
+    mov eax, esi
+    mov byte [rel fat16_entry_snap_armed + rax], 1
+.fs_snap_done:
+    pop rdx
+    pop rcx
+    pop rsi
+    pop rdi
+    ret
+
+; fat16_entry_snapshot_verify — verify a resolved dir entry against the slot's
+; armed snapshot before a read.
+;   RDI = kernel FAT16 dir-entry pointer (32-byte entry)
+;   ESI = slot id
+; Returns:
+;   EAX = 1 if the slot has NO armed snapshot (legacy/no-op), or the live entry
+;         still matches the captured identity (name | cluster | size).
+;   EAX = 0 if an armed snapshot exists and the live entry DIVERGED — FAIL
+;         CLOSED, the caller must reject the read.
+; Preserves RDI/RSI. Clobbers RAX, RCX, RDX.
+; auto-wrapped (FN_BEGIN emits global): global fat16_entry_snapshot_verify
+FN_BEGIN fat16_entry_snapshot_verify, 0, 0, FN_RET_SCALAR
+    push rdi
+    push rsi
+    push rcx
+    push rdx
+    cmp esi, APP_SLOT_COUNT
+    jae .fs_ver_allow                     ; bad slot -> treat as no policy
+    mov eax, esi
+    cmp byte [rel fat16_entry_snap_armed + rax], 0
+    je .fs_ver_allow                      ; not armed -> legacy allow
+    mov eax, esi
+    imul eax, FAT16_SNAP_STRIDE
+    lea rdx, [rel fat16_entry_snap]
+    add rdx, rax                          ; rdx = snapshot slot base
+    ; Compare name+ext (11 bytes)
+    xor ecx, ecx
+.fs_ver_name:
+    cmp ecx, 11
+    jae .fs_ver_name_done
+    mov al, [rdi + rcx]
+    cmp al, [rdx + rcx]
+    jne .fs_ver_deny
+    inc ecx
+    jmp .fs_ver_name
+.fs_ver_name_done:
+    ; cluster_lo (u16)
+    mov ax, [rdi + DIR_FIRST_CLUS_LO]
+    cmp ax, [rdx + 11]
+    jne .fs_ver_deny
+    ; size (u32)
+    mov eax, [rdi + DIR_FILE_SIZE]
+    cmp eax, [rdx + 13]
+    jne .fs_ver_deny
+.fs_ver_allow:
+    mov eax, 1
+    jmp .fs_ver_ret
+.fs_ver_deny:
+    xor eax, eax
+.fs_ver_ret:
+    pop rdx
+    pop rcx
+    pop rsi
+    pop rdi
+    ret
+
+; fat16_entry_snapshot_clear — disarm a slot's snapshot (e.g. on slot recycle
+; or an explicit close). Out-of-range slot ignored. ESI = slot id. Clobbers
+; RAX. Preserves RSI. (Provided for the recycle path to call; not yet wired —
+; the snapshot is also implicitly superseded the next time ENTRY_INFO arms it.)
+; auto-wrapped (FN_BEGIN emits global): global fat16_entry_snapshot_clear
+FN_BEGIN fat16_entry_snapshot_clear, 0, 0, FN_RET_SCALAR
+    cmp esi, APP_SLOT_COUNT
+    jae .fs_clr_done
+    mov eax, esi
+    mov byte [rel fat16_entry_snap_armed + rax], 0
+.fs_clr_done:
     ret
 
 ; ============================================================================
@@ -1514,3 +1720,14 @@ FN_BEGIN fat16_debug_dump_root, 0, 0, FN_RET_SCALAR
 .s_sig    db " Sig:", 0
 .s_files  db " Files:", 0
 .s_root   db " Root:", 0
+
+; ============================================================================
+; Snapshot-on-open per-slot storage (security_todo.md §5). KERNEL BSS, OUTSIDE
+; the ring-3 app arena, so an app cannot forge or widen its own snapshot.
+; BSS-zero => no slot armed (the non-breaking default). Indexed by slot id.
+; ============================================================================
+section .bss
+alignb 16
+fat16_entry_snap_armed: resb APP_SLOT_COUNT
+alignb 16
+fat16_entry_snap:       resb (FAT16_SNAP_STRIDE * APP_SLOT_COUNT)

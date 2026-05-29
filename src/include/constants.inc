@@ -41,6 +41,12 @@ SMP_CORE_STATE_SIZE equ 128
 SYSTEM_RESERVED_END equ (BOOT_ANIM_BUF_ADDR + BOOT_ANIM_BUF_SIZE)
 %endif
 
+; --- Media player per-window full-clip buffer ------------------------------
+; Upper bound on a single video's contiguous buffer (page_alloc_contig). Caps
+; how much physical RAM one media window can claim for a clip larger than its
+; 256 KiB slot buffer; clips above this play truncated rather than refusing.
+MEDIA_FULL_BUF_MAX_SZ equ 0x4000000   ; 64 MiB
+
 ; --- SMP process-manager core policy ---------------------------------------
 ; Cores 0 and 1 are reserved for "system" work: the BSP render loop, drivers,
 ; GUI, and high-priority kernel jobs. App processes default to the complement
@@ -115,6 +121,49 @@ COLOR_HIGHLIGHT      equ COLOR_ACCENT
 COLOR_CURSOR         equ COLOR_TEXT_PRIMARY
 COLOR_START_BTN      equ COLOR_SURFACE_1
 COLOR_START_HOVER    equ COLOR_SURFACE_2
+
+; --- Syscall rate limiting (security_todo.md §2) ---
+; Per-slot token bucket size, refilled by pit_handler every timer tick. At the
+; PIT tick rate this caps a slot to SC_BUDGET_PER_TICK * tick_rate syscalls/sec
+; — far below the millions a fuzzer/side-channel oracle needs, yet generous for
+; legitimate GUI apps. Stored as a word per slot (slot_sc_budget in syscall.asm)
+; so values up to 65535 are valid. 4096/tick @100Hz ~= 409600 calls/s ceiling.
+SC_BUDGET_PER_TICK  equ 4096
+
+; --- Slot teardown on suspect syscall return (security_todo.md §12) ---
+; Number of security-reason -1 returns (cap mismatch, validator reject, rate
+; reject) a single slot may accumulate before the dispatcher auto-kills it and
+; writes an audit entry. Rejections are otherwise silent and cost-free for an
+; attacker; capping them turns repeated probing into a self-terminating slot.
+; Stored as a word per slot (slot_sc_strikes in syscall.asm). Set comfortably
+; above the handful of benign rejects a legitimate app may trigger (e.g. a
+; closed-handle race) but well below a fuzzing run.
+SC_STRIKE_LIMIT     equ 16
+
+; --- Behavioral anomaly detector (security_todo.md §11) ---
+; The dispatcher keeps an always-on per-slot syscall histogram (syscall_trace.inc);
+; sc_anomaly_scan_all walks it on a coarse pit cadence and flags a slot whose
+; syscall MIX deviates from its app-class profile — e.g. a Notepad slot suddenly
+; hammering the W^X / JIT-alias surface. Because the histogram is bumped at
+; dispatch entry (before the cap gate), it counts *attempts*, so a sandboxed app
+; probing a forbidden high-risk syscall shows up even though every call is
+; cap-rejected. On a flag the detector drives the slot through the existing
+; §12 strike path (sc_record_strike), so repeated/excessive high-risk behaviour
+; throttles toward the same SC_STRIKE_LIMIT slot-kill — no new teardown path.
+;
+; ANOMALY_SCAN_PERIOD: scan cadence in PIT ticks (power of two so pit_handler
+; masks it with AND, like CODE_HASH_VERIFY_PERIOD). Coarser than the rate-limit
+; refill so the per-tick cost stays negligible.
+ANOMALY_SCAN_PERIOD equ 128
+; High-risk syscall budget per scan window for a slot WITHOUT the matching cap.
+; A slot that lacks CAP_WX has an expected W^X-syscall rate of zero, so even a
+; couple of attempts in a scan window is a real behavioral anomaly; allow a tiny
+; slack for a benign mis-call before charging a strike.
+ANOMALY_HIRISK_DENY_BUDGET  equ 2
+; High-risk syscall budget per scan window for a slot that legitimately HOLDS
+; the cap (e.g. a real JIT app granted CAP_WX). It may use the surface, but a
+; flood far above any sane JIT warm-up is still throttled. Generous headroom.
+ANOMALY_HIRISK_HOLD_BUDGET  equ 256
 
 ; --- Window Manager ---
 MAX_WINDOWS         equ APP_SLOT_COUNT

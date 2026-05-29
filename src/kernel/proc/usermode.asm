@@ -8,6 +8,7 @@ bits 64
 %include "macros.inc"
 %include "syscall_user.inc"
 %include "l3_runtime.inc"
+%include "smap.inc"
 
 extern ser_print_hex64
 extern app_terminal_blob_end
@@ -23,11 +24,18 @@ extern app_blob_start
 extern app_blob_end
 extern app_l3_done_trampoline
 extern handle_table_clear
+extern kernel_canary
 ; Variables moved to the end of file to avoid segment clobbering in monolithic build.
 
 L3_APP_CODE_OFF      equ 512
 L3_SHADOW_WIN_OFF    equ (APP_SLOT_SIZE - 512)
 L3_APP_BLOB_COPY_CAP equ L3_SHADOW_WIN_OFF
+; Ceiling for actual blob *placement* (base + slide + blob_size). Must stay at
+; or below the non-present user-stack guard page so a slid blob never overlaps
+; the guard page or the user stack/shadow-window tail above it. The slide range
+; and the copy-length clamp both use this, NOT L3_APP_BLOB_COPY_CAP — that one
+; only marks the shadow-window boundary.
+L3_APP_BLOB_PLACE_CAP equ L3_SLOT_USER_STACK_GUARD_OFF
 L3_SLOT_META_OFF     equ 0
 L3_SLOT_MAGIC_OFF    equ 0
 L3_SLOT_TERM_CTX_OFF equ 160
@@ -51,6 +59,9 @@ l3_syscall_stacks    equ L3_SYSCALL_STACK_ADDR
 
 %if L3_APP_BLOB_COPY_CAP > L3_SHADOW_WIN_OFF
 %error "L3 app blob copy cap must stay below the shadow/window/stack area"
+%endif
+%if L3_APP_BLOB_PLACE_CAP > L3_SLOT_USER_STACK_GUARD_OFF
+%error "L3 app blob placement cap must stay at/below the user-stack guard page"
 %endif
 
 section .text
@@ -138,6 +149,12 @@ FN_DECL enter_usermode, 0, 0, FN_RET_SCALAR
     call l3_apply_slot_isolation
     mov edi, r11d
     call l3_apply_wx_policy
+    ; FS/GS sanitization (security_todo.md §3). IRETQ reloads CS/SS but NOT
+    ; DS/ES/FS/GS, so without this the kernel data selector would stay in
+    ; fs/gs across the entry into ring 3. Load ring-3 selectors first; clobbers
+    ; ax only and nothing live here depends on it. (r10 = user RIP, r11d = slot
+    ; are untouched.)
+    SANITIZE_SEG_USER_EXIT
     push qword GDT64_USER_DATA
     mov edi, r11d
     call l3_user_stack_top
@@ -503,6 +520,17 @@ FN_BEGIN l3_apply_wx_policy, 0, 0, FN_RET_SCALAR
     cmp rsi, rbx
     jae .wx_set_wnx
 
+    ; Per-slot handle table is kernel-owned data living inside the legal code
+    ; window. It must stay writable (handle_table_clear/alloc/close update it)
+    ; and non-executable, so force W+NX regardless of the manifest. Without
+    ; this carve-out an app whose declared code range covers
+    ; L3_HANDLE_TABLE_OFF marks the page X+!W and the next kernel handle write
+    ; takes a ring-0 #PF that iretqs back into itself forever.
+    mov rdx, rsi
+    sub rdx, L3_HANDLE_TABLE_OFF
+    cmp rdx, (L3_HANDLE_TABLE_SZ + 0xFFF) & ~0xFFF
+    jb .wx_set_wnx
+
     ; No manifest -> legacy permissive: blob pages keep their existing W+X
     ; permissions. NexusHL apps interleave .text and .data in one section,
     ; so forcing W+NX here breaks string scratches / .bss-style buffers.
@@ -540,6 +568,20 @@ FN_BEGIN l3_apply_wx_policy, 0, 0, FN_RET_SCALAR
     mov rax, cr3
     mov cr3, rax
 
+    ; Code-range hash-on-install (security_todo.md §12). The first time a slot
+    ; presents a valid v1 manifest (r10d==1), capture the FNV-1a hash of its
+    ; X-page bytes as the integrity baseline. Subsequent activations skip this
+    ; (valid flag set); pit_handler re-verifies the baseline periodically. We
+    ; baseline here rather than in the install syscall so the hook stays
+    ; self-contained in usermode.asm and covers every path that commits a code
+    ; range (enter_usermode + SYS_WX_INSTALL_MANIFEST both reach this walk).
+    test r10d, r10d
+    jz .wx_done
+    cmp byte [l3_code_hash_valid + r8], 0
+    jne .wx_done
+    mov edi, r8d
+    call l3_code_hash_install
+
 .wx_done:
     pop r12
     pop r11
@@ -553,6 +595,183 @@ FN_BEGIN l3_apply_wx_policy, 0, 0, FN_RET_SCALAR
     pop rax
     ret
 
+; ============================================================================
+; Code-range integrity hashing (security_todo.md §12).
+;
+; THREAT: an unintended W mapping landing on a code (X) page — e.g. a future
+; JIT-alias bug or any kernel-write primitive — could mutate executable bytes
+; after they were validated, without ever flipping a permission bit we scrub.
+; l3_apply_wx_policy guards the *permissions*; this guards the *contents*.
+;
+; APPROACH: when a slot first commits a valid v1 manifest, hash every byte of
+; its executable code range (FNV-1a; same constants as measured_boot.asm, but a
+; local stateless fold so we carry no cross-file dependency) and stash it in
+; l3_code_hash[slot]. pit_handler periodically re-hashes and compares; a
+; mismatch means executable bytes changed under us -> kernel_panic_canary.
+;
+; The per-slot kernel-owned handle table lives inside the legal code window and
+; is legitimately mutable (handle_alloc/close write it). l3_apply_wx_policy
+; already forces those pages W+NX (a carve-out); the hash MUST skip the same
+; region or every handle write would trip a false integrity panic.
+; ============================================================================
+L3_CODE_HASH_FNV_OFFSET equ 0xCBF29CE484222325
+L3_CODE_HASH_FNV_PRIME  equ 0x00000100000001B3
+
+; l3_code_hash_compute - EDI = slot. Returns RAX = FNV-1a hash of the slot's
+; executable code-range bytes (skipping the handle-table carve-out), or 0 if
+; the slot has no valid v1 manifest / an empty range. Preserves rbx,rcx,rdx,
+; rsi,rdi,r8..r12 (clobbers only rax + the saved/restored temporaries).
+FN_DECL l3_code_hash_compute, 0, 0, FN_RET_SCALAR
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+
+    mov r8d, edi                         ; r8d = slot
+    cmp r8d, MAX_WINDOWS
+    jae .ch_zero
+
+    ; Require a committed v1 manifest with sane bounds (same gate as the policy
+    ; walk). Anything else means "no code range to hash".
+    mov eax, r8d
+    cmp qword [l3_wx_manifest_ver + rax*8], 1
+    jne .ch_zero
+    mov rsi, [l3_wx_code_start + rax*8]   ; rsi = code_start offset
+    mov rdx, [l3_wx_code_end + rax*8]     ; rdx = code_end offset (exclusive)
+    cmp rsi, rdx
+    jae .ch_zero
+
+    ; r9 = slot base virtual address.
+    mov edi, r8d
+    call l3_slot_base
+    mov r9, rax
+
+    ; r10 = handle-table carve-out start offset, r11 = carve-out end offset
+    ; (page-rounded, matching l3_apply_wx_policy's skip window).
+    mov r10, L3_HANDLE_TABLE_OFF
+    mov r11, (L3_HANDLE_TABLE_SZ + 0xFFF) & ~0xFFF
+    add r11, r10
+
+    mov r12, L3_CODE_HASH_FNV_OFFSET      ; r12 = running hash accumulator
+    mov rcx, rsi                          ; rcx = current offset cursor
+
+    ; SMAP: the slot is user (PTE.U=1) memory; bracket the byte reads.
+    USER_ACCESS_BEGIN
+.ch_loop:
+    cmp rcx, rdx
+    jae .ch_loop_done
+    ; Skip the handle-table carve-out [r10, r11): mutable kernel data, not code.
+    cmp rcx, r10
+    jb .ch_present_check
+    cmp rcx, r11
+    jb .ch_skip
+.ch_present_check:
+    ; Only fold bytes from PRESENT pages. A non-present page in the range
+    ; (e.g. a guard or never-populated page) would #PF in ring 0 here — and it
+    ; holds no executable bytes anyway — so skip the whole page. PT entry for
+    ; this offset = APP_ARENA_PT_BASE + slot*ARENA_SLOT_PAGES*8 + (off>>12)*8.
+    mov rbx, rcx
+    shr rbx, 12                           ; page index within slot
+    mov eax, r8d
+    imul rax, ARENA_SLOT_PAGES * 8
+    lea rbx, [rax + rbx*8 + APP_ARENA_PT_BASE]
+    mov rax, [rbx]
+    test al, 1                            ; PAGE_PRESENT?
+    jz .ch_skip_page
+    ; rax held the PTE (scratch); the running hash lives in r12 across the loop.
+    movzx ebx, byte [r9 + rcx]            ; slot byte
+    xor r12, rbx                          ; FNV-1a: hash ^= byte
+    mov rbx, L3_CODE_HASH_FNV_PRIME
+    imul r12, rbx                         ; hash *= prime
+    inc rcx
+    jmp .ch_loop
+.ch_skip_page:
+    ; Advance rcx to the next page boundary (skip the whole absent page).
+    or rcx, 0xFFF
+    inc rcx
+    jmp .ch_loop
+.ch_skip:
+    inc rcx
+    jmp .ch_loop
+.ch_loop_done:
+    USER_ACCESS_END
+    mov rax, r12                          ; final running hash
+    jmp .ch_ret
+
+.ch_zero:
+    xor eax, eax                          ; no valid range -> hash 0
+.ch_ret:
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
+
+; l3_code_hash_install - EDI = slot. Capture the slot's code-range hash as the
+; integrity baseline and mark it live. Idempotent re-baseline; preserves all
+; caller registers.
+FN_DECL l3_code_hash_install, 0, 0, FN_RET_SCALAR
+    push rax
+    push rcx
+    push rdi
+    mov ecx, edi                          ; ecx = slot (preserved across call)
+    call l3_code_hash_compute             ; rax = hash
+    mov [l3_code_hash + rcx*8], rax
+    mov byte [l3_code_hash_valid + rcx], 1
+    pop rdi
+    pop rcx
+    pop rax
+    ret
+
+; l3_code_hash_verify_all - re-hash every slot with a live baseline and panic
+; on the first mismatch (an unintended W landed on a code page). Called from
+; pit_handler on a tick cadence. Preserves all caller registers. Reached from
+; IRQ context, hence FN_DECL (no trace push/call before we are sure of state).
+extern kernel_panic_canary
+FN_DECL l3_code_hash_verify_all, 0, 0, FN_RET_SCALAR
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    xor ecx, ecx                          ; slot index
+.va_loop:
+    cmp ecx, MAX_WINDOWS
+    jae .va_done
+    cmp byte [l3_code_hash_valid + rcx], 0
+    je .va_next
+    mov edx, ecx                          ; save slot across the call
+    mov edi, ecx
+    call l3_code_hash_compute             ; rax = recomputed hash
+    mov ecx, edx
+    cmp rax, [l3_code_hash + rcx*8]
+    jne .va_mismatch
+.va_next:
+    inc ecx
+    jmp .va_loop
+.va_done:
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
+    ret
+.va_mismatch:
+    ; Executable bytes diverged from the install-time baseline. Treat as a W^X
+    ; integrity violation and take the same fail-closed path as a corrupted
+    ; canary / forged callback. Never returns.
+    jmp kernel_panic_canary
+
 FN_DECL l3_install_app_done_trampoline, 0, 0, FN_RET_SCALAR
     push rcx
     mov ecx, edi
@@ -564,7 +783,7 @@ FN_DECL l3_install_app_done_trampoline, 0, 0, FN_RET_SCALAR
 
 ; l3_randomize_code_slide - EDI=slot.
 ; Samples a fresh page-aligned in-slot code slide in
-; [0, L3_APP_BLOB_COPY_CAP - blob_size] from RDTSC ^ RDRAND (RDRAND failure
+; [0, L3_APP_BLOB_PLACE_CAP - blob_size] from RDTSC ^ RDRAND (RDRAND failure
 ; falls back to RDTSC, matching l3_randomize_user_stack_top). Stores the slide
 ; in l3_slot_code_slide[slot] for the slot's lifetime. The slide is added to
 ; the slot base when the blob is copied in, so the same code/gadget addresses
@@ -578,10 +797,12 @@ FN_BEGIN l3_randomize_code_slide, 0, 0, FN_RET_VOID
     push rdi
     push r8
     mov r8d, edi
-    ; max_slide_bytes = (L3_APP_BLOB_COPY_CAP - blob_size), floor-aligned to page.
-    ; If the blob is larger than the cap (shouldn't happen — l3_copy_app_blob_to_slot
-    ; truncates anyway), pin slide to 0.
-    mov rcx, L3_APP_BLOB_COPY_CAP
+    ; max_slide_bytes = (L3_APP_BLOB_PLACE_CAP - blob_size), floor-aligned to page.
+    ; PLACE_CAP (the user-stack guard floor), not COPY_CAP (the shadow-window
+    ; boundary), bounds placement so a slid blob never reaches the guard page or
+    ; the user stack above it. If the blob is larger than the cap (shouldn't
+    ; happen — l3_copy_app_blob_to_slot truncates anyway), pin slide to 0.
+    mov rcx, L3_APP_BLOB_PLACE_CAP
     sub rcx, [rel app_blob_size_v]
     jbe .lrcs_zero
     shr rcx, 12                          ; rcx = number of page-positions - 1
@@ -606,7 +827,7 @@ FN_BEGIN l3_randomize_code_slide, 0, 0, FN_RET_VOID
     xor rbx, rax
 .lrcs_no_rdrand:
     ; rdx:rax = rbx; divide by rcx (page-position count) -> remainder in rdx.
-    mov rax, L3_APP_BLOB_COPY_CAP
+    mov rax, L3_APP_BLOB_PLACE_CAP
     sub rax, [rel app_blob_size_v]
     shr rax, 12
     inc rax                              ; recompute (rcx was clobbered by cpuid)
@@ -631,6 +852,126 @@ FN_BEGIN l3_randomize_code_slide, 0, 0, FN_RET_VOID
     FN_END l3_randomize_code_slide
     ret
 
+; ============================================================================
+; Per-slot cryptographic identity key (security_todo.md §10).
+;
+; Each slot gets a kernel-only secret key derived at slot init from
+;     slot_key = FNV-1a( kernel_canary || slot_id || boot_nonce )
+; using the SAME FNV-1a family already relied on across the tree
+; (measured_boot.asm, the code-range hash above). The key is a per-install
+; secret an app can later prove knowledge of via a HMAC-this-data syscall
+; (explicit FOLLOW-UP — not landed here). The key NEVER touches the slot's
+; ring-3 memory: it lives only in kernel BSS (l3_slot_key[]), outside the
+; app arena, exactly like l3_code_hash[] / l3_slot_code_slide[].
+;
+; The boot nonce is a one-shot RDTSC ^ RDRAND draw (same source as
+; kernel_canary_init / l3_randomize_*), captured once via l3_boot_nonce_ensure
+; and stable for the boot. Mixing it in means the per-slot key differs across
+; boots even for the same canary+slot, so a leaked key from a prior boot is
+; useless against the next one.
+;
+; Storage uses the same non-cryptographic FNV stopgap documented in
+; measured_boot.asm: collision-resistant enough to act as a per-slot secret
+; identifier, swap-able for a real KDF later without touching the call sites.
+; ============================================================================
+L3_SLOT_KEY_FNV_OFFSET equ 0xCBF29CE484222325
+L3_SLOT_KEY_FNV_PRIME  equ 0x00000100000001B3
+
+; l3_boot_nonce_ensure - lazily seed the kernel-only boot nonce from
+; RDTSC ^ RDRAND on first call; later calls are a no-op. A final non-zero
+; guard avoids an all-zero nonce (matches kernel_canary_init). Plain-label
+; internal helper. Preserves all caller registers.
+l3_boot_nonce_ensure:
+    cmp byte [rel l3_boot_nonce_done], 0
+    jne .bne_ret
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    mov eax, 1
+    cpuid
+    test ecx, 1 << 30
+    jz .bne_no_rdrand
+    mov ecx, 8
+.bne_try_rdrand:
+    rdrand rax
+    jc .bne_have_rdrand
+    dec ecx
+    jnz .bne_try_rdrand
+    jmp .bne_no_rdrand
+.bne_have_rdrand:
+    xor rbx, rax
+.bne_no_rdrand:
+    test rbx, rbx
+    jnz .bne_store
+    mov rbx, 0xB007A11CE5EED5EE
+.bne_store:
+    mov [rel l3_boot_nonce], rbx
+    mov byte [rel l3_boot_nonce_done], 1
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+.bne_ret:
+    ret
+
+; l3_derive_slot_key - EDI = slot. Derive this slot's kernel-only key as
+; FNV-1a over (kernel_canary || slot_id || boot_nonce), 8 bytes each LE, and
+; store it in l3_slot_key[slot]. The key is never written into ring-3 memory.
+; Plain-label internal helper (no global) so it carries no coverage gate.
+; Preserves all caller registers.
+l3_derive_slot_key:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    mov ecx, edi                          ; ecx = slot
+    cmp ecx, MAX_WINDOWS
+    jae .dsk_ret                          ; bogus slot — never index past array
+    call l3_boot_nonce_ensure             ; make sure the nonce is live
+
+    mov rax, L3_SLOT_KEY_FNV_OFFSET       ; rax = running hash
+    mov rbx, L3_SLOT_KEY_FNV_PRIME        ; rbx = FNV prime (constant across folds)
+
+    ; Fold the three 8-byte inputs in order: kernel_canary, slot_id, boot_nonce.
+    mov rdx, [rel kernel_canary]
+    call .dsk_fold8
+    mov edx, ecx                          ; slot id (zero-extended to 64)
+    call .dsk_fold8
+    mov rdx, [rel l3_boot_nonce]
+    call .dsk_fold8
+
+    mov [rel l3_slot_key + rcx*8], rax
+.dsk_ret:
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+; .dsk_fold8 - fold the 8 bytes of rdx (LE) into the running FNV hash in rax,
+; with the prime preloaded in rbx. Clobbers rdx (consumed) + a scratch byte in
+; the low bits; rcx (slot) and rbx (prime) are preserved.
+.dsk_fold8:
+    push rdi                              ; byte counter scratch
+    push r8                               ; byte scratch (caller's r8 preserved)
+    mov edi, 8
+.dsk_fold_byte:
+    movzx r8, dl                          ; next low byte of the input word
+    xor rax, r8                           ; FNV-1a: hash ^= byte
+    imul rax, rbx                         ; hash *= prime
+    shr rdx, 8
+    dec edi
+    jnz .dsk_fold_byte
+    pop r8
+    pop rdi
+    ret
+
 ; l3_copy_app_blob_to_slot - copy the built-in user blob into a slot arena
 ; EDI = slot
 FN_BEGIN l3_copy_app_blob_to_slot, 0, 0, FN_RET_SCALAR
@@ -648,13 +989,39 @@ FN_BEGIN l3_copy_app_blob_to_slot, 0, 0, FN_RET_SCALAR
     mov edi, r9d
     call l3_slot_base
     mov r8, rax                          ; r8 = unmodified slot base (return value)
+    ; Wipe the slot arena before anything is re-initialized so no stale secrets
+    ; from the prior tenant (callback ptrs, canary derivatives, handle-table
+    ; contents) survive into the new app. Must precede the blob copy and the
+    ; manifest/stack/handle re-init below — they re-populate this range. The
+    ; user-stack guard page (L3_SLOT_USER_STACK_GUARD_OFF) is non-present, so
+    ; wipe the ranges below and above it separately — touching it would #PF.
+    push rdi
+    push rcx
+    push rax
+    xor eax, eax
+    cld
+    mov rdi, r8
+    mov rcx, L3_SLOT_USER_STACK_GUARD_OFF / 8
+    USER_ACCESS_BEGIN
+    rep stosq
+    USER_ACCESS_END
+    lea rdi, [r8 + L3_SLOT_USER_STACK_GUARD_OFF + 0x1000]
+    mov rcx, (APP_SLOT_SIZE - L3_SLOT_USER_STACK_GUARD_OFF - 0x1000) / 8
+    USER_ACCESS_BEGIN
+    rep stosq
+    USER_ACCESS_END
+    pop rax
+    pop rcx
+    pop rdi
     mov rdi, rax
     mov eax, r9d
     add rdi, [rel l3_slot_code_slide + rax*8]   ; copy destination = slot_base + slide
     mov rsi, [rel app_blob_base_v]
     mov rcx, [rel app_blob_size_v]
-    ; Available copy window shrinks by the slide.
-    mov rdx, L3_APP_BLOB_COPY_CAP
+    ; Available copy window shrinks by the slide. Clamp against PLACE_CAP (the
+    ; user-stack guard floor) so the copy can never write through the
+    ; non-present guard page or into the user stack, even at the maximum slide.
+    mov rdx, L3_APP_BLOB_PLACE_CAP
     mov eax, r9d
     sub rdx, [rel l3_slot_code_slide + rax*8]
     cmp rcx, rdx
@@ -662,7 +1029,9 @@ FN_BEGIN l3_copy_app_blob_to_slot, 0, 0, FN_RET_SCALAR
     mov rcx, rdx
 .copy_len_ok:
     cld
+    USER_ACCESS_BEGIN
     rep movsb
+    USER_ACCESS_END
     mov rax, L3_SLOT_MAGIC
     mov ecx, r9d
     mov [l3_slot_live + rcx*8], rax
@@ -683,10 +1052,22 @@ FN_BEGIN l3_copy_app_blob_to_slot, 0, 0, FN_RET_SCALAR
     mov [l3_wx_manifest_ver + rcx*8], rax
     mov [l3_wx_code_start + rcx*8], rax
     mov [l3_wx_code_end + rcx*8], rax
+    ; Invalidate the code-range integrity baseline (security_todo.md §12): the
+    ; new tenant's code differs from the recycled slot's, so l3_apply_wx_policy
+    ; must re-capture the hash on the next valid-manifest activation. Clearing
+    ; the byte is enough; l3_code_hash[] is recomputed before it is trusted.
+    mov byte [l3_code_hash_valid + rcx], 0
     ; Re-randomize this slot's user stack top so a leak from a sibling slot
     ; does not predict our RSP layout for the new app's lifetime.
     mov edi, r9d
     call l3_randomize_user_stack_top
+    ; Derive this slot's kernel-only identity key (security_todo.md §10):
+    ; FNV-1a(kernel_canary || slot_id || boot_nonce). Stored in l3_slot_key[]
+    ; (kernel BSS), never copied into the slot's ring-3 memory. Re-derived on
+    ; every slot recycle so a new tenant gets a fresh secret. A HMAC-this-data
+    ; syscall is the explicit follow-up; only derivation + storage land here.
+    mov edi, r9d
+    call l3_derive_slot_key
     ; Phase 1 handle-table refactor: clear this slot's handle table so the
     ; new app starts with no inherited handles from the previous occupant.
     ; Phase 2 will wire syscalls (FAT16 dir-entry handles first) onto it.
@@ -883,9 +1264,11 @@ FN_DECL call_app_l3, 0, 0, FN_RET_SCALAR
     add rdi, L3_SHADOW_WIN_OFF
     mov rcx, WINDOW_STRUCT_SIZE / 8
     cld
+    USER_ACCESS_BEGIN
     rep movsq
     mov rax, [r12 + L3_RT_APP_BASE]
     mov [rdi - WINDOW_STRUCT_SIZE + WIN_OFF_APPDATA], rax
+    USER_ACCESS_END
 .shadow_ready:
     mov rax, [r12 + L3_RT_APP_BASE]
     lea r14, [rax + L3_SHADOW_WIN_OFF]
@@ -925,9 +1308,18 @@ FN_DECL call_app_l3, 0, 0, FN_RET_SCALAR
     call l3_install_app_done_trampoline
     mov rdx, rax
     pop rax
-    mov [rax], rdx
+    USER_ACCESS_BEGIN
+    mov [rax], rdx                ; IRET trampoline onto the slot's user stack (PTE.U=1)
+    USER_ACCESS_END
     mov [r12 + L3_RT_USER_RSP], rax
 
+    ; FS/GS sanitization (security_todo.md §3). As in enter_usermode: IRETQ
+    ; does not reload DS/ES/FS/GS, so install ring-3 selectors before the iret
+    ; frame is built and the callback arg registers (rdi/rsi/rdx) are loaded.
+    ; Clobbers ax (and, under the optional MSR scrub, rcx/rdx) — done BEFORE the
+    ; rdi/rsi/rdx arg loads below so none of them are corrupted. r12/r13/r14/r15
+    ; and rbx (callback ptr/args) survive.
+    SANITIZE_SEG_USER_EXIT
     push qword GDT64_USER_DATA
     push qword [r12 + L3_RT_USER_RSP]
     pushfq
@@ -1035,10 +1427,35 @@ l3_wx_code_end:     resq MAX_WINDOWS
 ; on every slot (re)load). Zero = uninitialized, falls back to legacy fixed top.
 l3_slot_ustack_off: resq MAX_WINDOWS
 ; Per-slot code slide (set by l3_randomize_code_slide on every slot (re)load).
-; Page-aligned, in [0, L3_APP_BLOB_COPY_CAP - blob_size]. The blob is copied
+; Page-aligned, in [0, L3_APP_BLOB_PLACE_CAP - blob_size]. The blob is copied
 ; to slot_base + slide, so a code-pointer leak in one slot only reveals that
 ; slot's gadget addresses — sibling slots have independent slides.
 l3_slot_code_slide: resq MAX_WINDOWS
+; Code-range integrity hashing (security_todo.md §12). l3_code_hash[slot] holds
+; the FNV-1a hash of the slot's executable (X) code-range bytes, captured the
+; first time l3_apply_wx_policy commits a valid v1 manifest for the slot
+; (hash-on-install). l3_code_hash_valid[slot] != 0 marks the baseline as live.
+; pit_handler periodically calls l3_code_hash_verify_all; any mismatch means an
+; unintended W landed on a code page (e.g. an undiscovered JIT-alias bug
+; mutated executable bytes) -> kernel_panic_canary. Both are cleared on slot
+; recycle in l3_copy_app_blob_to_slot so the next tenant re-baselines.
+global l3_code_hash
+global l3_code_hash_valid
+l3_code_hash:       resq MAX_WINDOWS
+l3_code_hash_valid: resb MAX_WINDOWS
+alignb 8
+; Per-slot kernel-only identity key (security_todo.md §10). l3_slot_key[slot]
+; holds FNV-1a(kernel_canary || slot_id || boot_nonce), derived by
+; l3_derive_slot_key on every slot (re)init from l3_copy_app_blob_to_slot. This
+; lives in kernel BSS — OUTSIDE the ring-3 app arena — so an app can never read
+; or forge its own key; a future HMAC-this-data syscall is the only intended
+; egress, and even then only the MAC leaves the kernel, never the key.
+global l3_slot_key
+l3_slot_key:        resq MAX_WINDOWS
+; One-shot boot nonce mixed into every slot key, seeded once from RDTSC^RDRAND
+; by l3_boot_nonce_ensure. Kernel-only; never exposed to ring 3.
+l3_boot_nonce:      resq 1
+l3_boot_nonce_done: resb 1
 alignb 16
 global l3_runtime
 ; Keep this in sync with L3_RT_SIZE above. A smaller allocation corrupts

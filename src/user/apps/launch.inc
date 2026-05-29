@@ -1,3 +1,5 @@
+MEDIA_PLAYER_BAR_H equ 26
+
 app_l3_test_draw:
     push rdi
     push r14
@@ -71,17 +73,44 @@ app_l3_test_key:
     pop rdi
     ret
 
+extern cpi_sign_callback
+
 ; RAX = window ID, R10 = click handler, R11 = key handler.
 ; Drag handler (optional): install separately via app_set_window_drag below
 ; (kept as a separate helper so existing callers stay unchanged and we never
 ; clobber a stale value).
+;
+; Both handlers are run through cpi_sign_callback before being committed to
+; the window struct, so a later attacker who overwrites these slots without
+; knowing kernel_canary AND &window produces a value the dispatcher will
+; reject (kernel_panic_canary). See cpi_sign_callback in syscall.asm.
 app_set_window_handlers:
+    push rcx
+    push rdx
+    push rdi
+    push rsi
     push rax
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov qword [rax + WIN_OFF_CLICKFN], r10
-    mov qword [rax + WIN_OFF_KEYFN], r11
+    push rax
+    mov rdi, r10
+    mov rsi, rax
+    mov rdx, WIN_OFF_CLICKFN
+    call cpi_sign_callback
+    mov rcx, rax                      ; signed click_fn
+    mov rax, [rsp]                    ; &window
+    mov rdi, r11
+    mov rsi, rax
+    mov rdx, WIN_OFF_KEYFN
+    call cpi_sign_callback
+    pop rdi                           ; &window
+    mov [rdi + WIN_OFF_CLICKFN], rcx
+    mov [rdi + WIN_OFF_KEYFN], rax
     pop rax
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
     ret
 
 ; RAX = window ID, R10 = drag handler. Same calling convention as click:
@@ -91,11 +120,25 @@ app_set_window_handlers:
 ; window's client area. The cursor may leave the window's bounds — drag
 ; events keep flowing until the button is released. Pass 0 to detach.
 app_set_window_drag:
+    push rcx
+    push rdx
+    push rdi
+    push rsi
     push rax
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov qword [rax + WIN_OFF_DRAGFN], r10
+    mov rdi, r10
+    mov rsi, rax
+    mov rdx, WIN_OFF_DRAGFN
+    push rax
+    call cpi_sign_callback
+    pop rdi
+    mov [rdi + WIN_OFF_DRAGFN], rax
     pop rax
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
     ret
 
 ; RAX = window ID, R10 = right-click handler. Same calling convention as click:
@@ -103,11 +146,25 @@ app_set_window_drag:
 ; Fired once on right-button-down inside a window's client area. Pass 0 to
 ; detach. Apps use this for context menus or custom secondary actions.
 app_set_window_rclick:
+    push rcx
+    push rdx
+    push rdi
+    push rsi
     push rax
     imul rax, WINDOW_STRUCT_SIZE
     add rax, WINDOW_POOL_ADDR
-    mov qword [rax + WIN_OFF_RCLICKFN], r10
+    mov rdi, r10
+    mov rsi, rax
+    mov rdx, WIN_OFF_RCLICKFN
+    push rax
+    call cpi_sign_callback
+    pop rdi
+    mov [rdi + WIN_OFF_RCLICKFN], rax
     pop rax
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
     ret
 
 ; RAX = window ID. Preserve RAX.
@@ -125,6 +182,10 @@ app_seed_notepad_slot:
     call l3_copy_app_blob_to_slot
     mov rbx, rax
 
+    ; SMAP: the slot is a user (PTE.U=1) page; bracket the kernel-side seed
+    ; writes with stac/clac. l3_copy_app_blob_to_slot above already re-armed
+    ; SMAP on return, so AC is clear here.
+    USER_ACCESS_BEGIN
     ; Starter text "Hello"
     mov byte [rbx + notepad_buf - app_blob_start + 0], 'H'
     mov byte [rbx + notepad_buf - app_blob_start + 1], 'e'
@@ -150,6 +211,7 @@ app_seed_notepad_slot:
     mov byte  [rbx + np_saveloc_buf - app_blob_start], 47       ; '/'
     mov byte  [rbx + np_saveloc_buf - app_blob_start + 1], 0
     mov qword [rbx + np_open_entry - app_blob_start], 0
+    USER_ACCESS_END
 
     pop rdi
     pop rcx
@@ -181,6 +243,8 @@ app_reset_explorer_slot:
     mov edi, eax
     call l3_slot_base
     mov rbx, rax
+    ; SMAP: slot base (rax) is a user (PTE.U=1) page. Bracket these resets.
+    USER_ACCESS_BEGIN
     mov dword [rbx + explorer_sel - app_blob_start], 0
     mov dword [rbx + explorer_dir - app_blob_start], 0
     mov byte [rbx + ctx_menu_visible - app_blob_start], 0
@@ -193,12 +257,33 @@ app_reset_explorer_slot:
     mov dword [rbx + exp_newfolder_cursor - app_blob_start], 0
     mov byte [rbx + exp_rename_buf - app_blob_start], 0
     mov byte [rbx + exp_newfolder_buf - app_blob_start], 0
+    USER_ACCESS_END
 
     pop rdi
     pop rbx
     pop rax
     ret
 
+
+; APPLY_MANIFEST app_id
+;
+; After wm_create_window_ex returns rax = slot id, narrow that slot's
+; syscall capability mask to the app's declared manifest. Required for every
+; launch path — without this the slot keeps the CAP_ALL default and the
+; sandbox is effectively off. Preserves rax / rdi / rsi so the launcher can
+; keep treating rax as the slot id and continue its post-create work.
+extern kernel_apply_app_manifest
+%macro APPLY_MANIFEST 1
+    push rax
+    push rdi
+    push rsi
+    mov rdi, rax
+    mov rsi, %1
+    call kernel_apply_app_manifest
+    pop rsi
+    pop rdi
+    pop rax
+%endmacro
 
 ; ============================================================================
 ; app_launch - Launch an app by ID
@@ -267,6 +352,7 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
+    APPLY_MANIFEST APP_EXPLORER
     call app_refresh_window_slot
     call app_reset_explorer_slot
     mov r10, app_hl_explorer_click
@@ -324,6 +410,7 @@ app_launch:
     SER '}'
     cmp rax, -1
     je .done
+    APPLY_MANIFEST APP_TERMINAL
     SER 'a'
     push rax
     SER 'b'
@@ -375,6 +462,7 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
+    APPLY_MANIFEST APP_NOTEPAD
     call app_seed_notepad_slot
     mov r10, app_hl_notepad_click
     mov r11, app_hl_notepad_key
@@ -404,6 +492,7 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
+    APPLY_MANIFEST APP_SETTINGS
     mov r10, app_hl_settings_click
     mov r11, app_hl_settings_key
     call app_set_window_handlers
@@ -434,6 +523,7 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
+    APPLY_MANIFEST APP_PAINT
     mov r10, app_hl_paint_click
     mov r11, app_hl_paint_key
     call app_set_window_handlers
@@ -464,6 +554,7 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
+    APPLY_MANIFEST APP_ABOUT
     mov r10, app_hl_about_click
     mov r11, app_hl_about_key
     call app_set_window_handlers
@@ -482,6 +573,7 @@ app_launch:
     add rsp, 8
     cmp rax, -1
     je .done
+    APPLY_MANIFEST APP_SECURITY_PROBE
     xor r10d, r10d
     xor r11d, r11d
     call app_set_window_handlers
@@ -509,6 +601,7 @@ app_launch:
     pop rax
     cmp rax, -1
     je .done
+    APPLY_MANIFEST APP_TASKMGR
     mov r10, app_hl_taskmgr_click
     mov r11, app_hl_taskmgr_key
     call app_set_window_handlers
@@ -531,6 +624,7 @@ app_launch:
     add rsp, 8
     cmp rax, -1
     je .done
+    APPLY_MANIFEST APP_MEDIA
     call app_refresh_window_slot
     mov r10, app_hl_media_click
     mov r11, app_hl_media_key
@@ -549,6 +643,7 @@ app_launch:
     add rsp, 8
     cmp rax, -1
     je .done
+    APPLY_MANIFEST APP_PING
     mov r10, app_hl_ping_click
     mov r11, app_hl_ping_key
     call app_set_window_handlers
@@ -1200,6 +1295,9 @@ kernel_open_file_in_notepad:
     call l3_slot_base
     mov r14, rax                      ; r14 = slot base
 
+    ; SMAP: r14 is a user (PTE.U=1) slot page. Bracket the slot writes; the
+    ; fat16 read below targets the kernel scratch buffer so it stays outside.
+    USER_ACCESS_BEGIN
     ; Save dir entry into slot so Save can find the file later.
     mov [r14 + np_open_entry - app_blob_start], r12
 
@@ -1218,12 +1316,18 @@ kernel_open_file_in_notepad:
     pop rcx
     pop rax
     pop rdi
+    USER_ACCESS_END
 
     ; Read raw file bytes into kernel-side notepad_buf (scratch only).
     mov rdi, r12
     lea rsi, [notepad_buf]
     mov edx, NP_BUF_SIZE - 1
     call fat16_read_file
+    ; SMAP: the parse path below writes the slot (user page) on every branch,
+    ; including .kop_empty. Arm AC now, after the kernel-scratch read returns,
+    ; so all paths into the slot-write region run with AC set. Kernel-scratch
+    ; reads ([rbx+rsi], [notepad_buf]) inside the region are fine with AC set.
+    USER_ACCESS_BEGIN
     cmp eax, -1
     je .kop_empty
     test eax, eax
@@ -1328,6 +1432,7 @@ kernel_open_file_in_notepad:
     jnz .kop_copy_visible
 .kop_copy_visible_done:
     mov byte [rdi], 0
+    USER_ACCESS_END
 
     ; Clear scratch so we don't leave file bytes in the kernel image's master
     ; copy (defence-in-depth — nothing should read them, but stale file
@@ -1375,9 +1480,11 @@ kernel_open_file_in_notepad:
 ; Returns RAX = window id, or -1 on launch failure / read failure.
 ; ============================================================================
 global kernel_open_file_in_media
-extern media_nba_full_window_id
-MEDIA_NBA_FULL_BUF    equ BOOT_ANIM_BUF_ADDR
-MEDIA_NBA_FULL_BUF_SZ equ 0x1000000
+extern page_alloc_contig
+extern fat16_get_file_size
+extern media_full_buf
+extern media_full_buf_pages
+extern media_release_window_buf
 kernel_open_file_in_media:
     push rbx
     push r12
@@ -1411,6 +1518,14 @@ kernel_open_file_in_media:
     call l3_slot_base
     mov r14, rax                      ; slot base
 
+    ; SMAP: from here the function freely mixes slot (user, PTE.U=1) reads and
+    ; writes with kernel-scratch and window-pool accesses across many branches,
+    ; and fat16_read_file below writes its bytes straight into the slot. Arm AC
+    ; once for the whole body and clac at every ret. fat16_read_file does not
+    ; touch AC, so it propagates correctly; an IRQ clears AC on entry and iret
+    ; restores it, so the window is not nested-IRQ exploitable.
+    USER_ACCESS_BEGIN
+
     ; Zero the slot's media buffer header so a failed read doesn't leave
     ; an old codec magic lingering from a previous tenant of this slot.
     lea rdi, [r14 + APP_SLOT_BMP_FILE_OFF]
@@ -1430,25 +1545,54 @@ kernel_open_file_in_media:
     mov r15d, ebx
 
     ; APP_SLOT_BMP_FILE_SZ intentionally caps the generic synchronous load.
-    ; NBA files can be much larger than a slot-local media buffer, so load the
-    ; full clip into the boot-animation scratch buffer and leave the real NBA
-    ; header in the slot for controls/hit-testing. The renderer switches to
-    ; MEDIA_NBA_FULL_BUF only for this window id.
+    ; NBA files can be much larger than a slot-local media buffer, so each media
+    ; window allocates its OWN physically-contiguous full-clip buffer sized to
+    ; the file and the real header stays in the slot for controls/hit-testing.
+    ; Per-window ownership (vs. the old single shared buffer) means opening a
+    ; second video no longer truncates the first one's playback.
     cmp dword [r14 + APP_SLOT_BMP_FILE_OFF], 0x3141424E ; 'NBA1'
     jne .kom_loaded
-    mov qword [media_nba_full_window_id], -1
+
+    ; Drop any buffer left over from a previous tenant of this reused window id.
+    mov edi, r13d
+    call media_release_window_buf
+
     mov rdi, r12
-    mov rsi, MEDIA_NBA_FULL_BUF
-    mov edx, MEDIA_NBA_FULL_BUF_SZ
+    call fat16_get_file_size                 ; eax = file size in bytes
+    cmp eax, APP_SLOT_BMP_FILE_SZ
+    jbe .kom_nba_clamp_slot                  ; fits the slot: no full buffer
+    cmp eax, MEDIA_FULL_BUF_MAX_SZ
+    jbe .kom_nba_sz_ok
+    mov eax, MEDIA_FULL_BUF_MAX_SZ           ; cap absurdly large clips
+.kom_nba_sz_ok:
+    mov ebx, eax                             ; ebx = bytes to read
+    add eax, 0xFFF
+    shr eax, 12                              ; pages needed
+    mov rdi, rax
+    call page_alloc_contig                   ; rax = buffer base (0 = OOM)
+    test rax, rax
+    jz .kom_nba_clamp_slot                   ; OOM: fall back to slot
+    ; Record ownership so the renderer can find it and close can free it.
+    lea rdx, [rel media_full_buf]
+    mov [rdx + r13*8], rax
+    mov ecx, ebx
+    add ecx, 0xFFF
+    shr ecx, 12
+    lea rdx, [rel media_full_buf_pages]
+    mov [rdx + r13*8], rcx
+    ; Load the clip into the freshly allocated buffer.
+    mov rsi, rax                             ; dest
+    mov rdi, r12                             ; entry
+    mov edx, ebx                             ; max bytes
     call fat16_read_file
     cmp eax, 20
-    jbe .kom_nba_clamp_slot
-    mov r11, MEDIA_NBA_FULL_BUF
+    jbe .kom_nba_free_fallback
+    lea rcx, [rel media_full_buf]
+    mov r11, [rcx + r13*8]                   ; buffer base
     cmp dword [r11], 0x3141424E
-    jne .kom_nba_clamp_slot
-    mov ebx, eax
-    ; Refresh the slot header from the full buffer in case the short initial
-    ; read was ever changed to header-only.
+    jne .kom_nba_free_fallback
+    mov ebx, eax                             ; bytes loaded into full buffer
+    ; Refresh the slot header from the full buffer so controls/sizing match.
     mov eax, [r11 + 0]
     mov [r14 + APP_SLOT_BMP_FILE_OFF + 0], eax
     mov eax, [r11 + 4]
@@ -1459,11 +1603,15 @@ kernel_open_file_in_media:
     mov [r14 + APP_SLOT_BMP_FILE_OFF + 12], eax
     mov eax, [r11 + 16]
     mov [r14 + APP_SLOT_BMP_FILE_OFF + 16], eax
-    mov [media_nba_full_window_id], r13
     jmp .kom_nba_validate_loaded
 
+.kom_nba_free_fallback:
+    ; The full-buffer read failed validation. Release it and fall back to the
+    ; slot-local bytes already loaded above.
+    mov edi, r13d
+    call media_release_window_buf
 .kom_nba_clamp_slot:
-    ; Full-buffer load failed. Fall back to the slot-local bytes and clamp
+    ; No full buffer in play. Fall back to the slot-local bytes and clamp
     ; frame_count so the renderer never walks past the 256 KiB slot buffer.
     mov ebx, r15d
 .kom_nba_validate_loaded:
@@ -1493,6 +1641,34 @@ kernel_open_file_in_media:
 .kom_nba_no_frames:
     mov dword [r14 + APP_SLOT_BMP_FILE_OFF + 12], 0
 .kom_loaded:
+    ; Native-size NBA playback avoids the expensive scaler hot path for the
+    ; common BOOTANIM.NBA case while still using normal controls/chrome.
+    cmp dword [r14 + APP_SLOT_BMP_FILE_OFF], 0x3141424E ; 'NBA1'
+    jne .kom_return
+    mov rax, r13
+    imul rax, WINDOW_STRUCT_SIZE
+    add rax, WINDOW_POOL_ADDR
+    mov ebx, [r14 + APP_SLOT_BMP_FILE_OFF + 4]          ; source w
+    test ebx, ebx
+    jz .kom_return
+    add ebx, BORDER_WIDTH * 2
+    cmp ebx, MIN_WINDOW_W
+    jae .kom_w_ok
+    mov ebx, MIN_WINDOW_W
+.kom_w_ok:
+    mov [rax + WIN_OFF_W], rbx
+    mov ebx, [r14 + APP_SLOT_BMP_FILE_OFF + 8]          ; source h
+    test ebx, ebx
+    jz .kom_return
+    add ebx, TITLEBAR_HEIGHT + BORDER_WIDTH + MEDIA_PLAYER_BAR_H
+    cmp ebx, MIN_WINDOW_H
+    jae .kom_h_ok
+    mov ebx, MIN_WINDOW_H
+.kom_h_ok:
+    mov [rax + WIN_OFF_H], rbx
+
+.kom_return:
+    USER_ACCESS_END
 
     mov rax, r13
     pop r15
@@ -1503,6 +1679,9 @@ kernel_open_file_in_media:
     ret
 
 .kom_fail:
+    ; Reached both before the USER_ACCESS_BEGIN above (early app_launch fail,
+    ; AC already clear) and after it; clac is a harmless no-op in the former.
+    USER_ACCESS_END
     mov rax, -1
     pop r15
     pop r14

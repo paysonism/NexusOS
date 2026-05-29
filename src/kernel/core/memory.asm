@@ -5,6 +5,11 @@
 bits 64
 
 %include "constants.inc"
+; Driver capability gates + MMIO bounds policy (security_todo.md §8). Pulled in
+; here — early in the monolithic build, right after the page allocator it sits
+; next to — so the registry + mmio_bounds_assert are defined before any driver
+; (apic.asm, xhci.asm, rtl8156.asm) references them. Include-guarded.
+%include "mmio_bounds.inc"
 
 ; SMP work-queue spinlock API - lets work-queue jobs running on an AP allocate
 ; or free physical pages concurrently with the BSP. Both sides take the same
@@ -224,6 +229,141 @@ FN_BEGIN page_free, 0, 0, FN_RET_SCALAR
 
     mov rdi, wq_alloc_lock
     call wq_unlock
+    pop rcx
+    pop rax
+    ret
+
+; --- Allocate N physically-contiguous pages ---
+; RDI = page count (n). Returns RAX = base physical address of the run, or 0.
+;
+; The run is constrained to the first 4 GiB so the returned physical address is
+; also a valid virtual pointer under the boot identity map (paging.asm maps the
+; low 4 GiB 1:1). Callers (e.g. per-window media buffers) use the result both as
+; a phys page and as a flat CPU-addressable buffer, so this cap is load-bearing.
+IDENTITY_MAP_PAGE_LIMIT equ 0x100000        ; 4 GiB / 4 KiB
+; auto-wrapped (FN_BEGIN emits global): global page_alloc_contig
+FN_BEGIN page_alloc_contig, 1, 0, FN_RET_SCALAR
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov r12, rdi                ; n
+    test r12, r12
+    jz .contig_fail_nolock
+
+    mov rdi, wq_alloc_lock
+    call wq_lock
+
+    xor r13, r13                ; current page index
+    xor r15, r15                ; run start page
+    xor rbx, rbx                ; current run length
+
+.contig_scan:
+    cmp r13, IDENTITY_MAP_PAGE_LIMIT
+    jae .contig_fail            ; ran off the identity-mapped window
+    mov rax, r13
+    mov rcx, r13
+    shr rax, 3                  ; byte index
+    and ecx, 7                  ; bit index
+    movzx edx, byte [PAGE_BITMAP_ADDR + rax]
+    bt edx, ecx
+    jc .contig_used             ; bit set = page in use -> break run
+    test rbx, rbx
+    jnz .contig_extend
+    mov r15, r13                ; start a fresh run here
+.contig_extend:
+    inc rbx
+    cmp rbx, r12
+    je .contig_found
+    inc r13
+    jmp .contig_scan
+.contig_used:
+    xor rbx, rbx                ; reset run
+    inc r13
+    jmp .contig_scan
+
+.contig_found:
+    ; Mark the r12 pages starting at r15 as used.
+    mov rcx, r12
+    mov r13, r15
+.contig_mark:
+    mov rax, r13
+    mov rdx, r13
+    shr rax, 3
+    and edx, 7
+    bts dword [PAGE_BITMAP_ADDR + rax], edx
+    inc r13
+    dec rcx
+    jnz .contig_mark
+
+    sub [free_page_count], r12
+    mov rax, r15
+    shl rax, 12                 ; page number -> physical address
+    jmp .contig_done
+
+.contig_fail:
+    xor eax, eax
+.contig_done:
+    mov rdi, wq_alloc_lock
+    call wq_unlock
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+.contig_fail_nolock:
+    xor eax, eax
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; --- Free N physically-contiguous pages ---
+; RDI = base physical address (as returned by page_alloc_contig), RSI = n pages.
+; auto-wrapped (FN_BEGIN emits global): global page_free_contig
+FN_BEGIN page_free_contig, 2, 0, FN_RET_SCALAR
+    push rax
+    push rcx
+    push rdx
+    push r8
+    push r9
+
+    test rsi, rsi
+    jz .freec_ret_nolock
+
+    push rdi
+    push rsi
+    mov rdi, wq_alloc_lock
+    call wq_lock
+    pop rsi
+    pop rdi
+
+    mov r9, rsi                 ; remaining pages
+    shr rdi, 12                 ; base page number
+.freec_loop:
+    mov rax, rdi
+    mov rdx, rdi
+    shr rax, 3
+    and edx, 7
+    btr dword [PAGE_BITMAP_ADDR + rax], edx
+    inc rdi
+    dec r9
+    jnz .freec_loop
+
+    add [free_page_count], rsi
+
+    mov rdi, wq_alloc_lock
+    call wq_unlock
+.freec_ret_nolock:
+    pop r9
+    pop r8
+    pop rdx
     pop rcx
     pop rax
     ret

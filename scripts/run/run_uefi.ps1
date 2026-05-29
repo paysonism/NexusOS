@@ -76,6 +76,10 @@ $qemuArgs = @(
     '-drive', "format=raw,file=fat:rw:$BUILD\esp,if=ide,index=1,media=disk",
     '-m', $GuestMemory,
     '-smp', '8,sockets=1,cores=8,threads=1',
+    # Expose SMEP/SMAP so the kernel's (default-on) stac/clac user-access
+    # brackets are valid instructions under TCG; without this the default
+    # qemu64 model lacks SMAP and the first bracketed user deref #UDs.
+    '-cpu', 'qemu64,+smep,+smap',
     '-vga', 'std'
 )
 if (-not $MscTest) {
@@ -131,7 +135,10 @@ if ($UsbMousePassthrough) {
         '-device', "usb-host,vendorid=$MouseVendorId,productid=$MouseProductId"
     )
 } else {
-    # Emulated PS/2-style mouse on USB2 port 1 so the guest always has a pointer
+    # Emulated mouse on USB2 port 1. usb-mouse is the only pointing device the
+    # in-tree HID driver enumerates cleanly; usb-tablet crashes mouse_init.
+    # Note: usb-mouse is relative, so the guest cursor only moves after you
+    # click into the QEMU window to grab input (or hover, with grab-on-hover).
     $qemuArgs += @(
         '-device', 'usb-mouse,bus=xhci0.0,port=1'
     )

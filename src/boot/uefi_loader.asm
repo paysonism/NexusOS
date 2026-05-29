@@ -240,7 +240,16 @@ _start:
     jnz .fail_kernel
 
     ; === S2b: Load APPS.BIN ===
+    ; KASLR mode keeps using the embedded app blob. The diff-relocation fixup
+    ; table patches that copy along with the rest of the kernel payload; the
+    ; standalone APPS.BIN is built at the unslid 0x100000 base and cannot be
+    ; reused after a random slide without a second relocation pass.
+%ifndef ENABLE_KASLR
     call load_apps
+%else
+    mov qword [abs VBE_INFO + VBE_APPS_BASE_OFF], 0
+    mov qword [abs VBE_INFO + VBE_APPS_SIZE_OFF], 0
+%endif
 
     ; === S2b2: Load DATA.IMG (FAT16 ramdisk for real hardware) ===
     ; Real laptops have no legacy IDE controller, so the kernel's fat16
@@ -288,7 +297,9 @@ _start:
     mov cr4, rax
     SER 'C'             ; C = CR4 fixed
 
-    ; Fix EFER: set LME, clear NXE
+    ; Fix EFER: set LME and NXE. NXE is required before any PTE uses
+    ; PAGE_NX (bit 63); per-slot W^X enforcement (l3_apply_wx_policy)
+    ; relies on this. BIOS path mirrors this in stage2.asm.
     mov ecx, 0xC0000080
     rdmsr
     bts eax, 8          ; LME on
@@ -340,13 +351,139 @@ _start:
     mov rsp, KERN_STACK
     SER 'S'             ; S = stack set
 
-    ; Set up trampoline args and jump (RSI=src, RDI=dest, RCX=size)
+    ; === KASLR: parse container header, pick slide, set up trampoline args ===
+    ;
+    ; Container layout (see tools/build/extract_kaslr_fixups.py):
+    ;   0x00 8  magic "NXKASLR0"
+    ;   0x08 4  payload_size
+    ;   0x0C 4  entry_offset
+    ;   0x10 4  fixup_count
+    ;   0x14 4  reserved
+    ;   0x18 fixup_count*4   fixup_offsets (u32 each, into payload)
+    ;   ...  payload_size    raw kernel bytes (assembled at KERNEL_LOAD_ADDR)
+    ;
+    ; Slide window:
+    ;   max_slide = KERNEL_STACK_TOP - STACK_RESERVE - KERNEL_LOAD_ADDR - payload
+    ;             = 0xC00000 - 0x40000 - 0x100000 - payload_size
+    ;             = 0xAC0000 - payload_size
+    ;   Floor-aligned to 4 KiB. 256 KiB stack reserve keeps the kernel stack
+    ;   (grows down from 0xC00000) clear of slid kernel text.
+    ;
+    ; Without ENABLE_KASLR the slide is forced to 0 — runtime layout must
+    ; reproduce the legacy "kernel at 0x100000" behavior byte-for-byte.
     mov rsi, [v_kernel_addr]
+
+    mov rax, [rsi]
+    mov rbx, 0x3052_4C53_414B_584E   ; "NXKASLR0" little-endian
+    cmp rax, rbx
+    jne .kaslr_bad_magic
+
+    mov eax, [rsi + 0x08]            ; payload_size
+    mov [v_payload_size], rax
+    mov eax, [rsi + 0x0C]            ; entry_offset
+    mov [v_entry_off], rax
+    mov eax, [rsi + 0x10]            ; fixup_count
+    mov [v_fixup_count], rax
+
+    lea rbx, [rsi + 0x18]            ; fixup table start
+    mov [v_fixup_src], rbx
+
+    mov rax, [v_fixup_count]
+    shl rax, 2                       ; *4 bytes per fixup offset
+    add rax, rbx                     ; payload start = fixups end
+    mov [v_payload_src], rax
+
+%ifdef ENABLE_KASLR
+    mov rax, 0xAC0000
+    sub rax, [v_payload_size]
+    jbe .slide_zero                  ; payload too large for window
+    shr rax, 12                      ; max_pages (exclusive upper bound)
+    jz  .slide_zero
+    mov rbx, rax                     ; rbx = max_pages
+
+    push rbx
+    mov eax, 1
+    cpuid
+    bt  ecx, 30                      ; RDRAND support
+    pop rbx
+    jnc .slide_rdtsc
+    rdrand rax
+    jc  .slide_mix
+    rdrand rax
+    jc  .slide_mix
+.slide_rdtsc:
+    rdtsc
+    shl rdx, 32
+    or  rax, rdx
+.slide_mix:
+    push rax
+    rdtsc
+    shl rdx, 32
+    or  rax, rdx
+    pop rcx
+    xor rax, rcx
+    mov rcx, 0x9E3779B97F4A7C15
+    xor rax, rcx
+    mov rcx, 0x5851F42D4C957F2D
+    mul rcx                          ; LCG multiply (rax = low 64 bits)
+    mov rcx, 0x14057B7EF767814F
+    add rax, rcx
+.slide_have_rand:
+    xor edx, edx
+    div rbx                          ; rdx = rand mod max_pages
+    test rdx, rdx
+    jnz .slide_nonzero
+    cmp rbx, 1
+    jbe .slide_nonzero
+    mov edx, 1                       ; keep enabled-KASLR boots visibly slid
+.slide_nonzero:
+    shl rdx, 12                      ; -> bytes, 4 KiB aligned
+    mov [v_kslide], rdx
+    jmp .slide_done
+.slide_zero:
+%endif
+    mov qword [v_kslide], 0
+.slide_done:
+
+%ifndef RELEASE_BUILD
+    ; Serial print "KS=XXXXXXXX " for boot-log triage.
+    SER 'K'
+    SER 'S'
+    SER '='
+    mov ebx, [v_kslide]
+    mov ecx, 8
+.kslide_print_loop:
+    rol ebx, 4
+    mov al, bl
+    and al, 0x0F
+    cmp al, 10
+    jb  .kslide_digit
+    add al, 'A' - 10 - '0'
+.kslide_digit:
+    add al, '0'
+    mov dx, 0x3F8
+    out dx, al
+    dec ecx
+    jnz .kslide_print_loop
+    SER ' '
+%endif
+
+    ; Trampoline contract (see trampoline: below).
+    mov rsi, [v_payload_src]
     mov rdi, KERN_DEST
-    mov rcx, [v_ksize]
+    add rdi, [v_kslide]
+    mov rcx, [v_payload_size]
+    mov r8,  [v_fixup_src]
+    mov r9,  [v_fixup_count]
+    mov r10, [v_kslide]
+    mov r11, [v_entry_off]
     SER 'J'             ; J = jumping to trampoline
     mov rax, 0x8000
     jmp rax
+
+.kaslr_bad_magic:
+    SDBG 'KASLR-MAGIC'
+    jmp .halt
 
 ; --- Failure handlers ---
 .fail_kernel:
@@ -361,21 +498,49 @@ _start:
 
 ; ============================================================================
 ; TRAMPOLINE  - copied to 0x8000, runs after ExitBootServices
-; In:  RSI = kernel source address
-;      RDI = KERN_DEST (0x100000)
-;      RCX = byte count
+; In:  RSI = payload source           (within UEFI-allocated buffer)
+;      RDI = destination base         (KERN_DEST + slide)
+;      RCX = payload byte count
+;      R8  = fixup table source       (u32 offsets, within UEFI buffer)
+;      R9  = fixup count
+;      R10 = slide value              (added to each [dest+offset] qword)
+;      R11 = entry offset             (jump target = dest_base + R11)
+;
+; The UEFI-allocated buffer that holds the original wrapped kernel (R8's
+; backing) does NOT overlap [RDI, RDI+RCX) — UEFI's AllocateAnyPages places
+; it well above the kernel destination window — so fixup reads remain valid
+; after the copy.
 ; ============================================================================
 align 16
 trampoline:
+    ; Preserve dest base + fixup-walk regs across rep movsq.
+    mov r12, rdi                ; dest base (preserved)
+    mov r13, r8                 ; fixup table cursor (preserved)
+    mov r14, r9                 ; remaining fixup count (preserved)
+
     add rcx, 7
-    shr rcx, 3              ; round up to qwords
+    shr rcx, 3                  ; round up to qwords
     rep movsq
+
+    ; Walk fixups: for each u32 off in [r13 .. r13 + r14*4): [r12+off] += r10
+    test r10, r10
+    jz   .tramp_no_fixups       ; slide=0 -> nothing to patch
+    test r14, r14
+    jz   .tramp_no_fixups
+.tramp_fix_loop:
+    mov  eax, [r13]             ; u32 offset (zero-extended)
+    add  [r12 + rax], r10
+    add  r13, 4
+    dec  r14
+    jnz  .tramp_fix_loop
+.tramp_no_fixups:
+
     wbinvd
     ; Switch to our own page tables (with User bits for ring 3)
     mov rax, PT_BASE
     mov cr3, rax
-    mov rax, KERN_DEST
-    jmp rax
+    add r12, r11                ; entry = dest_base + entry_offset
+    jmp r12
 trampoline_end:
 
 ; ============================================================================
@@ -401,7 +566,9 @@ claim_pages:
     DO_CLAIM VBE_INFO,   1          ; Boot info block
     DO_CLAIM 0x1000,     1          ; E820 entry count page
     DO_CLAIM E820_MAP_ADDR, 4       ; BIOS-compatible memory map handoff
-    DO_CLAIM PT_BASE,    17         ; Page tables (PML4+PDPT0+PDPT1+PD0+PT0+12 app PTs)
+    DO_CLAIM PT_BASE,    19         ; PML4+PDPT0+PDPT1+PD0+PT0+12 app PTs (0x70000..0x80FFF)
+                                    ; + 1 gap page at 0x81000 (BIOS PD3 slot, unused here)
+                                    ; + syscall-stack PT at 0x82000 = 19 pages total
     DO_CLAIM SMP_TRAMPOLINE_ADDR, 1 ; Trampoline
     ; NOTE: Do NOT claim KERN_DEST (0x100000) here — UEFI loaded our own
     ; PE image at ImageBase=0x100000.  Claiming it could corrupt memory
@@ -1533,12 +1700,16 @@ setup_paging:
     push r12
     push r13
 
-    ; Clear 13 pages: PML4 + PDPT0 + PDPT1 + PD0 + PT0 + 8 app-arena PTs
-    ; (0x70000..0x7CFFF). The 8 arena PTs at UEFI_APP_PT_BASE give the app
-    ; arena 4KB granularity for per-slot USER toggling and W^X.
+    ; Clear 19 pages (0x70000..0x82FFF):
+    ;   PML4 + PDPT0 + PDPT1 + PD0 + PT0     = 5 pages
+    ;   12 app-arena PTs at UEFI_APP_PT_BASE = 12 pages
+    ;   gap page at 0x81000 (BIOS PD3 slot)  = 1 page
+    ;   syscall-stack PT at 0x82000          = 1 page (kernel-installed)
+    ; The 12 arena PTs give the app arena 4KB granularity for per-slot USER
+    ; toggling and W^X; the syscall-stack PT is wired up later by the kernel.
     mov rdi, PT_BASE
     xor eax, eax
-    mov ecx, 13 * 4096 / 4
+    mov ecx, 19 * 4096 / 4
     rep stosd
 
     ; PML4[0] -> PDPT0 at 0x71000 (covers 0-512 GB).
@@ -1662,6 +1833,20 @@ setup_paging:
     add rdi, 8
     dec rcx
     jnz .loop_app_pt
+
+    ; Per-slot stack guard pages: clear PAGE_PRESENT one 4KB page below
+    ; each slot's user stack. Slot count = (r15 - r14) arena PDEs (one PDE
+    ; per 2 MiB slot). See boot_memory.inc:L3_SLOT_USER_STACK_GUARD_OFF.
+    mov rdi, UEFI_APP_PT_BASE + L3_SLOT_USER_STACK_GUARD_PTE * 8
+    mov rcx, r15
+    sub rcx, r14
+.loop_guard_pt:
+    mov rax, [rdi]
+    and rax, ~UEFI_PAGE_PRESENT
+    mov [rdi], rax
+    add rdi, 0x1000          ; same PTE slot in the next slot's PT
+    dec rcx
+    jnz .loop_guard_pt
 
     ; PDPT1[0..511]: 1 GB identity pages starting at 512 GB, supervisor-only, NX.
     mov rdi, PT_BASE + 0x2000
@@ -1991,6 +2176,14 @@ v_ksize:       dq 0
 v_apps_size:   dq 0
 v_data_size:   dq 0
 v_tmp_addr:    dq 0
+
+; --- KASLR container parse results (filled post-ExitBootServices) -----------
+v_payload_src:  dq 0
+v_payload_size: dq 0
+v_fixup_src:    dq 0
+v_fixup_count:  dq 0
+v_entry_off:    dq 0
+v_kslide:       dq 0
 
 ; --- Phase 1b: storage extent resolution scratch -------------------------
 ; Populated by resolve_data_img_extents. Once Phase 2/3 land (NVMe / USB-MSC)

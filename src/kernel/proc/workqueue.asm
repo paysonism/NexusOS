@@ -7,8 +7,8 @@
 ;   to the Application Processors (APs) as "jobs". The BSP keeps rendering at
 ;   full speed while an AP crunches the job on another core.
 ;
-;   After bring-up an AP no longer parks in HLT (see apic.asm trampoline) - it
-;   jumps into smp_worker_loop and pulls jobs from this queue forever.
+;   After bring-up an AP jumps into smp_worker_loop. When there is no work it
+;   halts until the BSP publishes a job and sends a local-APIC wake IPI.
 ;
 ; CONCURRENCY MODEL
 ;   * One producer  : the BSP - calls workqueue_submit / reap / wait.
@@ -92,6 +92,7 @@ extern ser_print_hex64
 extern smp_alive_cores              ; defined in arch/apic.asm (.data)
 extern tick_count
 extern cpu_tsc_per_tick
+extern apic_wake_workers
 
 ; SMP_CORE_STATE offsets used by Task Manager:
 ;   +24 dd current utilization percent
@@ -255,6 +256,7 @@ workqueue_submit_to:
     ; Store status LAST. x86's store ordering guarantees a worker that sees
     ; PENDING also sees the func/arg/result fields written above.
     mov dword [rbx + WQ_OFF_STATUS], WQ_PENDING
+    call apic_wake_workers
     mov eax, ecx                    ; handle = slot index
     jmp .ret
 .next:
@@ -594,7 +596,9 @@ smp_worker_loop:
     mov rax, [tick_count]
     mov [r14 + 56], rax
 .idle_pause:
-    pause                           ; idle hint - nothing claimable this sweep
+    sti
+    hlt
+    cli
     jmp .scan
 
 wq_core_init_aperf:
@@ -667,6 +671,8 @@ wq_core_publish_mhz:
     mul r9                         ; base MHz * aperf delta
     xor rdx, rdx
     div rcx                        ; scale by aperf/mperf
+    cmp rax, 100000
+    ja .tsc_fallback               ; bogus APERF/MPERF sample on this CPU
     mov [r14 + 28], eax
     jmp .done
 .tsc_fallback:

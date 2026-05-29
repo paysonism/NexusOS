@@ -22,20 +22,10 @@ const MAX_ROWS      = 20
 const ATTR_DIR      = 0x10
 
 # -------------------- colors --------------------
-const C_PATH        = 0x00E0E0E0
-const C_HEADER      = 0x00D0D0E0
-const C_STATUS      = 0x00E8E8E8
-const C_TEXT        = 0x00333333
-const C_MUTED       = 0x00666666
-const C_DIR         = 0x00CC8800
-const C_SELECT      = 0x000000A8
+const C_DIR         = 0x00F7B52C
 const C_OVERLAY_RN  = 0x00334455
 const C_OVERLAY_NF  = 0x00443355
 const C_OK          = 0x00228B22
-const C_WHITE       = 0x00FFFFFF
-const C_BLACK       = 0x00000000
-const C_BUTTON      = 0x00A0A0A0
-const C_CTX_DIM     = 0x00888888
 
 # -------------------- key codes --------------------
 const K_ENTER       = 13
@@ -81,6 +71,10 @@ str szOpenerMedia    = "Media Player"
 # docs/app-authoring.md for the full recipe.
 str szRowNameScratch = "               "
 str szRowSizeScratch = "                   "
+# Per-slot 20-byte scratch for SYS_FS_ENTRY_INFO snapshots. Reused across
+# draw_rows / clicks / properties — kept slot-local so each app instance has
+# its own buffer (NexusHL str decls allocate per slot).
+str szEntryInfo      = "                    "
 
 # -------------------- externs --------------------
 # State buffers/flags. Defined in src/user/apps/state.inc — kept asm-side
@@ -112,7 +106,17 @@ extern exp_prop_visible;
 
 # -------------------- small helpers --------------------
 
-fn selected_entry() {
+# Snapshot the currently selected entry into `&szEntryInfo`. Returns 1 on
+# success. Use this for any read (name/size/attr) — the handle is freed
+# before return so a per-frame call doesn't leak slots.
+fn selected_snapshot() {
+    return fs_snapshot(lw(&explorer_sel), &szEntryInfo);
+}
+
+# Open a fresh handle on the currently selected entry. Caller MUST pair with
+# SYS_HANDLE_CLOSE — used only for the few action syscalls (open/rename/
+# delete) that consume the entry by handle.
+fn selected_handle() {
     return syscall(SYS_FS_ENTRY, lw(&explorer_sel));
 }
 
@@ -123,10 +127,9 @@ fn file_count() {
 fn current_is_root() {
     # The first entry of a non-root FAT16 directory listing is the "." entry,
     # so spotting "." in slot 0 tells us we are inside a subdirectory.
-    let e0 = syscall(SYS_FS_ENTRY, 0);
-    if e0 == 0 { return 1; }
-    if lb(e0) == 46 {
-        if lb(e0 + 1) == 32 { return 0; }
+    if fs_snapshot(0, &szEntryInfo) == 0 { return 1; }
+    if lb(&szEntryInfo) == 46 {
+        if lb(&szEntryInfo + 1) == 32 { return 0; }
     }
     return 1;
 }
@@ -193,12 +196,11 @@ fn dismiss_overlays() {
 }
 
 fn start_rename() {
-    let ent = selected_entry();
-    if ent == 0 { return; }
+    if selected_snapshot() == 0 { return; }
     sb(&exp_rename_active, 1);
     sw(&exp_rename_cursor, 0);
     clear_buf(&exp_rename_buf, 24);
-    format_entry_name(ent, &exp_rename_buf);
+    format_entry_name(&szEntryInfo, &exp_rename_buf);
     let i = 0;
     while i < 23 {
         if lb(&exp_rename_buf + i) == 0 {
@@ -217,16 +219,20 @@ fn start_new_folder() {
 }
 
 fn enter_selected() {
-    let ent = selected_entry();
-    if ent == 0 { return; }
-    if fs_is_dir(ent) == 1 {
-        syscall(SYS_FS_CHDIR, lw(ent + 26));
+    if selected_snapshot() == 0 { return; }
+    if fs_is_dir(&szEntryInfo) == 1 {
+        syscall(SYS_FS_CHDIR, fs_cluster(&szEntryInfo));
         sw(&explorer_sel, 0);
         return;
     }
     # Hand off to the kernel — it dispatches by extension (notepad for .txt,
     # bmp viewer for .bmp, etc.). Keeps app-launch policy out of the explorer.
-    syscall(SYS_OPEN_FILE_NP, ent);
+    # SYS_OPEN_FILE_NP consumes the entry by handle; the kernel reads the
+    # bytes synchronously, so we can close immediately after.
+    let h = selected_handle();
+    if h == 0 { return; }
+    syscall(SYS_OPEN_FILE_NP, h);
+    syscall(SYS_HANDLE_CLOSE, h);
 }
 
 fn properties_drawfn_addr() {
@@ -242,8 +248,7 @@ fn properties_keyfn_addr() {
 }
 
 fn open_properties() {
-    let ent = selected_entry();
-    if ent == 0 { return; }
+    if selected_snapshot() == 0 { return; }
     let win_idx = syscall(SYS_WM_CREATE, 250, 200, 240, 196,
                           &szPropTitleHL, properties_drawfn_addr());
     if win_idx == -1 { return; }
@@ -323,32 +328,35 @@ fn is_text_media_entry(ent) {
     return 0;
 }
 
-fn opener_count(ent) {
-    if fs_is_dir(ent) == 1 { return 0; }
-    if is_text_media_entry(ent) == 1 { return 2; }
+fn opener_count(info) {
+    if fs_is_dir(info) == 1 { return 0; }
+    if is_text_media_entry(info) == 1 { return 2; }
     return 1;
 }
 
-fn opener_name(idx, ent) {
-    if is_text_media_entry(ent) == 1 {
+fn opener_name(idx, info) {
+    if is_text_media_entry(info) == 1 {
         if idx == 0 { return &szOpenerNotepad; }
         if idx == 1 { return &szOpenerMedia; }
     }
     if idx == 0 {
-        if is_media_entry(ent) == 1 { return &szOpenerMedia; }
+        if is_media_entry(info) == 1 { return &szOpenerMedia; }
         return &szOpenerNotepad;
     }
     return 0;
 }
 
-fn opener_open(idx, ent) {
-    if is_text_media_entry(ent) == 1 {
-        if idx == 0 { syscall(SYS_OPEN_FILE_NP, ent); return; }
-        if idx == 1 { syscall(SYS_OPEN_FILE_MEDIA, ent); return; }
+# opener_open dispatches to the right kernel syscall. `info` decides which
+# (so file type drives routing); `h` is a freshly opened handle the kernel
+# consumes synchronously to load the file. Caller closes h afterwards.
+fn opener_open(idx, info, h) {
+    if is_text_media_entry(info) == 1 {
+        if idx == 0 { syscall(SYS_OPEN_FILE_NP, h); return; }
+        if idx == 1 { syscall(SYS_OPEN_FILE_MEDIA, h); return; }
     }
     if idx == 0 {
-        if is_media_entry(ent) == 1 { syscall(SYS_OPEN_FILE_MEDIA, ent); return; }
-        syscall(SYS_OPEN_FILE_NP, ent);
+        if is_media_entry(info) == 1 { syscall(SYS_OPEN_FILE_MEDIA, h); return; }
+        syscall(SYS_OPEN_FILE_NP, h);
         return;
     }
 }
@@ -377,44 +385,45 @@ fn show_context_menu_at(cx, cy) {
 # -------------------- main draw --------------------
 
 fn draw_path_bar(win, w) {
-    ui_rect_at(win, 0, 0, w, PATH_H, C_PATH);
+    let path_bg = UI_COL_SURFACE;
+    ui_rect_at(win, 0, 0, w, PATH_H, path_bg);
     if current_is_root() == 1 {
-        ui_text_at(win, 4, 3, &szPathRoot, C_TEXT, C_PATH);
+        ui_text_at(win, 4, 3, &szPathRoot, UI_COL_TEXT, path_bg);
     } else {
-        ui_text_at(win, 4, 3, &szPathSub, C_TEXT, C_PATH);
-        ui_button(win, w - 56, 3, 48, &szBackBtn, C_BUTTON);
+        ui_text_at(win, 4, 3, &szPathSub, UI_COL_TEXT, path_bg);
+        ui_button(win, w - 56, 3, 48, &szBackBtn, UI_COL_SURFACE_2);
     }
 }
 
 fn draw_header(win, w) {
-    ui_rect_at(win, 0, PATH_H, w, HEADER_H, C_HEADER);
-    ui_text_at(win, 4, PATH_H + 1, &szColName, C_TEXT, C_HEADER);
-    ui_text_at(win, w - 100, PATH_H + 1, &szColSize, C_TEXT, C_HEADER);
+    let header_bg = UI_COL_SURFACE_2;
+    ui_rect_at(win, 0, PATH_H, w, HEADER_H, header_bg);
+    ui_text_at(win, 4, PATH_H + 1, &szColName, UI_COL_TEXT, header_bg);
+    ui_text_at(win, w - 100, PATH_H + 1, &szColSize, UI_COL_TEXT, header_bg);
 }
 
-fn draw_row(win, w, i, ent) {
+fn draw_row(win, w, i, info) {
     let row_y = LIST_Y + i * ROW_H;
-    let bg = C_WHITE;
-    let fg = C_TEXT;
+    let bg = UI_COL_SURFACE;
+    let fg = UI_COL_TEXT;
     let is_sel = 0;
     if i == lw(&explorer_sel) {
         is_sel = 1;
-        bg = C_SELECT;
-        fg = C_WHITE;
-        ui_rect_at(win, 0, row_y, w, ROW_H, C_SELECT);
+        bg = UI_COL_ACCENT;
+        fg = UI_COL_TEXT_INVERT;
     }
-    if fs_is_dir(ent) == 1 {
-        format_entry_name(ent, &szRowNameScratch);
+    ui_rect_at(win, 0, row_y, w, ROW_H, bg);
+    if fs_is_dir(info) == 1 {
+        format_entry_name(info, &szRowNameScratch);
         let dirfg = C_DIR;
-        if is_sel == 1 { dirfg = C_WHITE; }
+        if is_sel == 1 { dirfg = UI_COL_TEXT_INVERT; }
         ui_text_at(win, 8, row_y + 1, &szRowNameScratch, dirfg, bg);
-        ui_text_at(win, w - 80, row_y + 1, &szDirLabel, C_MUTED, bg);
+        ui_text_at(win, w - 80, row_y + 1, &szDirLabel, UI_COL_TEXT_MUTED, bg);
     } else {
-        let file_size = lw(ent + 28);
-        format_entry_name(ent, &szRowNameScratch);
-        format_bytes_size(file_size, &szRowSizeScratch);
+        format_entry_name(info, &szRowNameScratch);
+        format_bytes_size(fs_size(info), &szRowSizeScratch);
         ui_text_at(win, 8, row_y + 1, &szRowNameScratch, fg, bg);
-        ui_text_at(win, w - 80, row_y + 1, &szRowSizeScratch, C_MUTED, bg);
+        ui_text_at(win, w - 80, row_y + 1, &szRowSizeScratch, UI_COL_TEXT_MUTED, bg);
     }
 }
 
@@ -423,9 +432,10 @@ fn draw_rows(win, w) {
     let i = 0;
     while i < count {
         if i >= MAX_ROWS { return; }
-        let ent = syscall(SYS_FS_ENTRY, i);
-        if ent != 0 {
-            draw_row(win, w, i, ent);
+        # fs_snapshot opens + reads + closes per row, so even with MAX_ROWS=20
+        # the per-slot handle table (64 entries) is never under pressure.
+        if fs_snapshot(i, &szEntryInfo) == 1 {
+            draw_row(win, w, i, &szEntryInfo);
         }
         i = i + 1;
     }
@@ -436,10 +446,10 @@ fn draw_context_menu(win) {
     let cx = lw(&exp_ctx_x);
     let cy = lw(&exp_ctx_y);
     ui_context_menu(win, cx, cy, 4);
-    ui_context_menu_item(win, cx, cy, 0, &szCtxOpen,        C_TEXT);
-    ui_context_menu_item(win, cx, cy, 1, &szCtxRename,      C_TEXT);
-    ui_context_menu_item(win, cx, cy, 2, &szCtxNewFolder,   C_TEXT);
-    ui_context_menu_item(win, cx, cy, 3, &szCtxProperties,  C_TEXT);
+    ui_context_menu_item(win, cx, cy, 0, &szCtxOpen,        UI_COL_TEXT);
+    ui_context_menu_item(win, cx, cy, 1, &szCtxRename,      UI_COL_TEXT);
+    ui_context_menu_item(win, cx, cy, 2, &szCtxNewFolder,   UI_COL_TEXT);
+    ui_context_menu_item(win, cx, cy, 3, &szCtxProperties,  UI_COL_TEXT);
 }
 
 fn draw_done_message(win, w) {
@@ -448,7 +458,7 @@ fn draw_done_message(win, w) {
     return;
     let ox = (w - 140) / 2;
     ui_rect_at(win, ox, 60, 140, 30, C_OK);
-    ui_text_at(win, ox + 15, 68, &szNewFolderDone, C_WHITE, C_OK);
+    ui_text_at(win, ox + 15, 68, &szNewFolderDone, 0x00FFFFFF, C_OK);
 }
 
 fn draw(win) {
@@ -458,7 +468,7 @@ fn draw(win) {
     draw_path_bar(win, w);
     draw_header(win, w);
     draw_rows(win, w);
-    ui_status_bar(win, &szStatusReady, C_STATUS);
+    ui_status_bar(win, &szStatusReady, UI_COL_SURFACE_2);
 
     if lb(&exp_rename_active) == 1 {
         ui_modal_overlay(win, &szRenameLabel, &exp_rename_buf,
@@ -570,11 +580,12 @@ fn key(win, k) {
 
     if lb(&exp_rename_active) == 1 {
         if ch == K_ENTER {
-            let ent = selected_entry();
+            let h = selected_handle();
             sb(&exp_rename_active, 0);
-            if ent == 0 { return; }
+            if h == 0 { return; }
             filename_to_83(&exp_rename_buf, &fat16_name_buf);
-            syscall(SYS_FS_RENAME, ent, &fat16_name_buf);
+            syscall(SYS_FS_RENAME, h, &fat16_name_buf);
+            syscall(SYS_HANDLE_CLOSE, h);
             return;
         }
         edit_key(&exp_rename_active, &exp_rename_cursor, &exp_rename_buf, k);
@@ -611,9 +622,10 @@ fn key(win, k) {
     if ch == KEY_M    { show_context_menu(); return; }
     if ch == KEY_P    { open_properties(); return; }
     if ch == KEY_DEL_ASCII {
-        let ent = selected_entry();
-        if ent == 0 { return; }
-        syscall(SYS_FS_DELETE, ent);
+        let h = selected_handle();
+        if h == 0 { return; }
+        syscall(SYS_FS_DELETE, h);
+        syscall(SYS_HANDLE_CLOSE, h);
         sw(&explorer_sel, 0);
         return;
     }
@@ -632,52 +644,70 @@ fn prop_field(win, y, label, value) {
     return y + UI_ROW_H;
 }
 
-fn properties_entry(win) {
-    # idx+1 stored at offset 160; 0 = not initialized.
-    let slot = lq(win + 160);
-    if slot == 0 { return 0; }
-    return syscall(SYS_FS_ENTRY, slot - 1);
+# Returns the valid-entry index for the file Properties is describing, or
+# -1 if the window was never initialized. The +1 sentinel lets 0 mean "no
+# selection" cleanly. The fetch goes through SYS_WM_GET_USER_ARG so the
+# kernel can verify the per-window tag stamped at SYS_WM_SET_USER_ARG time;
+# a tag mismatch returns -1, which we surface as "no selection".
+fn properties_file_idx(win) {
+    let win_id = lw(win);
+    let slot = syscall(SYS_WM_GET_USER_ARG, win_id);
+    if slot <= 0 { return -1; }
+    return slot - 1;
+}
+
+# Fills this slot's szEntryInfo with the target entry's snapshot. Returns 1
+# on success, 0 if the window is uninitialized or the entry vanished.
+fn properties_snapshot(win) {
+    let idx = properties_file_idx(win);
+    if idx < 0 { return 0; }
+    return fs_snapshot(idx, &szEntryInfo);
 }
 
 fn properties_draw(win) {
-    let ent = properties_entry(win);
-    if ent == 0 { return; }
+    if properties_snapshot(win) == 0 { return; }
 
     ui_fill_client_below(win, 0, UI_COL_BG_BASE);
 
-    format_entry_name(ent, &fat16_name_buf);
+    format_entry_name(&szEntryInfo, &fat16_name_buf);
 
     let y = UI_PAD;
     y = prop_field(win, y, &szPropName, &fat16_name_buf);
 
-    if fs_is_dir(ent) == 1 {
+    if fs_is_dir(&szEntryInfo) == 1 {
         y = prop_field(win, y, &szPropType, &szPropTypeDir);
         y = prop_field(win, y, &szPropSize, &szPropSizeDir);
     } else {
         y = prop_field(win, y, &szPropType, &szPropTypeFile);
-        format_bytes_size(lw(ent + 28), &fat16_size_buf);
+        format_bytes_size(fs_size(&szEntryInfo), &fat16_size_buf);
         y = prop_field(win, y, &szPropSize, &fat16_size_buf);
     }
     y = prop_field(win, y, &szPropLoc, &szPathRoot);
 
     ui_section_title(win, OPENER_BTN_Y0 - UI_TITLE_H, &szPropOpenWith);
-    let n = opener_count(ent);
+    let n = opener_count(&szEntryInfo);
     let i = 0;
     while i < n {
         ui_button(win, UI_PAD, opener_btn_y(i),
-                  OPENER_BTN_W, opener_name(i, ent), UI_COL_SURFACE_2);
+                  OPENER_BTN_W, opener_name(i, &szEntryInfo), UI_COL_SURFACE_2);
         i = i + 1;
     }
 }
 
 fn properties_click(win, cx, cy) {
-    let ent = properties_entry(win);
-    if ent == 0 { return; }
-    let n = opener_count(ent);
+    if properties_snapshot(win) == 0 { return; }
+    let n = opener_count(&szEntryInfo);
     let i = 0;
     while i < n {
         if ui_button_hit(cx, cy, UI_PAD, opener_btn_y(i), OPENER_BTN_W) != 0 {
-            opener_open(i, ent);
+            # Re-open a fresh handle for the action syscall — the snapshot
+            # we used above has already been closed by fs_snapshot.
+            let idx = properties_file_idx(win);
+            if idx < 0 { return; }
+            let h = syscall(SYS_FS_ENTRY, idx);
+            if h == 0 { return; }
+            opener_open(i, &szEntryInfo, h);
+            syscall(SYS_HANDLE_CLOSE, h);
             return;
         }
         i = i + 1;

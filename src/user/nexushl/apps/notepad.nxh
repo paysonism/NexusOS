@@ -2,6 +2,7 @@
 
 use gui
 use fs
+use theme
 
 app "Notepad" { stack = 8192; }
 
@@ -72,6 +73,8 @@ extern render_rect;
 extern render_text;
 
 str szOpenTextScratch = "                                                                                "
+# 20-byte SYS_FS_ENTRY_INFO snapshot scratch — used by find_root_dir_cluster.
+str szNpEntryInfo     = "                    "
 
 # ============================================================
 # helpers
@@ -389,11 +392,10 @@ fn find_root_dir_cluster(name83) {
     let count = syscall(SYS_FS_COUNT);
     let i = 0;
     while i < count {
-        let ent = syscall(SYS_FS_ENTRY, i);
-        if ent != 0 {
-            if entry_name_eq(ent, name83) == 1 {
-                if (lb(ent + 11) & 0x10) != 0 {
-                    return lw(ent + 26);
+        if fs_snapshot(i, &szNpEntryInfo) == 1 {
+            if entry_name_eq(&szNpEntryInfo, name83) == 1 {
+                if fs_is_dir(&szNpEntryInfo) == 1 {
+                    return fs_cluster(&szNpEntryInfo);
                 }
             }
         }
@@ -452,7 +454,9 @@ fn draw(win) {
     # edit area
     let edit_h = h - TITLEBAR_HEIGHT - NP_EDIT_TOP - BORDER_WIDTH;
     if edit_h <= 0 { return; }
-    render_rect(x + BORDER_WIDTH, y + TITLEBAR_HEIGHT + NP_EDIT_TOP, w - BORDER_WIDTH * 2, edit_h, C_WHITE);
+    let edit_bg = theme_col(TC_SURFACE);
+    let edit_fg = theme_col(TC_TEXT);
+    render_rect(x + BORDER_WIDTH, y + TITLEBAR_HEIGHT + NP_EDIT_TOP, w - BORDER_WIDTH * 2, edit_h, edit_bg);
 
     let max_lines = edit_h / LINE_H;
     if max_lines == 0 { return; }
@@ -474,7 +478,7 @@ fn draw(win) {
                 render_text(
                     x + BORDER_WIDTH + 4,
                     y + TITLEBAR_HEIGHT + NP_EDIT_TOP + 2 + dl * LINE_H,
-                    &szOpenTextScratch, C_BLACK, C_WHITE);
+                    &szOpenTextScratch, edit_fg, edit_bg);
             }
             li = li + 1;
             dl = dl + 1;

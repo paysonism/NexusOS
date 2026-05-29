@@ -21,6 +21,10 @@ DNS_PORT_NET    equ 0x3500
 DNS_SRC_PORT_NET equ 0x01C0
 DNS_MAX_NAME    equ 253
 DNS_QUERY_CAP   equ 512
+
+; Per-slot destination policy (security_todo.md §7). Provides
+; sec_net_check_suffix, consulted below after the LDH/length kill-switch.
+%include "net_slot_policy.inc"
 DNS_FALLBACK_IP equ 0x08080808           ; 8.8.8.8 in A.B.C.D-packed form
 
 section .text
@@ -35,6 +39,26 @@ net_dns_query_a:
     push rdi
     push r8
     mov [rel net_dns_name_ptr], rdi
+
+    ; Kill switch: reject pathological host names BEFORE touching the wire.
+    ; Fail closed (return 0) on a name over DNS_MAX_NAME (253) bytes or
+    ; containing any non-LDH byte (anything outside letters/digits/hyphen/dot).
+    ; net_dns_build_query enforces the same rules per label, but this explicit
+    ; up-front gate keeps the policy auditable in one place and guarantees no
+    ; query is constructed for a hostile name.
+    mov rdi, [rel net_dns_name_ptr]
+    call net_dns_validate_name
+    test eax, eax
+    jz .fail
+
+    ; Per-slot DNS-suffix allowlist (security_todo.md §7). If the calling slot
+    ; opted into a suffix policy, the hostname must end (on a label boundary)
+    ; with the slot's allowed suffix; otherwise this is a no-op (allow). Fails
+    ; closed: a hostname outside the allowlist resolves to no query at all.
+    mov rdi, [rel net_dns_name_ptr]
+    call sec_net_check_suffix
+    test eax, eax
+    jz .fail
 
     ; Build the query once; reuse for both attempts.
     mov rdi, [rel net_dns_name_ptr]
@@ -72,6 +96,54 @@ net_dns_query_a:
     pop rdx
     pop rcx
     pop rbx
+    ret
+
+; RDI = hostname C-string. Returns EAX=1 if the name is acceptable, 0 if it is
+; over DNS_MAX_NAME bytes, empty/NULL, or contains a non-LDH byte. Pure scan —
+; no wire I/O. LDH = letters (A-Z/a-z), digits (0-9), hyphen, plus the label
+; separator dot. Fails closed.
+net_dns_validate_name:
+    push rcx
+    push rdi
+    test rdi, rdi
+    jz .vbad                             ; NULL pointer
+    xor ecx, ecx                         ; byte count
+.vloop:
+    mov al, [rdi]
+    test al, al
+    jz .vend
+    cmp ecx, DNS_MAX_NAME
+    jae .vbad                            ; would exceed 253 bytes
+    cmp al, '.'
+    je .vok
+    cmp al, '-'
+    je .vok
+    cmp al, '0'
+    jb .vbad
+    cmp al, '9'
+    jbe .vok
+    cmp al, 'A'
+    jb .vbad
+    cmp al, 'Z'
+    jbe .vok
+    cmp al, 'a'
+    jb .vbad
+    cmp al, 'z'
+    ja .vbad
+.vok:
+    inc rdi
+    inc ecx
+    jmp .vloop
+.vend:
+    test ecx, ecx
+    jz .vbad                             ; empty name
+    mov eax, 1
+    jmp .vret
+.vbad:
+    xor eax, eax
+.vret:
+    pop rdi
+    pop rcx
     ret
 
 ; Sends the prebuilt query in net_dns_query_buf to net_dns_server_ip and waits

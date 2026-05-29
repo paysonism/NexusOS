@@ -95,7 +95,7 @@ try {
     }
     Write-Host '[security] Compiled app present in APPS.BIN PASS' -ForegroundColor Green
 
-    Assert-Text 'F1 app blob copy cap is guarded' 'src\kernel\proc\usermode.asm' 'L3_APP_BLOB_COPY_CAP\s+equ\s+L3_SHADOW_WIN_OFF[\s\S]*?%error[\s\S]*?cmp\s+rcx,\s*L3_APP_BLOB_COPY_CAP[\s\S]*?rep\s+movsb'
+    Assert-Text 'F1 app blob copy cap is guarded' 'src\kernel\proc\usermode.asm' 'L3_APP_BLOB_COPY_CAP\s+equ\s+L3_SHADOW_WIN_OFF[\s\S]*?L3_APP_BLOB_PLACE_CAP\s+equ\s+L3_SLOT_USER_STACK_GUARD_OFF[\s\S]*?%error[\s\S]*?mov\s+rdx,\s*L3_APP_BLOB_PLACE_CAP[\s\S]*?rep\s+movsb'
     Assert-Text 'F2 FAT16 read uses scratch copy' 'src\kernel\fs\fat16.asm' '(fat16_read_file:|FN_BEGIN\s+fat16_read_file)[\s\S]*?mov\s+rsi,\s*FAT16_FILE_BUF[\s\S]*?rep\s+movsb'
     Assert-Text 'F3 FAT16 write pads final partial cluster' 'src\kernel\fs\fat16.asm' 'wf_write_partial_cluster:[\s\S]*?mov\s+rdi,\s*FAT16_FILE_BUF[\s\S]*?rep\s+stosb[\s\S]*?rep\s+movsb[\s\S]*?call\s+ata_write_sectors'
     Assert-Text 'F4 HID parser guards multi-byte item reads' 'src\kernel\drivers\hid_parser.asm' 'lea\s+rax,\s*\[rsi \+ 4\][\s\S]*?cmp\s+rax,\s*rbp[\s\S]*?movzx\s+eax,\s*byte\s+\[rsi \+ 3\][\s\S]*?lea\s+rax,\s*\[rsi \+ 2\][\s\S]*?\.skip_long_item:'

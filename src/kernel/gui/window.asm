@@ -1120,8 +1120,27 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     mov rcx, r13
     sub rcx, [rax + WIN_OFF_Y]
     sub rcx, TITLEBAR_HEIGHT  ; client_y (relY)
-    mov rdi, r11              ; target
-    mov rsi, rax              ; arg0: window ptr
+    ; §6 trampoline: intern the click_fn into the kernel-owned per-slot table,
+    ; then take the call target FROM THAT KERNEL TABLE (via wm_cb_resolve) so a
+    ; forged window-struct qword can never be the WM's jump target. rbx =
+    ; window/slot index; rax = win ptr; r11 = target; rdx/rcx = client coords
+    ; (preserved by wm_cb_intern/_resolve).
+    push rax
+    push rdx
+    push rcx
+    mov edi, ebx                  ; slot index
+    mov esi, WM_CB_FIELD_CLICK
+    mov rdx, r11                  ; target to intern
+    call wm_cb_intern             ; eax = slot-local callback id
+    mov edi, eax
+    call wm_cb_resolve            ; rax = trusted target from kernel BSS
+    mov r11, rax
+    pop rcx
+    pop rdx
+    pop rsi                       ; arg0: window ptr (was rax)
+    mov rdi, r11                  ; target from kernel table, not the window
+    test rdi, rdi
+    jz .click_done
     call dispatch_app_callback
     SER 'n'
 .click_done:
@@ -1168,9 +1187,21 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
     mov rcx, r13
     sub rcx, [rax + WIN_OFF_Y]
     sub rcx, TITLEBAR_HEIGHT
-    mov rdi, r11
-    mov rsi, rax
-    call dispatch_app_callback
+    ; §6 trampoline: intern the rclick_fn and invoke by id so the call target
+    ; comes from the kernel-owned table. rbx = window/slot index; rax = win ptr;
+    ; r11 = target; rdx/rcx = client coords.
+    push rdx
+    push rcx
+    mov edi, ebx                 ; slot index
+    mov esi, WM_CB_FIELD_RCLICK
+    mov rdx, r11                 ; target to intern
+    mov r8, rax                  ; stash win ptr (wm_cb_intern preserves r8)
+    call wm_cb_intern
+    mov edi, eax                 ; id
+    mov rsi, r8                  ; arg0 = window ptr
+    pop rcx
+    pop rdx
+    call wm_cb_trampoline
     mov eax, 1
     jmp .mouse_ret
 
@@ -1329,9 +1360,21 @@ FN_BEGIN wm_handle_mouse_event, 3, 0, FN_RET_SCALAR
 .app_drag_dispatch:
     mov [wm_app_drag_last_x], rdx
     mov [wm_app_drag_last_y], rcx
-    mov rdi, r11                ; target = drag_fn
-    mov rsi, rax                ; arg0 = window ptr
-    call dispatch_app_callback
+    ; §6 trampoline: intern the drag_fn and invoke by id so the call target
+    ; comes from the kernel-owned table. rbx = window/slot index (=
+    ; wm_app_drag_window_id); rax = win ptr; r11 = target; rdx/rcx = coords.
+    push rdx
+    push rcx
+    mov edi, ebx                ; slot index
+    mov esi, WM_CB_FIELD_DRAG
+    mov rdx, r11               ; target to intern
+    mov r8, rax                ; stash win ptr (wm_cb_intern preserves r8)
+    call wm_cb_intern
+    mov edi, eax               ; id
+    mov rsi, r8                ; arg0 = window ptr
+    pop rcx
+    pop rdx
+    call wm_cb_trampoline
 
 .app_drag_handled:
     mov eax, 1
@@ -1528,6 +1571,133 @@ FN_BEGIN wm_get_window_at, 2, 0, FN_RET_HANDLE
     pop r12
     ret
 
+; ============================================================================
+; §6 — Kernel-owned per-slot callback trampoline
+;
+; Threat: today the WM invokes app callbacks by reading a RAW function pointer
+; straight out of the window struct (WIN_OFF_CLICKFN/KEYFN/DRAGFN/RCLICKFN) and
+; jumping to it, so the invocation target is a ring-3-influenced qword.
+;
+; This adds a kernel-owned indirection so the WM's invocation no longer trusts
+; the window-struct qword as the call target. Each (slot, field) callback is
+; INTERNED — the pointer is copied into a per-slot callback table that lives in
+; KERNEL BSS, OUTSIDE the ring-3 app arena (so an app's own slot-memory write
+; bug can't forge an entry) — and the WM then dispatches by ID through
+; wm_cb_resolve/wm_cb_trampoline, which read the target from the kernel table.
+; The window struct's qword is reduced to "intern input", not "the address we
+; jump to". Same per-slot-array + index discipline as the handle table
+; (src/kernel/proc/handle_table.inc): one fixed-size row per slot, kernel BSS.
+;
+; SCOPE (strict file ownership; other agents edit syscall.asm / main.asm /
+; launch.inc concurrently):
+;   - INVOCATION sites this file owns are routed through the table:
+;     CLICKFN (.client_click), RCLICKFN (.right_click), DRAGFN
+;     (.app_drag_active). The call target is taken from wm_cb_table, not the
+;     window struct.
+;   - REGISTRATION (apps installing a callback) lives in syscall.asm
+;     (.sc_wm_handlers, CLICKFN/KEYFN) and src/user/apps/launch.inc (KEYFN
+;     direct write) — NOT owned here. The full ABI cutover (app registers a
+;     slot-local ID instead of a raw pointer; the kernel interns at
+;     registration time via wm_cb_intern) requires those owners to call
+;     wm_cb_intern at the store site and have apps pass an ID. Until then we
+;     intern lazily at dispatch, which still removes the raw pointer from the
+;     WM's call target and gives the table a single trusted fill point.
+;   - KEYFN INVOCATION lives in main.asm (the two WIN_OFF_KEYFN dispatch
+;     sites) — NOT owned here. That owner should swap
+;     `mov rdi,[win+KEYFN]; call dispatch_app_callback` for the same
+;     intern+`call wm_cb_trampoline` shape used below (field id
+;     WM_CB_FIELD_KEY reserved for it).
+;   - If CPI-lite callback signing (cpi_sign/verify_callback) lands/relands in
+;     this dispatch path, intern the CPI-VERIFIED pointer (defense in depth):
+;     verify first, then pass the cleaned pointer to wm_cb_intern.
+; ============================================================================
+
+; Per-(slot,field) callback target table — kernel BSS, indexed
+; [slot * WM_CB_FIELDS + field]. Holds the trusted kernel-image VA the WM will
+; actually jump to. A zero entry means "no callback interned".
+WM_CB_FIELD_CLICK   equ 0
+WM_CB_FIELD_KEY     equ 1            ; reserved for the main.asm KEYFN site
+WM_CB_FIELD_DRAG    equ 2
+WM_CB_FIELD_RCLICK  equ 3
+WM_CB_FIELDS        equ 4
+
+; wm_cb_intern — record a callback target for (slot, field) in the kernel-owned
+; table and return its slot-local id.
+;   EDI = slot index (== window index for app windows), 0..MAX_WINDOWS-1
+;   ESI = field id (WM_CB_FIELD_*)
+;   RDX = target (0 allowed -> "no callback").
+; Returns:
+;   EAX = packed slot-local callback id (slot * WM_CB_FIELDS + field) + 1, or
+;         0 if (slot,field) is out of range OR target is 0. The +1 bias keeps a
+;         valid id non-zero so 0 stays a clean "none" sentinel.
+; Clobbers RAX, RCX. Preserves RDI/RSI/RDX/R8 and the rest.
+wm_cb_intern:
+    cmp edi, MAX_WINDOWS
+    jae .ci_fail
+    cmp esi, WM_CB_FIELDS
+    jae .ci_fail
+    test rdx, rdx
+    jz .ci_fail                       ; no target -> no id
+    mov eax, edi
+    imul eax, WM_CB_FIELDS
+    add eax, esi                      ; eax = flat row index
+    mov ecx, eax                      ; save row index for the id
+    lea rax, [rel wm_cb_table + rax*8]
+    mov [rax], rdx                    ; store target
+    lea eax, [rcx + 1]                ; id = row + 1 (non-zero)
+    ret
+.ci_fail:
+    xor eax, eax
+    ret
+
+; wm_cb_resolve — look up a slot-local callback id in the kernel-owned table and
+; return the stored TRUSTED target. Single read point the dispatch sites take
+; their call target from; the window struct is never the source here.
+;   EDI = slot-local callback id (as returned by wm_cb_intern; 0 = none)
+; Returns:
+;   RAX = trusted target, or 0 if id is 0 / out of range / table slot empty.
+; Clobbers RAX, RCX. Preserves RSI/RDX/R8 etc. so callers can keep args live.
+; File-local leaf helper (no FN_BEGIN trace frame on this hot path); the future
+; cross-file KEYFN consumer in main.asm should call wm_cb_trampoline, not this.
+wm_cb_resolve:
+    test edi, edi
+    jz .cr_none
+    lea eax, [rdi - 1]                ; flat row index
+    cmp eax, MAX_WINDOWS * WM_CB_FIELDS
+    jae .cr_none
+    lea rcx, [rel wm_cb_table]
+    mov rax, [rcx + rax*8]            ; trusted target
+    ret
+.cr_none:
+    xor eax, eax
+    ret
+
+; wm_cb_trampoline — the kernel-owned invoker. Resolve a slot-local callback id
+; against the table and dispatch the stored TRUSTED target.
+;   EDI = slot-local callback id (0 = none)
+;   RSI = window ptr (arg0); RDX = arg1; RCX = arg2
+; Returns dispatch_app_callback's rax, or 0 (no call) if the id resolves empty.
+; Clobbers per dispatch_app_callback. Exposed (FN_BEGIN -> global) so the
+; main.asm KEYFN dispatch site can route through it in a later cutover.
+FN_BEGIN wm_cb_trampoline, 4, 0, FN_RET_SCALAR
+    push rsi
+    push rdx
+    push rcx
+    call wm_cb_resolve                ; rax = trusted target from kernel BSS
+    pop rcx
+    pop rdx
+    pop rsi
+    test rax, rax
+    jz .ct_none
+    mov rdi, rax                      ; target from KERNEL table, not the window
+    call dispatch_app_callback
+    FN_END wm_cb_trampoline
+    ret
+.ct_none:
+    xor eax, eax
+    FN_END wm_cb_trampoline
+    ret
+
 section .data
 szCloseX      db "X", 0
 szMinDash     db "-", 0
@@ -1582,5 +1752,16 @@ wallpaper_render_h dd 0
 wallpaper_render_target_addr dq WALLPAPER_CACHE0_ADDR
 align 64
 wallpaper_render_pack times 32 db 0
+
+; §6 per-slot callback target table (kernel BSS — OUTSIDE the ring-3 app arena,
+; so a slot-memory write bug can't forge an entry). One trusted kernel-image VA
+; per (slot, field). Indexed [slot * WM_CB_FIELDS + field]; a zero entry means
+; "no callback interned". BSS-zero = empty, so no boot seed is needed; a
+; recycled slot re-interns on its next dispatch. Mirrors the per-slot handle
+; table's kernel-BSS discipline.
+section .bss
+align 16
+global wm_cb_table
+wm_cb_table  resq MAX_WINDOWS * WM_CB_FIELDS
 
 section .text

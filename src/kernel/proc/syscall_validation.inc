@@ -1,3 +1,8 @@
+; SMAP/SMEP macros (USER_ACCESS_BEGIN/END) and smap_smep_init. Guarded by its
+; own %ifndef so a second include from syscall.asm is harmless. This is the
+; translation unit that emits smap_smep_init (main.asm references it extern).
+%include "smap.inc"
+
 sc_get_slot_bounds:
     mov eax, r15d
     cmp eax, MAX_WINDOWS
@@ -85,7 +90,9 @@ sc_validate_user_cstring:
     call sc_validate_user_range
     test eax, eax
     jz .uvc_done
+    USER_ACCESS_BEGIN                   ; SMAP: kernel reads a user-slot byte
     cmp byte [rdi], 0
+    USER_ACCESS_END
     je .uvc_match
     inc rcx
     jmp .uvc_loop
@@ -101,43 +108,148 @@ sc_validate_user_cstring:
     pop rdi
     ret
 
-; RDI=opaque FAT16 entry handle -> EAX=1 if it points at an aligned entry in
-; the current root/subdirectory cache or in the per-slot dir-entry cache.
-; Both ranges are checked independently because, in default builds, the
-; kernel root cache (~13MB) sits BELOW the L3 app arena (16MB+), so the old
-; jnc-chained layout sent every slot pointer down the kernel-cache branch
-; where it failed.
-sc_validate_dir_entry_handle:
-    ; --- kernel root-cache range ---
-    mov rax, rdi
-    sub rax, FAT16_ROOT_CACHE
-    jc .vdeh_try_slot
-    cmp rax, FAT16_ROOT_CACHE_SZ - DIR_ENTRY_SIZE
-    ja .vdeh_try_slot
-    test eax, DIR_ENTRY_SIZE - 1
-    jnz .vdeh_try_slot
-    mov eax, 1
-    ret
-.vdeh_try_slot:
-    ; --- per-slot L3 dir-entry cache range ---
-    mov rax, rdi
-    sub rax, [rel l3_app_arena_base_v]
-    jc .vdeh_fail
-    cmp rax, [rel l3_app_arena_size_v]
-    jae .vdeh_fail
-    mov edx, eax
-    and edx, APP_SLOT_SIZE - 1
-    sub edx, L3_DIR_ENTRY_CACHE_OFF
-    jc .vdeh_fail
-    cmp edx, L3_DIR_ENTRY_CACHE_SZ - DIR_ENTRY_SIZE
-    ja .vdeh_fail
-    test edx, DIR_ENTRY_SIZE - 1
-    jnz .vdeh_fail
-    mov eax, 1
-    ret
-.vdeh_fail:
+; RDI=ptr (NUL-terminated, already passed sc_validate_user_cstring so it lives
+; in-slot and is NUL-terminated within RSI), RSI=max_len -> EAX=1 if the path is
+; canonical/safe, EAX=0 to reject. Each user byte is read inside an
+; USER_ACCESS_BEGIN/END bracket so SMAP builds don't #PF. Pure scan, no alloc.
+; Reject rules (path-canonicalization guard for SYS_APP_OPEN):
+;   - any byte < 0x20 that is not the terminating NUL: control/non-printable
+;     bytes have no place in a command string and could smuggle separators.
+;   - leading '/' or '\' as the first byte: absolute-path escape out of the slot
+;     sandbox's notion of a relative command name.
+;   - "<letter>:" as the first two bytes: Windows drive-absolute prefix escape.
+;   - a ".." whole path component (".." at start or right after a separator AND
+;     immediately followed by '/', '\', or NUL): directory-traversal escape.
+;     "a..b" / "..foo" are ordinary names and are allowed.
+; Separators are both '/' (0x2F) and '\' (0x5C).
+sc_validate_path_canonical:
+    push rcx                                ; index
+    push rdx                                ; current byte
+    push r8                                 ; lookahead / scratch byte
+    push r9                                 ; at-component-start flag
+    push r10                                ; base ptr
+    push r11                                ; max_len
+    mov r10, rdi
+    mov r11, rsi
+    xor rcx, rcx
+    mov r9d, 1                              ; start of string == start of a component
+.spc_loop:
+    cmp rcx, r11                            ; safety bound: never scan past max_len
+    jae .spc_ok                             ; ran out without hitting a bad byte
+    lea rdi, [r10 + rcx]
+    USER_ACCESS_BEGIN                       ; SMAP: kernel reads a user-slot byte
+    movzx edx, byte [rdi]
+    USER_ACCESS_END
+    test dl, dl
+    jz .spc_ok                              ; NUL ends the scan -> canonical
+    cmp dl, 0x20                            ; reject control / non-printable bytes
+    jb .spc_reject
+    ; absolute-path / drive-prefix checks only at the very first byte
+    test rcx, rcx
+    jnz .spc_not_first
+    cmp dl, '/'
+    je .spc_reject
+    cmp dl, '\'
+    je .spc_reject
+    ; "<letter>:" drive-absolute prefix: byte0 is A-Z/a-z and byte1 is ':'
+    mov r8d, edx
+    or  r8b, 0x20                           ; fold to lowercase for the letter test
+    cmp r8b, 'a'
+    jb .spc_not_first
+    cmp r8b, 'z'
+    ja .spc_not_first
+    cmp r11, 2                              ; need a second byte to be a prefix
+    jb .spc_not_first
+    lea rdi, [r10 + 1]
+    USER_ACCESS_BEGIN
+    movzx r8d, byte [rdi]
+    USER_ACCESS_END
+    cmp r8b, ':'
+    je .spc_reject
+.spc_not_first:
+    ; ".." component detection: only when this '.' begins a component.
+    cmp dl, '.'
+    jne .spc_advance
+    test r9d, r9d                           ; must be at a component start
+    jz .spc_advance
+    inc rcx                                 ; look at the next byte
+    cmp rcx, r11
+    jae .spc_ok                             ; lone '.' at slot/bound end -> fine
+    lea rdi, [r10 + rcx]
+    USER_ACCESS_BEGIN
+    movzx r8d, byte [rdi]
+    USER_ACCESS_END
+    cmp r8b, '.'
+    jne .spc_after_dot                      ; ".x" — not a traversal; reprocess r8
+    ; we have ".." — check the byte after it terminates the component
+    inc rcx
+    cmp rcx, r11
+    jae .spc_reject                         ; ".." flush against the bound -> reject
+    lea rdi, [r10 + rcx]
+    USER_ACCESS_BEGIN
+    movzx r8d, byte [rdi]
+    USER_ACCESS_END
+    test r8b, r8b
+    jz .spc_reject                          ; ".."<NUL>  -> traversal
+    cmp r8b, '/'
+    je .spc_reject                          ; ".."/      -> traversal
+    cmp r8b, '\'
+    je .spc_reject                          ; "..\"      -> traversal
+    ; ".." followed by a name char (e.g. "..foo") is an ordinary name; the byte
+    ; in r8b is the next char to classify. Fall through to reprocess it.
+.spc_after_dot:
+    ; r8b holds a byte we already consumed past; classify it like the main loop
+    ; without re-reading. It is < 0x20? reject. It is a separator? mark start.
+    cmp r8b, 0x20
+    jb .spc_reject
+    xor r9d, r9d
+    cmp r8b, '/'
+    je .spc_mark_start
+    cmp r8b, '\'
+    jne .spc_step
+.spc_mark_start:
+    mov r9d, 1
+.spc_step:
+    inc rcx
+    jmp .spc_loop
+.spc_advance:
+    ; classify the current byte (in dl) for the next iteration's start flag
+    xor r9d, r9d
+    cmp dl, '/'
+    je .spc_advance_start
+    cmp dl, '\'
+    jne .spc_advance_step
+.spc_advance_start:
+    mov r9d, 1
+.spc_advance_step:
+    inc rcx
+    jmp .spc_loop
+.spc_reject:
     xor eax, eax
+    jmp .spc_done
+.spc_ok:
+    mov eax, 1
+.spc_done:
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdx
+    pop rcx
     ret
+
+; FAT16 dir-entry handles are now opaque indices in the per-slot handle
+; table (see src/kernel/proc/handle_table.inc); the legacy
+; sc_validate_dir_entry_handle / sc_dir_entry_handle_to_kernel pair has
+; been removed. The validator's FN_KIND_HANDLE arm calls handle_resolve
+; directly, and FS syscall handlers call sc_resolve_dir_entry_arg in
+; syscall.asm to translate handle -> kernel root-cache entry pointer.
+;
+; The per-slot snapshot region (L3_DIR_ENTRY_CACHE_*) backed the old
+; "dereference the returned pointer" contract for SYS_FS_ENTRY and is no
+; longer used; ring 3 reads entry fields by value through
+; SYS_FS_ENTRY_INFO. Slot 0x1D1000..0x1D5000 is currently unused and is
+; reserved for future per-slot caches.
 
 ; RDI=callback target -> EAX=1 if null or inside user-owned code/data.
 sc_validate_callback_target:

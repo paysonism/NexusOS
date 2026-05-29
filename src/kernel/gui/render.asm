@@ -30,6 +30,7 @@ global render_mark_dirty
 global render_mark_full
 global render_flush
 global render_restore_dirty_backbuffer
+global render_save_dirty_backbuffer
 
 ; --- Initialize render system ---
 render_init:
@@ -345,6 +346,118 @@ render_restore_dirty_backbuffer:
     jmp .rdb_loop
 
 .rdb_done:
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; --- Save only current dirty rectangles into the saved backbuffer ------------
+; Used by partial live-window refresh paths so later cursor/drag restores see
+; the newest pixels without copying the entire screen.
+render_save_dirty_backbuffer:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+
+    mov r13d, [dirty_count]
+    test r13d, r13d
+    jz .sdb_done
+
+    xor r12d, r12d
+.sdb_loop:
+    cmp r12d, r13d
+    jge .sdb_done
+
+    mov eax, r12d
+    shl eax, 4
+    lea rbx, [dirty_rects + rax]
+    mov edi, [rbx]
+    mov esi, [rbx + 4]
+    mov edx, [rbx + 8]
+    mov ecx, [rbx + 12]
+
+    test edi, edi
+    jge .clip_left_ok
+    add edx, edi
+    xor edi, edi
+.clip_left_ok:
+    test esi, esi
+    jge .clip_top_ok
+    add ecx, esi
+    xor esi, esi
+.clip_top_ok:
+    test edx, edx
+    jle .sdb_next
+    test ecx, ecx
+    jle .sdb_next
+
+    mov eax, [scr_width]
+    sub eax, edi
+    cmp edx, eax
+    jle .clip_right_ok
+    mov edx, eax
+.clip_right_ok:
+    mov eax, [scr_height]
+    sub eax, esi
+    cmp ecx, eax
+    jle .clip_bottom_ok
+    mov ecx, eax
+.clip_bottom_ok:
+    test edx, edx
+    jle .sdb_next
+    test ecx, ecx
+    jle .sdb_next
+
+    mov r10, [scr_pitch_q]
+    mov eax, esi
+    imul rax, r10
+    mov r8, BACK_BUFFER_SAVE_ADDR
+    add r8, rax
+    mov r9, [bb_addr]
+    add r9, rax
+    mov eax, edi
+    shl eax, 2
+    add r8, rax
+    add r9, rax
+    mov r11d, edx
+
+.sdb_row:
+    test ecx, ecx
+    jz .sdb_next
+    push rcx
+    mov rdi, r8
+    mov rsi, r9
+    mov ecx, r11d
+    rep movsd
+    pop rcx
+    add r8, r10
+    add r9, r10
+    dec ecx
+    jmp .sdb_row
+
+.sdb_next:
+    inc r12d
+    jmp .sdb_loop
+
+.sdb_done:
     pop r13
     pop r12
     pop r11

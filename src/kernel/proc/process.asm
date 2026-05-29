@@ -6,6 +6,7 @@ bits 64
 %include "constants.inc"
 %include "structs.inc"
 %include "macros.inc"
+%include "smap.inc"
 
 ; MAX_PROCESSES and PROCESS_POOL now live in constants.inc so workqueue.asm
 ; can bill cycles into the same PCB table without redefining them.
@@ -119,7 +120,9 @@ FN_BEGIN process_create, 0, 0, FN_RET_SCALAR
     sub rax, 8
     extern call_app_l3_app_done
     lea rdx, [rel call_app_l3_app_done]
-    mov qword [rax], rdx
+    USER_ACCESS_BEGIN
+    mov qword [rax], rdx          ; IRET trampoline onto the slot's user stack (PTE.U=1)
+    USER_ACCESS_END
     mov [rbx + process_t.rsp], rax
     
     mov edi, r13d
@@ -779,11 +782,23 @@ dispatch_app_callback:
     jmp .ret
 
 .timed_out:
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, '!'
+    out dx, al
+    mov al, 'T'
+    out dx, al
+    pop rdx
+    pop rax
     mov dword [ring3_ap_enabled], 0    ; auto-disable for the rest of the boot
     lea rdi, [rel app_callback_lock]
     call wq_unlock
-    xor eax, eax
-    jmp .ret
+    ; The AP that owns this job is presumed dead (a draw/click callback should
+    ; never take >200 ms), so it will not double-run the stale job. Run the
+    ; callback inline now instead of returning without drawing — otherwise the
+    ; window paints only its blank background (a white window) for this frame.
+    jmp .inline
 
 .submit_fail:
     lea rdi, [rel app_callback_lock]
@@ -801,6 +816,83 @@ dispatch_app_callback:
     pop r15
     pop r14
     pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+%endif
+
+; --- media_draw_dispatch ------------------------------------------------------
+; Route the kernel-side Media Player draw fn (app_media_draw) onto the owning
+; app's home_core AP instead of running it inline on the BSP. Without this the
+; video blit always runs on core 0, and two playing videos saturate the BSP and
+; freeze the GUI.
+;
+; app_media_draw is NOT a ring-3 callback (it runs in kernel context and writes
+; the shared backbuffer directly), so it cannot go through dispatch_app_callback
+; / call_app_l3. Instead we submit it as a kernel work-queue job pinned to the
+; process's home_core and block until it completes. The BSP is idle during the
+; wait, so only one core ever writes the backbuffer at a time and no fb lock is
+; needed. A 200 ms timeout falls back to inline (and disables AP routing for the
+; rest of the boot) so a wedged AP can never freeze the OS.
+;
+; Input:  RDI = window struct ptr
+; Output: none (drop-in replacement for the inline `call app_media_draw`)
+extern app_media_draw
+%ifndef NEXUS_ENABLE_RING3_AP
+global media_draw_dispatch
+media_draw_dispatch:
+    jmp app_media_draw
+%else
+global media_draw_dispatch
+media_draw_dispatch:
+    push rbp
+    mov rbp, rsp
+    push rbx
+    push r12                           ; 3 pushes -> rsp 16-aligned at calls
+    mov r12, rdi                       ; window ptr
+
+    cmp dword [ring3_ap_enabled], 0
+    je .inline
+    mov eax, [smp_alive_cores]
+    cmp eax, 2
+    jb .inline
+
+    mov edi, [r12 + WIN_OFF_ID]
+    call process_find_by_window
+    test eax, eax
+    jz .inline
+    mov ebx, eax                       ; pid
+
+    mov eax, ebx
+    imul rax, 512
+    add rax, PROCESS_POOL
+    mov ecx, [rax + process_t.home_core]
+    test ecx, ecx
+    jz .inline
+
+    mov edi, ebx                       ; pid
+    mov rsi, app_media_draw            ; func
+    mov rdx, r12                       ; arg = window ptr
+    mov r8d, 1                         ; WQ_PRIO_NORMAL
+    call process_submit_job
+    cmp eax, -1
+    je .inline
+    mov edi, eax
+    mov esi, 20                        ; 20 ticks = ~200 ms timeout
+    call workqueue_wait_timeout
+    test edx, edx
+    jnz .timed_out
+    jmp .ret
+
+.timed_out:
+    mov dword [ring3_ap_enabled], 0    ; auto-disable AP routing this boot
+    ; The AP owning this job is presumed dead (a draw should never take 200 ms),
+    ; so it will not double-run; draw inline now so the frame still paints.
+.inline:
+    mov rdi, r12
+    call app_media_draw
+.ret:
     pop r12
     pop rbx
     pop rbp
