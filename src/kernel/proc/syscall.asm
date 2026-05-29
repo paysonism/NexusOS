@@ -9,6 +9,7 @@ bits 64
 %include "l3_runtime.inc"
 %include "trace.inc"
 %include "syscall_caps.inc"
+%include "kdomain_hmac.inc"       ; one domain-separated HMAC primitive (§13)
 %include "shadow_stack.inc"
 %include "syscall_trace.inc"
 %include "qrng_seed.inc"          ; quantum entropy blob folded into the canary
@@ -429,6 +430,45 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 %endif
     cmp rax, syscall_table_count
     jae .sc_invalid
+%ifdef ENABLE_SYSCALL_PERM
+    ; Heterogeneous syscall numbering per slot (security_todo.md §12). rax holds
+    ; the APP-VISIBLE syscall number (bounds-checked < syscall_table_count just
+    ; above). Translate it to the REAL syscall_table row through this slot's
+    ; inverse permutation, so a static exploit blob baked against one layout
+    ; lands on the wrong handler in another launch. The forward permutation is
+    ; what a (future) loader-side rewrite would apply to the app's SYS_*
+    ; constants; sc_slot_perm_inv[] is the kernel's inverse, recovering the row.
+    ;
+    ; CONSTANT-TIME: a single indexed load, no data-dependent branch on the
+    ; syscall number (consistent with the constant-time arg-loader, §2). The
+    ; lfence-before-indirect-jmp Spectre-v2 barrier downstream is untouched.
+    ;
+    ; sc_slot_perm_generate lazily builds this slot's permutation on first use
+    ; (BSS-zero "not generated" sentinel); until generated the table is identity,
+    ; so a slot that has never dispatched still maps every number to itself.
+    ; OFF by default -> this whole block is absent and rax is the row directly,
+    ; so the default image is functionally identical to today's identity map.
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    movzx edi, r15b
+    call sc_slot_perm_ensure            ; generate this slot's perm once
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
+    movzx ecx, r15b
+    imul ecx, ecx, syscall_table_count  ; slot's inverse-table base
+    add rcx, rax                        ; + app-visible number = flat index
+    lea rdx, [rel sc_slot_perm_inv]
+    movzx eax, byte [rdx + rcx]         ; eax = real syscall_table row
+    ; Re-publish the REAL number into the saved frame so every downstream gate
+    ; (cap/allowlist bitmap, rate, strike, post-condition) keys off the real row,
+    ; not the app-visible one. The trace ring (appended pre-dispatch) keeps the
+    ; app-visible value, which is the number the app actually issued.
+    mov [rsp + ALL_RAX], rax
+%endif
     mov rbx, rax
     ; SYSCALL_ENTRY_SIZE == 24, so rbx *= 24 via (rbx + rbx*2) << 3.
     lea rbx, [rbx + rbx*2]
@@ -448,18 +488,17 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     ; Time-of-check authentication of the cap mask. slot_cap_mask[] is plain
     ; kernel data; any kernel-write bug that flips a bit there would silently
     ; widen this slot's capabilities. Before trusting dl we recompute the
-    ; per-slot HMAC (low8(kernel_canary ^ slot ^ mask ^ CAP_HMAC_DOMAIN)) and
+    ; per-slot HMAC (low8(kernel_canary ^ slot ^ mask ^ KDOM_CAP_MASK)) and
     ; compare it against the authenticator stamped alongside the mask. A
     ; mismatch means the mask was tampered with after the last legitimate
     ; write, so we panic on the same CANARY path as CPI corruption rather than
     ; dispatch on a forged mask. Done before the cap AND so a widened mask is
     ; never even consulted. Clobbers r8/r9 only (rax=cap bit, rcx/rdx live).
-    mov r9, [rel kernel_canary]
-    movzx r8d, r15b
-    xor r9, r8                      ; mix slot id
-    movzx r8d, dl
-    xor r9, r8                      ; mix the (claimed) mask byte
-    xor r9, CAP_HMAC_DOMAIN
+    movzx r8d, r15b                 ; slot id
+    movzx eax, dl                   ; claimed mask byte (rax scratch, reloaded below)
+    ; low8(kernel_canary ^ slot ^ mask ^ KDOM_CAP_MASK); same primitive and same
+    ; domain (0x5C) as cap_mask_sign, so the comparison stays value-identical (§13).
+    KHMAC_TAG r9, r9d, r9b, r8, rax, KDOM_CAP_MASK
     lea r8, [rel slot_cap_hmac]
     movzx eax, r15b                 ; reload slot into a scratch index reg
     add r8, rax
@@ -956,9 +995,9 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     ; "explicitly set to zero" — and the tag verifier would reject 0 too.
     test rsi, rsi
     jz .sc_wm_set_user_arg_store
-    mov rdx, [rel kernel_canary]
-    xor rdx, rax                      ; mix per-window struct address
-    movzx edx, dx                     ; low 16 bits = tag
+    ; tag = low16(kernel_canary ^ &window); KDOM_USER_ARG is 0 so this is
+    ; byte-identical to the former hand-written sequence (see §13).
+    KHMAC_TAG rdx, edx, dx, rax, 0, KDOM_USER_ARG
     shl rdx, 48
     or rsi, rdx
 .sc_wm_set_user_arg_store:
@@ -985,9 +1024,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov rcx, [rax + 160]              ; stored qword
     test rcx, rcx
     jz .sc_wm_get_user_arg_zero
-    mov rdx, [rel kernel_canary]
-    xor rdx, rax
-    movzx edx, dx
+    KHMAC_TAG rdx, edx, dx, rax, 0, KDOM_USER_ARG
     shl rdx, 48                       ; expected tag bits
     mov rsi, rcx
     mov r8, 0xFFFF000000000000
@@ -3322,10 +3359,9 @@ FN_BEGIN cpi_sign_callback, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_
     mov rax, rdi
     mov rcx, 0x0000FFFFFFFFFFFF
     and rax, rcx                      ; mask the would-be tag bits
-    mov rcx, [rel kernel_canary]
-    xor rcx, rsi                      ; mix per-window struct address
-    xor rcx, rdx                      ; mix field offset
-    movzx ecx, cx
+    ; tag = low16(kernel_canary ^ &window ^ field_offset) — KDOM_CPI is 0 so
+    ; this is byte-identical to the former hand-written sequence (see §13).
+    KHMAC_TAG rcx, ecx, cx, rsi, rdx, KDOM_CPI
     shl rcx, 48
     or rax, rcx
     pop rcx
@@ -3348,10 +3384,7 @@ FN_BEGIN cpi_verify_callback, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIN
     jz .cvc_zero
     push rcx
     push r8
-    mov rcx, [rel kernel_canary]
-    xor rcx, rsi
-    xor rcx, rdx
-    movzx ecx, cx
+    KHMAC_TAG rcx, ecx, cx, rsi, rdx, KDOM_CPI
     shl rcx, 48                       ; expected tag bits
     mov rax, rdi
     mov r8, 0xFFFF000000000000
@@ -3383,7 +3416,7 @@ FN_BEGIN cpi_verify_callback, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIN
 ; kernel_canary key authenticates each slot's capability mask so a stray
 ; kernel write that widens slot_cap_mask[slot] is caught at the next dispatch
 ; instead of silently granting privileges. Tag = low8(kernel_canary ^ slot ^
-; mask ^ CAP_HMAC_DOMAIN); 8 bits is all the room a 1-byte mask alongside a
+; mask ^ KDOM_CAP_MASK); 8 bits is all the room a 1-byte mask alongside a
 ; 1-byte authenticator affords, but it still forces an attacker to leak the
 ; canary before they can forge a matching pair. The dispatcher verifies inline
 ; (hot path); these helpers are the single source of truth for the write side.
@@ -3394,13 +3427,14 @@ FN_BEGIN cpi_verify_callback, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIN
 global cap_mask_sign
 FN_BEGIN cap_mask_sign, 2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR), FN_RET_SCALAR
     push rcx
-    mov rcx, [rel kernel_canary]
+    push r8
     movzx eax, dil                    ; slot id (low byte)
-    xor rcx, rax
-    movzx eax, sil                    ; mask byte
-    xor rcx, rax
-    xor rcx, CAP_HMAC_DOMAIN
-    movzx eax, cl                     ; truncate to 8 bits
+    movzx r8d, sil                    ; mask byte
+    ; tag = low8(kernel_canary ^ slot ^ mask ^ KDOM_CAP_MASK). KDOM_CAP_MASK is
+    ; the former CAP_HMAC_DOMAIN (0x5C) so the byte is unchanged (see §13).
+    KHMAC_TAG rcx, ecx, cl, rax, r8, KDOM_CAP_MASK
+    mov eax, ecx                      ; authenticator byte -> result reg
+    pop r8
     pop rcx
     FN_END cap_mask_sign
     ret
@@ -3935,7 +3969,7 @@ slot_cap_mask: times MAX_WINDOWS db CAP_CORE
 
 ; Per-slot authenticator paralleling slot_cap_mask[] (security_todo.md §4,
 ; "Time-of-check capability cache"). Each byte is
-;   low8(kernel_canary ^ slot ^ mask ^ CAP_HMAC_DOMAIN)
+;   low8(kernel_canary ^ slot ^ mask ^ KDOM_CAP_MASK)
 ; recomputed by cap_mask_sign whenever the mask is legitimately written, and
 ; verified inline by the dispatcher's cap gate before the mask is trusted. The
 ; static CAP_ALL masks above can't have their HMAC assembled in (the canary key
@@ -4014,6 +4048,29 @@ align 16
 sc_trace_head:  times MAX_WINDOWS dw 0
 align 16
 sc_trace_hist:  times (MAX_WINDOWS * SC_TRACE_HIST_SLOTS) dw 0
+
+%ifdef ENABLE_SYSCALL_PERM
+; --- Heterogeneous syscall numbering per slot (security_todo.md §12) ---------
+; Per-slot INVERSE permutation of the syscall table, in KERNEL BSS OUTSIDE the
+; ring-3 arena (parallel to slot_cap_mask[]/slot_syscall_allow[]/l3_slot_key[]),
+; so a slot's own memory-write bug can't rewrite its mapping. One byte per
+; syscall number per slot:
+;   sc_slot_perm_inv[slot*syscall_table_count + app_visible] = real_table_row
+; The dispatcher applies this on entry to recover the real row from the number
+; the app issued. The matching FORWARD permutation (real_row -> app_visible) is
+; what a future loader-side rewrite stamps into the app's SYS_* constants; it is
+; built transiently in sc_slot_perm_generate and discarded — only the inverse
+; the kernel needs is persisted.
+;
+; sc_slot_perm_ready[slot] is the generation sentinel: BSS-zero (0) = "not
+; generated yet" -> the lazy ensure path treats the slot as IDENTITY until it is
+; generated. After generation it is 1. This makes a never-dispatched slot, and
+; the whole default (non-ENABLE_SYSCALL_PERM) build, behave exactly as today.
+align 16
+sc_slot_perm_inv:   times (MAX_WINDOWS * syscall_table_count) db 0
+align 16
+sc_slot_perm_ready: times MAX_WINDOWS db 0
+%endif
 
 %ifdef ENABLE_DEBUG_SERIAL
 ; Validator post-condition snapshot storage (security_todo.md §2, debug build
@@ -4160,6 +4217,179 @@ sc_reset_allow_bitmap:
     pop rcx
     pop rax
     ret
+
+%ifdef ENABLE_SYSCALL_PERM
+; ----------------------------------------------------------------------------
+; Heterogeneous syscall numbering per slot — generation (security_todo.md §12).
+;
+; sc_slot_perm_ensure(edi=slot): if this slot's permutation has not been
+; generated yet (sentinel sc_slot_perm_ready[slot]==0), generate it once. The
+; lazy first-use trigger lives on the dispatch path so the gated build is
+; self-contained — it needs no edit to the contended usermode.asm slot-init
+; path. THE LOADER HOOK (documented, scoped out) would instead call
+; sc_slot_perm_generate from l3_copy_app_blob_to_slot, right after
+; l3_derive_slot_key (usermode.asm), and ALSO rewrite the app's SYS_* constants
+; with the FORWARD permutation; see the §12 _Done_ note. Preserves all caller
+; regs.
+;
+; sc_slot_perm_generate(edi=slot): build a fresh per-launch random permutation
+; for the slot. Forward perm fwd[] (real_row -> app_visible) via Fisher-Yates
+; driven by a keyed RNG seeded from the SAME source as the per-slot key work
+; (l3_slot_key[slot], itself RDTSC^RDRAND-derived via the boot nonce), mixed
+; with kernel_canary and a fresh RDTSC so the layout differs per launch. The
+; persisted artifact is the INVERSE: inv[app_visible]=real_row. Preserves all
+; caller regs.
+;
+; Internal plain-label helpers (no FN_BEGIN — matches sc_build_allow_bitmap),
+; so check_coverage.py doesn't require coverage and they carry no FN gate.
+; ----------------------------------------------------------------------------
+extern l3_slot_key
+
+sc_slot_perm_ensure:
+    push rax
+    movzx eax, dil
+    cmp eax, MAX_WINDOWS
+    jae .spe_ret
+    lea rax, [rel sc_slot_perm_ready]
+    movzx ecx, dil
+    cmp byte [rax + rcx], 0
+    jne .spe_ret_pop_rcx
+    push rcx
+    call sc_slot_perm_generate          ; edi=slot still live
+    pop rcx
+.spe_ret_pop_rcx:
+    pop rax
+    ret
+.spe_ret:
+    pop rax
+    ret
+
+sc_slot_perm_generate:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    movzx r10d, dil                     ; r10 = slot (validated by caller path)
+    cmp r10d, MAX_WINDOWS
+    jae .spg_done
+    ; --- seed the keyed RNG (r11) -----------------------------------------
+    ;   seed = l3_slot_key[slot] ^ kernel_canary ^ RDTSC, guarded non-zero.
+    mov rax, [rel l3_slot_key + r10*8]
+    xor rax, [rel kernel_canary]
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    test rax, rax
+    jnz .spg_seed_ok
+    mov rax, 0x9E3779B97F4A7C15         ; non-zero fallback (golden ratio)
+.spg_seed_ok:
+    mov r11, rax                        ; r11 = SplitMix64 state
+    ; --- fwd[] identity init: store it INTO the inverse array's row first,
+    ; shuffle in place, then convert to the inverse (in-place) at the end.
+    ; r9 = this slot's table base in sc_slot_perm_inv.
+    mov eax, r10d
+    imul eax, eax, syscall_table_count
+    lea r9, [rel sc_slot_perm_inv]
+    add r9, rax                          ; r9 -> fwd[]/inv[] row for this slot
+    xor ecx, ecx
+.spg_id:
+    cmp ecx, syscall_table_count
+    jae .spg_id_done
+    mov byte [r9 + rcx], cl              ; fwd[i] = i   (count <= 256, fits a byte)
+    inc ecx
+    jmp .spg_id
+.spg_id_done:
+    ; --- Fisher-Yates over fwd[]: for i = count-1 down to 1, j = rand % (i+1),
+    ;     swap fwd[i], fwd[j]. Constant work per element; the only branch is the
+    ;     loop bound, not the syscall number, so no per-number timing leak.
+    mov ecx, syscall_table_count
+    dec ecx                              ; i = count-1
+.spg_shuf:
+    cmp ecx, 1
+    jb .spg_shuf_done
+    ; r8 = next random draw (SplitMix64 over r11)
+    call .spg_rng                        ; -> rax random qword
+    ; j = rax mod (i+1)
+    mov r8d, ecx
+    inc r8d                              ; i+1
+    xor edx, edx
+    div r8                               ; rax/r8 -> rdx = remainder = j
+    ; swap fwd[i] <-> fwd[j]
+    movzx eax, byte [r9 + rcx]           ; fwd[i]
+    movzx ebx, byte [r9 + rdx]           ; fwd[j]
+    mov [r9 + rcx], bl
+    mov [r9 + rdx], al
+    dec ecx
+    jmp .spg_shuf
+.spg_shuf_done:
+    ; --- Convert fwd[] (real_row -> app_visible) to inv[] (app_visible ->
+    ; real_row), in place, via a temp on the stack. inv[fwd[i]] = i.
+    ; syscall_table_count bytes fit easily; reserve a 256-byte scratch.
+    sub rsp, 256
+    xor ecx, ecx
+.spg_inv:
+    cmp ecx, syscall_table_count
+    jae .spg_inv_done
+    movzx eax, byte [r9 + rcx]           ; app_visible = fwd[real_row=ecx]
+    mov byte [rsp + rax], cl             ; tmp[app_visible] = real_row
+    inc ecx
+    jmp .spg_inv
+.spg_inv_done:
+    ; copy tmp[] back over the row -> now it holds the inverse
+    xor ecx, ecx
+.spg_copy:
+    cmp ecx, syscall_table_count
+    jae .spg_copy_done
+    movzx eax, byte [rsp + rcx]
+    mov [r9 + rcx], al
+    inc ecx
+    jmp .spg_copy
+.spg_copy_done:
+    add rsp, 256
+    ; mark generated
+    lea rax, [rel sc_slot_perm_ready]
+    mov byte [rax + r10], 1
+.spg_done:
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+; .spg_rng - SplitMix64 step over state r11; returns next value in rax.
+; Clobbers rax/rdx only (rcx=loop i and the rest are preserved by the caller).
+.spg_rng:
+    push rcx
+    mov rax, 0x9E3779B97F4A7C15
+    add r11, rax
+    mov rax, r11
+    mov rcx, rax
+    shr rcx, 30
+    xor rax, rcx
+    mov rdx, 0xBF58476D1CE4E5B9
+    imul rax, rdx
+    mov rcx, rax
+    shr rcx, 27
+    xor rax, rcx
+    mov rdx, 0x94D049BB133111EB
+    imul rax, rdx
+    mov rcx, rax
+    shr rcx, 31
+    xor rax, rcx
+    pop rcx
+    ret
+%endif
 
 ; kernel_apply_app_manifest(rdi=slot, rsi=app_id)
 ;

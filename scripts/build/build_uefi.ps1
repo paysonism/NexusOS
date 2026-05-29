@@ -10,6 +10,7 @@ param(
     [switch]$NoSmap,         # Disable CR4.SMEP/SMAP enforcement. SMAP is ON by default (CPUID-gated at runtime); pass -NoSmap only for CPUs/emulators that lack SMAP and where the run target can't expose +smap.
     [switch]$Cet,            # Enable the hardware CET scaffold (CR4.CET + IA32_S_CET). CPUID-gated at runtime (no-op on CPUs/VMs without SHSTK, incl. QEMU TCG); complements the always-on software kernel shadow stack. SHSTK/IBT *detection* is always compiled regardless of this flag. The supervisor shadow-stack RET-check itself is NOT armed yet (needs a seeded PL0_SSP — documented follow-up in src/include/cet.inc).
     [switch]$CetIbt,         # Additionally arm the IBT-side S_CET bits when IBT is present. Requires -Cet. OFF by default: endbr64 markers are not yet emitted at indirect-branch targets, so enabling ENDBR_EN would #CP. Plumbing only.
+    [switch]$SyscallPerm,    # Heterogeneous syscall numbering per slot (security_todo.md §12). Per-launch keyed-random permutation of the syscall table; the dispatcher applies the kernel-side inverse mapping on entry. OFF by default -> identity (default image byte-for-byte unchanged). Kernel-side storage+generation+inverse-lookup only; the loader-side SYS_* constant rewrite is documented but scoped out (would touch every built-in app).
     [switch]$CopyToE         # Copy built ESP\EFI tree to E:\ for boot from removable media.
     # GFX/DCN bring-up flags (-Gfx, -GfxWave3, -GfxWave3L, -GfxImuKick,
     # -DiagLegacy) were retired 2026-05-26 along with the AMD 780M iGPU
@@ -75,6 +76,17 @@ if ($Cet) {
     }
 } else {
     Write-Host '  (CET: hardware enable OFF -- SHSTK/IBT detection still compiled; -Cet to enable scaffold)' -ForegroundColor Gray
+}
+# Heterogeneous syscall numbering per slot (security_todo.md §12). OFF by
+# default: the dispatcher's inverse map is the identity and the default image is
+# byte-for-byte unchanged. -SyscallPerm compiles the per-slot inverse-permutation
+# storage, the keyed-RNG generation, and the branch-free inverse lookup on the
+# dispatch path (the lfence-before-indirect-jmp barrier is preserved).
+if ($SyscallPerm) {
+    $KernelDefines += '-dENABLE_SYSCALL_PERM'
+    Write-Host '  (SYSCALLPERM: per-slot syscall-number permutation ENABLED -- kernel-side inverse map; loader-side SYS_* rewrite scoped out)' -ForegroundColor Magenta
+} else {
+    Write-Host '  (SYSCALLPERM: OFF -- identity syscall numbering; -SyscallPerm to enable per-slot permutation)' -ForegroundColor Gray
 }
 if (-not $NoKaslr) {
     # Loader-only switch: kernel assembles transparently at the chosen ORG;
