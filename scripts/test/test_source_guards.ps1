@@ -64,23 +64,26 @@ Assert-Match $syscallPath 'syscall_validation\.inc' 'syscall.asm must include th
 Assert-Match $syscallPath '\.sc_print:[\s\S]*call sc_validate_user_cstring' 'SYS_PRINT must validate user strings.'
 Assert-Match $syscallPath '\.sc_gui_text:[\s\S]*call sc_validate_user_cstring' 'SYS_GUI_TEXT must validate user strings.'
 Assert-Match $syscallPath '\.sc_wm_create:[\s\S]*call sc_validate_callback_target' 'SYS_WM_CREATE must validate callback targets.'
-Assert-Match $syscallPath '\.sc_fs_read:[\s\S]*call sc_validate_dir_entry_handle' 'SYS_FS_READ must validate directory-entry handles.'
+Assert-Match $syscallPath '\.sc_fs_read:[\s\S]*call sc_resolve_dir_entry_arg' 'SYS_FS_READ must resolve dir-entry handles through the per-slot handle table.'
 Assert-Match $syscallPath '\.sc_fs_write:[\s\S]*call sc_validate_user_io_range' 'SYS_FS_WRITE must validate user buffers.'
-Assert-Match $syscallPath '\.sc_fs_delete:[\s\S]*call sc_validate_dir_entry_handle[\s\S]*call sc_dir_entry_handle_to_kernel[\s\S]*call fat16_delete_entry' 'SYS_FS_DELETE must validate opaque handles and mutate the kernel FAT16 cache.'
-Assert-Match $syscallPath '\.sc_fs_rename:[\s\S]*call sc_validate_dir_entry_handle[\s\S]*call sc_validate_user_range[\s\S]*call fat16_rename_entry' 'SYS_FS_RENAME must validate handles and the 11-byte user name.'
+Assert-Match $syscallPath '\.sc_fs_delete:[\s\S]*call sc_resolve_dir_entry_arg[\s\S]*call fat16_delete_entry' 'SYS_FS_DELETE must resolve handles through the handle table before mutating the FAT16 cache.'
+Assert-Match $syscallPath '\.sc_fs_rename:[\s\S]*call sc_resolve_dir_entry_arg[\s\S]*call sc_validate_user_range[\s\S]*call fat16_rename_entry' 'SYS_FS_RENAME must resolve handles through the handle table and validate the 11-byte user name.'
 Assert-Match $syscallPath '\.sc_fs_mkdir:[\s\S]*call sc_validate_user_range[\s\S]*call fat16_mkdir' 'SYS_FS_MKDIR must validate the 11-byte user name.'
 Assert-Match $syscallPath '\.sc_open_file_np:[\s\S]*\.sc_open_file_np_media:[\s\S]*call kernel_open_file_in_media' 'SYS_OPEN_FILE_NP must redirect known media formats to Media Player.'
 Assert-Match $syscallPath '\.sc_app_open:[\s\S]*call sc_validate_user_cstring[\s\S]*call kernel_open_app_command' 'SYS_APP_OPEN must validate the user command string before launching apps.'
 Assert-Match $syscallUserPath '%macro SYS_APP_OPEN 1[\s\S]*mov rax, 23[\s\S]*syscall' 'SYS_APP_OPEN user wrapper must call syscall 23.'
 Assert-Match $syscallPath 'APP_MAX_ID\s+equ 11' 'SYS_APP_LAUNCH must allow the Media Player app id.'
-Assert-Match $syscallPath 'SC_VALIDATE_FRAME_OFF equ 64[\s\S]*\[rsp \+ SC_VALIDATE_FRAME_OFF \+ ALL_RDI\]' 'Table-driven syscall validation must read arg0 from the saved RDI slot through the helper call frame.'
+Assert-Match $syscallPath 'SC_VALIDATE_FRAME_OFF equ 72[\s\S]*add eax, SC_VALIDATE_FRAME_OFF[\s\S]*mov rdi, \[rsp \+ rax\]' 'Table-driven syscall validation must read the selected arg from the saved register slot through the helper call frame (constant-time displacement).'
 Assert-Match $syscallPath '\.sc_wm_handlers:[\s\S]*cmp rdi, MAX_WINDOWS[\s\S]*jae \.sc_wm_handlers_reject' 'SYS_WM_HANDLERS must reject out-of-range window ids.'
 Assert-Match $syscallPath '\.sc_wm_handlers:[\s\S]*call sc_validate_callback_target' 'SYS_WM_HANDLERS must validate handler targets.'
-Assert-Match $syscallPath '\.sc_wm_handlers:[\s\S]*mov rsi, \[rsp \+ ALL_RSI\][\s\S]*mov rdx, \[rsp \+ ALL_RDX\][\s\S]*mov \[rax \+ WIN_OFF_CLICKFN\], rsi' 'SYS_WM_HANDLERS must reload handler pointers after validation clobbers RSI/RDX.'
+Assert-Match $syscallPath '\.sc_wm_handlers:[\s\S]*mov rsi, \[rsp \+ ALL_RSI\][\s\S]*mov rdx, \[rsp \+ ALL_RDX\][\s\S]*call cpi_sign_callback[\s\S]*mov \[rax \+ WIN_OFF_CLICKFN\], r10' 'SYS_WM_HANDLERS must reload handler pointers after validation clobbers RSI/RDX, then store the CPI-signed callback.'
 Assert-Match $syscallPath '\.sc_display_set_mode:[\s\S]*BOOT_BACK_BUFFER_SIZE / 4[\s\S]*\.sc_display_set_mode_reject' 'SYS_DISPLAY_SET_MODE must reject modes that exceed the boot back buffer.'
 Assert-NotMatch $syscallPath 'APP_BMP_FILE_BUF|APP_CANVAS_BUF' 'Kernel syscall validation must not whitelist shared global app scratch buffers anymore.'
 Assert-Match $syscallValidationPath 'sc_validate_user_range:[\s\S]*app_blob_base_v[\s\S]*app_blob_end_v' 'User range validation must allow current slot and built-in user blob.'
-Assert-Match $syscallValidationPath 'sc_validate_dir_entry_handle:[\s\S]*L3_DIR_ENTRY_CACHE_OFF[\s\S]*DIR_ENTRY_SIZE' 'Directory entry handles must stay slot-local and aligned.'
+Assert-Match (Join-Path $Root 'src\kernel\proc\handle_table.inc') 'handle_resolve:[\s\S]*HANDLE_MAGIC[\s\S]*HANDLE_TABLE_CAP[\s\S]*HANDLE_ENT_GEN_OFF' 'Handle resolution must check magic, index range, kind tag, and stored generation.'
+Assert-Match $syscallPath 'sc_resolve_dir_entry_arg:[\s\S]*HANDLE_KIND_DIR_ENTRY[\s\S]*call handle_resolve[\s\S]*call fat16_get_entry' 'Dir-entry handle resolution must go through the handle table and fat16_get_entry — no kernel VA may flow through the syscall boundary.'
+Assert-NotMatch $syscallPath 'call\s+sc_validate_dir_entry_handle|call\s+sc_dir_entry_handle_to_kernel' 'Legacy snapshot-pointer dir-entry validators must stay removed — no syscall handler may call them.'
+Assert-NotMatch $syscallValidationPath '^sc_validate_dir_entry_handle:' 'Legacy sc_validate_dir_entry_handle definition must stay removed from syscall_validation.inc.'
 Assert-Match $syscallValidationPath 'sc_validate_callback_target:[\s\S]*call sc_validate_user_range' 'Callback targets must validate through user range validation.'
 Assert-Match $displayPath '(display_set_mode:|FN_BEGIN display_set_mode)[\s\S]*BOOT_BACK_BUFFER_SIZE / 4[\s\S]*\.set_fail' 'display_set_mode must reject modes that exceed the boot back buffer.'
 Assert-Match (Join-Path $Root 'src\kernel\fs\fat16.asm') 'fat16_mkdir[\s\S]*call fat16_flush_fats[\s\S]*call fat16_flush_current_dir' 'FAT16 mkdir must create persistent directories through FAT and directory flushes.'
@@ -94,7 +97,7 @@ Assert-Match $usermodePath 'FN_BEGIN l3_translate_target[\s\S]*l3_app_arena_base
 Assert-Match $usermodePath 'FN_BEGIN l3_translate_target[\s\S]*and rax, APP_SLOT_SIZE - 1[\s\S]*cmp rax, \[rel app_blob_size_v\]' 'L3 target translation must preserve only the app-blob offset from slot-local callback pointers.'
 Assert-Match $usermodePath '(call_app_l3_return:|FN_DECL call_app_l3_return)[\s\S]*call l3_runtime_ptr[\s\S]*mov rsp, \[r12 \+ L3_RT_KERNEL_RSP\]' 'L3 return must restore kernel stack from slot-local runtime storage.'
 Assert-Match $syscallPath '(syscall_entry:|FN_(BEGIN|DECL) syscall_entry)[\s\S]*mov \[rbx \+ L3_RT_USER_RIP\], rcx[\s\S]*mov \[rbx \+ L3_RT_USER_RSP\], rdx' 'Syscall entry must save user RIP/RSP in slot-local runtime storage.'
-Assert-Match $syscallPath '(syscall_entry:|FN_(BEGIN|DECL) syscall_entry)[\s\S]*lea rdx, \[rel l3_syscall_stacks\][\s\S]*mov rsp, rax' 'Syscall entry must switch to a slot-local kernel syscall stack before dispatch.'
+Assert-Match $syscallPath '(syscall_entry:|FN_(BEGIN|DECL) syscall_entry)[\s\S]*mov rdx, L3_SYSCALL_STACK_ADDR[\s\S]*mov rsp, rax' 'Syscall entry must switch to a slot-local kernel syscall stack before dispatch.'
 
 Write-Host '[guards] Checking multicore app routing build flags...' -ForegroundColor Yellow
 Assert-Match $uefiBuildPath "NEXUS_CACHE32_AP_STARTUP'[\s\S]*NEXUS_ENABLE_RING3_AP" 'UEFI AP startup builds must enable ring-3 AP callback routing.'
@@ -171,16 +174,16 @@ foreach ($a in $darkAnchors) {
     Assert-Match $themeLibPath "0x00$($a.Hex24)" "theme.nxh::theme_seed_dark() is missing 0x00$($a.Hex24) for $($a.Name) -- drift vs dark/theme.xml."
 }
 
-# The theme_palette backing buffer must stay sized at PALETTE_BYTES (128).
-# A reformat that changes the literal length silently corrupts color
-# lookups for high indices, so we check the exact width here.
+# The theme_palette backing buffer must stay sized at PALETTE_BYTES (128)
+# and must live in a zeroed state{} field. If this regresses to a string
+# literal, the initialized flag can start nonzero and the UI renders the
+# unseeded buffer as dark grey.
 $themeLibContent = Get-Content -Path $themeLibPath -Raw
-if ($themeLibContent -notmatch '(?m)^str theme_palette = "(?<lit>[^"]*)";') {
-    throw 'theme.nxh must declare a single-line `str theme_palette = "..."` buffer.'
+if ($themeLibContent -notmatch '(?ms)state\s*\{[^}]*theme_palette:\s*128;[^}]*theme_state:\s*8;[^}]*\}') {
+    throw 'theme.nxh must declare zeroed state fields `theme_palette: 128;` and `theme_state: 8;`.'
 }
-$litLen = $Matches['lit'].Length
-if ($litLen -ne 128) {
-    throw "theme.nxh theme_palette literal must be exactly 128 bytes (PALETTE_BYTES); found $litLen."
+if ($themeLibContent -match '(?m)^str\s+theme_(palette|state)\s*=') {
+    throw 'theme.nxh theme_palette/theme_state must not be string literals; they must start zeroed.'
 }
 
 Write-Host '[guards] PASS' -ForegroundColor Green

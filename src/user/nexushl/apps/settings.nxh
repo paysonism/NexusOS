@@ -13,8 +13,8 @@ const C_PANEL      = 0x00F5F6FA
 const C_BUTTON     = 0x00D8DDE3
 const C_BUTTON_ON  = 0x002A6FFF
 const C_BUTTON_OFF = 0x00B8BEC8
-const C_TEXT       = 0x002A2F3A
-const C_MUTED      = 0x005C6673
+const C_TEXT       = 0x000F141E
+const C_MUTED      = 0x004B5563
 
 # Widget metrics.
 const RES_W           = 78            # preset resolution button width

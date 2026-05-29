@@ -16,15 +16,41 @@ import re
 import sys
 from pathlib import Path
 
-FN_BEGIN_RE = re.compile(
-    r"^\s*(?:FN_BEGIN(?:_FULL)?|FN_DECL)\s+([A-Za-z_.$][\w.$]*)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^;\s]+)"
-)
-FN_ARG_RE = re.compile(
-    r"^\s*FN_ARG\s+([^,]+)\s*,\s*([A-Za-z_.$][\w.$]*)\s*,\s*([^;\s]+)"
-)
+FN_BEGIN_HEAD_RE = re.compile(r"^\s*(?:FN_BEGIN(?:_FULL)?|FN_DECL)\s+(.*)$")
+FN_ARG_HEAD_RE = re.compile(r"^\s*FN_ARG\s+(.*)$")
+NAME_RE = re.compile(r"^[A-Za-z_.$][\w.$]*$")
 ISR_NOERR_RE = re.compile(r"^\s*ISR_NOERRCODE\s+(\d+)")
 ISR_ERR_RE = re.compile(r"^\s*ISR_ERRCODE\s+(\d+)")
 IRQ_RE = re.compile(r"^\s*IRQ_STUB\s+(\d+)\s*,")
+
+
+def strip_comment(text: str) -> str:
+    """Drop a trailing NASM ``;`` comment.  Operands here are identifiers and
+    macro invocations with no string literals, so a plain split is safe."""
+    idx = text.find(";")
+    return text if idx < 0 else text[:idx]
+
+
+def split_top_commas(text: str) -> list[str]:
+    """Split on commas that sit at paren/bracket depth 0 so macro arguments
+    like ``SC_KIND3(a, b, c)`` stay in a single field."""
+    parts: list[str] = []
+    depth = 0
+    cur: list[str] = []
+    for ch in text:
+        if ch in "([":
+            depth += 1
+            cur.append(ch)
+        elif ch in ")]":
+            depth -= 1
+            cur.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur).strip())
+    return parts
 
 
 def fnv1a64(text: str) -> int:
@@ -46,9 +72,12 @@ def parse_file(path: Path, root: Path):
     current = None
     with path.open("r", encoding="utf-8", errors="replace") as f:
         for line_no, line in enumerate(f, 1):
-            m = FN_BEGIN_RE.match(line)
+            m = FN_BEGIN_HEAD_RE.match(line)
             if m:
-                name, argc, kindmask, retkind = [x.strip() for x in m.groups()]
+                fields = split_top_commas(strip_comment(m.group(1)))
+                if len(fields) < 4 or not NAME_RE.match(fields[0]):
+                    continue
+                name, argc, kindmask, retkind = fields[:4]
                 current = {
                     "fn_id": fnv1a64(name),
                     "name": name,
@@ -61,10 +90,12 @@ def parse_file(path: Path, root: Path):
                 }
                 yield current
                 continue
-            m = FN_ARG_RE.match(line)
+            m = FN_ARG_HEAD_RE.match(line)
             if m and current is not None:
-                idx, arg_name, kind = [x.strip() for x in m.groups()]
-                current["args"].append({"index": idx, "name": arg_name, "kind": kind})
+                fields = split_top_commas(strip_comment(m.group(1)))
+                if len(fields) >= 3 and NAME_RE.match(fields[1]):
+                    idx, arg_name, kind = fields[0], fields[1], fields[2]
+                    current["args"].append({"index": idx, "name": arg_name, "kind": kind})
                 continue
             for rx, prefix in ((ISR_NOERR_RE, "isr_"), (ISR_ERR_RE, "isr_"), (IRQ_RE, "irq_")):
                 m = rx.match(line)

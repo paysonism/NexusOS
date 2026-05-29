@@ -13,6 +13,7 @@ section .text
 ; auto-wrapped (FN_BEGIN emits global): global apic_init
 ; auto-wrapped (FN_BEGIN emits global): global apic_eoi
 ; auto-wrapped (FN_BEGIN emits global): global smp_ap_startup
+global apic_wake_workers
 global smp_started_cores
 global smp_alive_cores
 global smp_parked_cores
@@ -59,22 +60,70 @@ FN_BEGIN apic_init, 0, 0, FN_RET_SCALAR
     and rax, ~0xFFF
     mov [lapic_base], rax
 
+    ; MMIO bounds policy (security_todo.md §8): declare the LAPIC's 4 KiB
+    ; register page into the kernel MMIO registry NOW, the instant its base is
+    ; resolved. A hardware timer IRQ can fire between kmain's `sti` and
+    ; mmio_drv_caps_init, calling apic_eoi -> mmio_bounds_assert; registering
+    ; here guarantees that early EOI finds its region instead of false-panicking.
+    call mmio_register_lapic
+
     ; Spurious Interrupt Vector Register (SIVR)
     ; Enable APIC (bit 8) and set vector to 255
+    mov rdi, [lapic_base]
+    add rdi, 0x0F0
+    mov esi, 4
+    mov edx, MMIO_DRV_LAPIC
+    call mmio_bounds_assert
     mov rdi, [lapic_base]
     mov dword [rdi + 0x0F0], 0x1FF
 
     ; Set Task Priority Register (TPR) to 0 to enable all interrupts
     ; On many UEFI systems this is 0xFF by default, which blocks all IRQs.
     mov rdi, [lapic_base]
+    add rdi, 0x080
+    mov esi, 4
+    mov edx, MMIO_DRV_LAPIC
+    call mmio_bounds_assert
+    mov rdi, [lapic_base]
     mov dword [rdi + 0x080], 0
-    
+
     ret
 
 ; --- Send End of Interrupt (EOI) ---
 FN_BEGIN apic_eoi, 0, 0, FN_RET_SCALAR
+    ; MMIO bounds policy (security_todo.md §8): assert the EOI register write
+    ; lands inside the LAPIC's registered BAR before issuing it. This is the
+    ; hottest kernel-driver MMIO store (every hardware IRQ ends here), so a
+    ; corrupted lapic_base scribbling kernel data is caught here, fail-closed.
+    mov rdi, [lapic_base]
+    add rdi, 0x0B0                       ; EOI register address
+    mov esi, 4                           ; dword store
+    mov edx, MMIO_DRV_LAPIC
+    call mmio_bounds_assert
     mov rdi, [lapic_base]
     mov dword [rdi + 0x0B0], 0
+    ret
+
+; --- Wake idle AP workqueue workers -----------------------------------------
+; Sends a fixed IPI on vector 49 to every CPU except the caller. Idle APs use
+; STI;HLT, so this is enough to leave hlt and rescan the queue.
+apic_wake_workers:
+    push rax
+    push rcx
+    push rdi
+    mov rdi, [lapic_base]
+    mov ecx, 100000
+.wait_clear:
+    mov eax, [rdi + 0x300]
+    test eax, 0x1000                 ; delivery status pending
+    jz .send
+    pause
+    loop .wait_clear
+.send:
+    mov dword [rdi + 0x300], 0x000C4031 ; all-excluding-self, assert, vector 49
+    pop rdi
+    pop rcx
+    pop rax
     ret
 
 %ifdef NEXUS_CACHE32_AP_STARTUP
@@ -405,6 +454,10 @@ ap_long_mode_init:
     call tss_init_for_core
     ; --- 5. SYSCALL MSRs on this CPU ---
     call syscall_init_this_cpu
+    ; Let this AP receive workqueue wake IPIs while halted in the idle path.
+    mov rdi, [lapic_base]
+    mov dword [rdi + 0x0F0], 0x1FF
+    mov dword [rdi + 0x080], 0
     pop rdi
     pop rcx
     pop rax

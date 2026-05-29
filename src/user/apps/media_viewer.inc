@@ -80,11 +80,25 @@ MEDIA_COL_TEXT_BG   equ 0x00131620
 ; buffers, which is fine because every app window owns a private 2 MiB slot.
 MEDIA_BMP_SCRATCH_OFF equ APP_SLOT_PAINT_CANVAS_OFF
 MEDIA_BMP_SCRATCH_SZ  equ 0x43000
-MEDIA_NBA_FULL_BUF    equ BOOT_ANIM_BUF_ADDR
-MEDIA_NBA_FULL_BUF_SZ equ 0x1000000
+; Per-window full-clip buffers. NBA videos can be far larger than a slot's
+; 256 KiB media buffer, so each media window allocates its own physically
+; contiguous buffer (page_alloc_contig, identity-mapped so the phys address
+; doubles as a CPU pointer) sized to the file. Indexed by window id; ptr 0 =
+; none, in which case the renderer falls back to the slot buffer. `pages` is
+; the run length kept for page_free_contig on window close.
+; (MEDIA_FULL_BUF_MAX_SZ lives in constants.inc — used by the loader.)
+extern page_alloc_contig
+extern page_free_contig
+extern fat16_get_file_size
 
-global media_nba_full_window_id
-media_nba_full_window_id dq -1
+global media_full_buf
+media_full_buf:        times MAX_WINDOWS dq 0
+global media_full_buf_pages
+media_full_buf_pages:  times MAX_WINDOWS dq 0
+global media_direct_present
+global media_direct_presented
+media_direct_present db 0
+media_direct_presented db 0
 
 global app_media_draw
 ; nx_media_blit_scaled is reachable from the kernel via SYS_MEDIA_BLIT_SCALED
@@ -118,6 +132,13 @@ app_media_draw:
     call l3_slot_base
     lea r12, [rax + APP_SLOT_BMP_FILE_OFF]   ; file buffer
 
+    ; SMAP: app_media_draw runs in KERNEL context (registered as a window draw
+    ; fn — see header) yet reads the slot's media buffer (user, PTE.U=1) every
+    ; frame and the blitters below stream slot pixels in tight loops. Arm AC for
+    ; the whole body; the blitters / advance_frame it calls never touch AC, so
+    ; it propagates, and they also write the kernel back buffer (fine with AC).
+    USER_ACCESS_BEGIN
+
     mov eax, [r12]
     cmp eax, NIC1_MAGIC
     je .blit_nic
@@ -141,17 +162,24 @@ app_media_draw:
     call nx_media_blit_nic
     jmp .draw_done
 .blit_nba:
-    mov rdi, r12
-    mov rax, [rel media_nba_full_window_id]
-    cmp rax, [r13 + WIN_OFF_ID]
-    jne .blit_nba_slot
-    mov rax, MEDIA_NBA_FULL_BUF
-    cmp dword [rax], NBA1_MAGIC
-    jne .blit_nba_slot
-    mov rdi, rax
-.blit_nba_slot:
+    mov rdi, r12                             ; default source = slot file buffer
+    mov r8d, APP_SLOT_BMP_FILE_SZ            ; default capacity (bytes)
+    mov eax, [r13 + WIN_OFF_ID]
+    cmp eax, MAX_WINDOWS
+    jae .blit_nba_go
+    lea r9, [rel media_full_buf]
+    mov r10, [r9 + rax*8]                    ; this window's full-clip buffer
+    test r10, r10
+    jz .blit_nba_go
+    cmp dword [r10], NBA1_MAGIC              ; still a live NBA buffer?
+    jne .blit_nba_go
+    mov rdi, r10                             ; play from the full buffer
+    lea r9, [rel media_full_buf_pages]
+    mov r8, [r9 + rax*8]
+    shl r8, 12                               ; pages -> capacity in bytes
+.blit_nba_go:
     mov rsi, r13
-    call nx_media_blit_nba
+    call nx_media_blit_nba                   ; rdi=src, rsi=window, r8=src capacity
     jmp .draw_done
 .blit_bmp:
     mov rdi, r12
@@ -169,8 +197,43 @@ app_media_draw:
     call nx_media_blit_svg
 
 .draw_done:
+    USER_ACCESS_END
     pop r13
     pop r12
+    pop rbx
+    ret
+
+
+; media_release_window_buf(edi = window id)
+;   Frees this window's per-window full-clip buffer (if any) and clears its
+;   ownership slots. Called from the close path (wm_close_window) and before a
+;   media window reuses its slot for a new clip. Safe to call when no buffer is
+;   owned. Preserves all integer registers so it can drop into existing call
+;   sequences without disturbing their state.
+global media_release_window_buf
+media_release_window_buf:
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    mov ebx, edi
+    cmp ebx, MAX_WINDOWS
+    jae .mrwb_ret
+    lea rdx, [rel media_full_buf]
+    mov rdi, [rdx + rbx*8]                   ; buffer base (0 = none)
+    test rdi, rdi
+    jz .mrwb_ret
+    lea rcx, [rel media_full_buf_pages]
+    mov rsi, [rcx + rbx*8]                   ; page count
+    mov qword [rdx + rbx*8], 0               ; clear ownership before freeing
+    mov qword [rcx + rbx*8], 0
+    call page_free_contig                    ; (rdi = base, rsi = pages)
+.mrwb_ret:
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
     pop rbx
     ret
 
@@ -214,11 +277,23 @@ nx_media_fill_rect:
     mov r10, [bb_addr]
     add r10, rax
     lea r10, [r10 + r12 * 4]
+    xor r11, r11
+    cmp byte [rel media_direct_present], 0
+    je .fill_no_fb_row
+    mov r11, [fb_addr]
+    add r11, rax
+    lea r11, [r11 + r12 * 4]
+.fill_no_fb_row:
     mov edi, r14d
 .fill_px:
     test edi, edi
     jz .fill_skip
     mov [r10], ebp
+    test r11, r11
+    je .fill_no_fb
+    mov [r11], ebp
+    add r11, 4
+.fill_no_fb:
     add r10, 4
     dec edi
     jmp .fill_px
@@ -369,6 +444,9 @@ nx_media_compute_fit:
 ;     [rsp + 24]  fit_w                     (dword)
 ;     [rsp + 28]  fit_h                     (dword)
 ;     [rsp + 32]  alpha_key flag (0/1)      (dword)
+;     [rsp + 36]  viewport_w                (dword)
+;     [rsp + 40]  viewport_h                (dword)
+;     [rsp + 48]  direct fb row ptr         (qword)
 nx_media_blit_scaled:
     push rbx
     push rbp
@@ -393,6 +471,8 @@ nx_media_blit_scaled:
     jle .sc_done
     test ecx, ecx
     jle .sc_done
+    mov [rsp + 36], edx
+    mov [rsp + 40], ecx
 
     ; Compute fit.
     mov edi, r14d
@@ -429,6 +509,49 @@ nx_media_blit_scaled:
     div dword [rsp + 28]
     mov [rsp + 12], eax
 
+    ; Fast path for native-size opaque video: no letterbox, no scaling, just
+    ; copy BGRA rows into the backbuffer. BOOTANIM.NBA opens at this size.
+    cmp dword [rsp + 32], 0
+    jne .sc_letterbox
+    mov eax, [rsp + 24]
+    cmp eax, r14d
+    jne .sc_check_2x
+    cmp eax, [rsp + 36]
+    jne .sc_check_2x
+    mov eax, [rsp + 28]
+    cmp eax, r15d
+    jne .sc_check_2x
+    cmp eax, [rsp + 40]
+    jne .sc_check_2x
+    cmp dword [rsp + 8], 0x10000
+    jne .sc_check_2x
+    cmp dword [rsp + 12], 0x10000
+    jne .sc_check_2x
+    jmp .sc_copy_opaque_1x
+
+    ; Fast path for exact 2x opaque video. This is the full-size BOOTANIM.NBA
+    ; case: read one source pixel and emit a 2x2 block instead of doing four
+    ; fixed-point source lookups.
+.sc_check_2x:
+    cmp dword [rsp + 8], 0x8000
+    jne .sc_letterbox
+    cmp dword [rsp + 12], 0x8000
+    jne .sc_letterbox
+    mov eax, r14d
+    shl eax, 1
+    cmp eax, [rsp + 24]
+    jne .sc_letterbox
+    cmp eax, [rsp + 36]
+    jne .sc_letterbox
+    mov eax, r15d
+    shl eax, 1
+    cmp eax, [rsp + 28]
+    jne .sc_letterbox
+    cmp eax, [rsp + 40]
+    jne .sc_letterbox
+    jmp .sc_copy_opaque_2x
+
+.sc_letterbox:
     ; Letterbox the whole viewport black so off-aspect borders are clean.
     mov edi, [r13 + WIN_OFF_X]
     add edi, BORDER_WIDTH
@@ -478,6 +601,17 @@ nx_media_blit_scaled:
     add r9, rax
     mov eax, [rsp + 16]
     lea r9, [r9 + rax * 4]                   ; r9 = dst row ptr
+    cmp byte [rel media_direct_present], 0
+    je .sc_no_direct_row
+    mov eax, edx
+    imul eax, [scr_pitch]
+    mov rbx, [fb_addr]
+    add rbx, rax
+    mov eax, [rsp + 16]
+    lea rbx, [rbx + rax * 4]
+    mov [rsp + 48], rbx
+    mov byte [rel media_direct_presented], 1
+.sc_no_direct_row:
 
     ; Per-pixel walk.
     xor r11d, r11d                            ; u (16.16 src x)
@@ -497,8 +631,16 @@ nx_media_blit_scaled:
     jz .sc_px_skip                           ; alpha-keyed and A==0 → skip
 .sc_px_write:
     mov [r9], eax
+    cmp byte [rel media_direct_present], 0
+    je .sc_px_skip
+    mov rbx, [rsp + 48]
+    mov [rbx], eax
 .sc_px_skip:
     add r9, 4
+    cmp byte [rel media_direct_present], 0
+    je .sc_px_no_fb_advance
+    add qword [rsp + 48], 4
+.sc_px_no_fb_advance:
     add r11d, edx
     dec ecx
     jmp .sc_px
@@ -507,6 +649,124 @@ nx_media_blit_scaled:
     add r10d, [rsp + 12]                     ; v += step_y (always)
     inc edi
     jmp .sc_row
+
+.sc_copy_opaque_1x:
+    xor ebp, ebp                                ; row index
+    mov r8, [rsp + 0]                           ; src row
+.sc_copy_row:
+    cmp ebp, r15d
+    jge .sc_done
+    mov edx, [rsp + 20]
+    add edx, ebp
+    test edx, edx
+    js .sc_copy_next
+    cmp edx, [scr_height]
+    jge .sc_done
+
+    mov eax, edx
+    imul eax, [scr_pitch]
+    mov r9, [bb_addr]
+    add r9, rax
+    mov eax, [rsp + 16]
+    lea r9, [r9 + rax * 4]
+
+    mov rsi, r8
+    mov rdi, r9
+    mov ecx, r14d
+    rep movsd
+    cmp byte [rel media_direct_present], 0
+    je .sc_copy_next
+    mov rsi, r8
+    mov eax, edx
+    imul eax, [scr_pitch]
+    mov rdi, [fb_addr]
+    add rdi, rax
+    mov eax, [rsp + 16]
+    lea rdi, [rdi + rax * 4]
+    mov ecx, r14d
+    rep movsd
+    mov byte [rel media_direct_presented], 1
+
+.sc_copy_next:
+    mov eax, r14d
+    shl eax, 2
+    add r8, rax
+    inc ebp
+    jmp .sc_copy_row
+
+.sc_copy_opaque_2x:
+    xor ebp, ebp                                ; source row index
+    mov r8, [rsp + 0]                           ; src row
+.sc2_row:
+    cmp ebp, r15d
+    jge .sc_done
+
+    mov edx, [rsp + 20]
+    mov eax, ebp
+    shl eax, 1
+    add edx, eax                                ; dest y = dst_y + sy*2
+    test edx, edx
+    js .sc2_next_src
+    cmp edx, [scr_height]
+    jge .sc_done
+
+    mov eax, edx
+    imul eax, [scr_pitch]
+    mov r9, [bb_addr]
+    add r9, rax
+    mov eax, [rsp + 16]
+    lea r9, [r9 + rax * 4]                      ; bb row 0
+    mov r10, r9
+    movsxd rax, dword [scr_pitch]
+    add r10, rax                                ; bb row 1
+
+    xor rbx, rbx                                ; fb row 0, optional
+    xor r11, r11                                ; fb row 1, optional
+    cmp byte [rel media_direct_present], 0
+    je .sc2_no_fb_row
+    mov eax, edx
+    imul eax, [scr_pitch]
+    mov rbx, [fb_addr]
+    add rbx, rax
+    mov eax, [rsp + 16]
+    lea rbx, [rbx + rax * 4]
+    mov r11, rbx
+    movsxd rax, dword [scr_pitch]
+    add r11, rax
+    mov byte [rel media_direct_presented], 1
+.sc2_no_fb_row:
+
+    mov rsi, r8
+    mov ecx, r14d
+.sc2_px:
+    test ecx, ecx
+    jz .sc2_next_src
+    mov eax, [rsi]
+    add rsi, 4
+    mov [r9], eax
+    mov [r9 + 4], eax
+    mov [r10], eax
+    mov [r10 + 4], eax
+    test rbx, rbx
+    jz .sc2_advance
+    mov [rbx], eax
+    mov [rbx + 4], eax
+    mov [r11], eax
+    mov [r11 + 4], eax
+    add rbx, 8
+    add r11, 8
+.sc2_advance:
+    add r9, 8
+    add r10, 8
+    dec ecx
+    jmp .sc2_px
+
+.sc2_next_src:
+    mov eax, r14d
+    shl eax, 2
+    add r8, rax
+    inc ebp
+    jmp .sc2_row
 
 .sc_done:
     add rsp, 64
@@ -768,12 +1028,8 @@ nx_media_advance_frame:
     cmp ecx, 1
     jbe .adv_clamp
 
-    ; Animated and playing: keep the scene dirty every tick so the WM
-    ; re-enters this draw fn on the next compositor pass even when no
-    ; frame change happens this call. Without this, the very first draw
-    ; seeds mp_last_tick and returns; nothing else dirties the scene, so
-    ; the clip pins on frame 0 until an unrelated input arrives.
-    mov byte [scene_dirty], 1
+    ; Animated and playing: media_live_refresh wakes the compositor on the
+    ; frame boundary. Do not dirty here unless the frame actually changes.
 
     ; 4. interval_ticks = max(1, 100 / fps).
     mov r10d, eax                            ; current frame
@@ -867,6 +1123,36 @@ nx_media_blit_nba:
     jz .nba_done
     test edx, edx
     jz .nba_done
+
+    ; Clamp frame_count to what the active source buffer can actually hold.
+    ; r8 (set by app_media_draw) = source buffer capacity in bytes: either the
+    ; window's own full-clip buffer or, when none is live, the 256 KiB slot
+    ; buffer. A header may advertise more frames than the buffer holds (e.g. a
+    ; truncated/failed load); without this clamp the per-frame source walk reads
+    ; past the buffer into unmapped memory and faults, freezing the OS.
+    push rdx                                 ; preserve fps
+    mov eax, r14d
+    mov r9d, r15d
+    imul rax, r9                             ; w * h
+    shl rax, 2                               ; frame stride in bytes
+    jz .nba_clamp_done                       ; degenerate stride: leave as-is
+    mov r10, rax                             ; r10 = frame stride
+    mov rax, r8                              ; source capacity in bytes
+    cmp rax, 20
+    jbe .nba_clamp_none                      ; can't even hold the header
+    sub rax, 20                              ; minus NBA header
+    xor edx, edx
+    div r10                                  ; rax = whole frames that fit
+    cmp ecx, eax
+    jbe .nba_clamp_done
+    mov ecx, eax                             ; clamp frame_count down to fit
+    jmp .nba_clamp_done
+.nba_clamp_none:
+    xor ecx, ecx
+.nba_clamp_done:
+    pop rdx                                  ; restore fps
+    test ecx, ecx
+    jz .nba_done                             ; nothing fits -> blank, never fault
 
     ; Resolve current frame (handles seek/pause/loop, writes state).
     call nx_media_advance_frame              ; eax = frame index

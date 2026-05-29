@@ -75,25 +75,71 @@ const UI_CHECK_LABEL_GAP = 8
 # DRIFT WARNING: editing these constants without editing both
 # `theme_seed_light()` and `assets/themes/light/theme.xml` causes silent
 # divergence. The source-guards test cross-checks the three places.
-const UI_COL_BG_BASE     = 0x00F5F6FA
-const UI_COL_SURFACE_2   = 0x00ECEFF4
-const UI_COL_BORDER_2    = 0x00C4CBD3
-const UI_COL_ACCENT      = 0x002A6FFF
-const UI_COL_ERROR       = 0x00E5474D
-const UI_COL_WARNING     = 0x00F7B52C
-const UI_COL_SUCCESS     = 0x002EB56E
-const UI_COL_TEXT        = 0x000F141E
-const UI_COL_TEXT_MUTED  = 0x004B5563
-const UI_COL_TEXT_INVERT = 0x00FFFFFF
-const UI_COL_SURFACE     = 0x00FFFFFF
-const UI_COL_MENU        = 0x00ECEFF4
-const UI_COL_DROPDOWN    = 0x00FFFFFF
-const UI_COL_BORDER      = 0x00D8DDE3
-const UI_COL_FOCUS       = 0x002A6FFF
+const UI_REF_BG_BASE     = 0x00F5F6FA
+const UI_REF_SURFACE_2   = 0x00ECEFF4
+const UI_REF_BORDER_2    = 0x00C4CBD3
+const UI_REF_ACCENT      = 0x002A6FFF
+const UI_REF_ERROR       = 0x00E5474D
+const UI_REF_WARNING     = 0x00F7B52C
+const UI_REF_SUCCESS     = 0x002EB56E
+const UI_REF_TEXT        = 0x000F141E
+const UI_REF_TEXT_MUTED  = 0x004B5563
+const UI_REF_TEXT_INVERT = 0x00FFFFFF
+const UI_REF_SURFACE     = 0x00FFFFFF
+const UI_REF_MENU        = 0x00ECEFF4
+const UI_REF_DROPDOWN    = 0x00FFFFFF
+const UI_REF_BORDER      = 0x00D8DDE3
+const UI_REF_FOCUS       = 0x002A6FFF
+
+const UI_COL_BG_BASE     = -1000
+const UI_COL_SURFACE     = -1001
+const UI_COL_SURFACE_2   = -1002
+const UI_COL_BORDER      = -1003
+const UI_COL_BORDER_2    = -1004
+const UI_COL_ACCENT      = -1005
+const UI_COL_FOCUS       = -1006
+const UI_COL_ERROR       = -1007
+const UI_COL_WARNING     = -1008
+const UI_COL_SUCCESS     = -1009
+const UI_COL_TEXT        = -1010
+const UI_COL_TEXT_MUTED  = -1011
+const UI_COL_TEXT_INVERT = -1012
+const UI_COL_MENU        = -1013
+const UI_COL_DROPDOWN    = -1014
 
 # Convenience accessor — equivalent to `theme_col` but kept named under the
 # `ui_*` umbrella so app code only needs to `use gui`.
 fn ui_col(idx) { return theme_col(idx); }
+
+fn ui_resolve_color(color) {
+    if color == UI_COL_BG_BASE     { return theme_col(TC_BG_BASE); }
+    if color == UI_REF_BG_BASE     { return theme_col(TC_BG_BASE); }
+    if color == UI_COL_SURFACE_2   { return theme_col(TC_SURFACE_2); }
+    if color == UI_REF_SURFACE_2   { return theme_col(TC_SURFACE_2); }
+    if color == UI_COL_BORDER_2    { return theme_col(TC_BORDER_2); }
+    if color == UI_REF_BORDER_2    { return theme_col(TC_BORDER_2); }
+    if color == UI_COL_ACCENT      { return theme_col(TC_ACCENT); }
+    if color == UI_REF_ACCENT      { return theme_col(TC_ACCENT); }
+    if color == UI_COL_ERROR       { return theme_col(TC_ERROR); }
+    if color == UI_REF_ERROR       { return theme_col(TC_ERROR); }
+    if color == UI_COL_WARNING     { return theme_col(TC_WARNING); }
+    if color == UI_REF_WARNING     { return theme_col(TC_WARNING); }
+    if color == UI_COL_SUCCESS     { return theme_col(TC_SUCCESS); }
+    if color == UI_REF_SUCCESS     { return theme_col(TC_SUCCESS); }
+    if color == UI_COL_TEXT        { return theme_col(TC_TEXT); }
+    if color == UI_REF_TEXT        { return theme_col(TC_TEXT); }
+    if color == UI_COL_TEXT_MUTED  { return theme_col(TC_TEXT_MUTED); }
+    if color == UI_REF_TEXT_MUTED  { return theme_col(TC_TEXT_MUTED); }
+    if color == UI_COL_TEXT_INVERT { return theme_col(TC_TEXT_INVERT); }
+    if color == UI_COL_SURFACE     { return theme_col(TC_SURFACE); }
+    if color == UI_COL_MENU        { return theme_col(TC_MENU); }
+    if color == UI_COL_DROPDOWN    { return theme_col(TC_DROPDOWN); }
+    if color == UI_COL_BORDER      { return theme_col(TC_BORDER); }
+    if color == UI_REF_BORDER      { return theme_col(TC_BORDER); }
+    if color == UI_COL_FOCUS       { return theme_col(TC_FOCUS); }
+    if color == UI_REF_FOCUS       { return theme_col(TC_FOCUS); }
+    return color;
+}
 
 extern render_rect;
 extern render_text;
@@ -106,11 +152,11 @@ fn ui_win_h(win) { return lq(win + WIN_H); }
 
 # Absolute drawing primitives. Use these for overlays and custom controls.
 fn ui_rect(x, y, w, h, color) {
-    render_rect(x, y, w, h, color);
+    render_rect(x, y, w, h, ui_resolve_color(color));
 }
 
 fn ui_text(x, y, text, fg, bg) {
-    render_text(x, y, text, fg, bg);
+    render_text(x, y, text, ui_resolve_color(fg), ui_resolve_color(bg));
 }
 
 # Client-area drawing primitives. Client origin is inside the window border
@@ -134,29 +180,29 @@ fn ui_fill_client_below(win, top, color) {
 # Menu bar and menu labels. Use labels at fixed x positions for deterministic
 # hit testing in click handlers.
 fn ui_menu_bar(win) {
-    ui_rect_at(win, 0, 0, ui_win_w(win) - UI_BORDER * 2, UI_MENU_H, theme_col(TC_MENU));
+    ui_rect_at(win, 0, 0, ui_win_w(win) - UI_BORDER * 2, UI_MENU_H, UI_COL_MENU);
 }
 
 fn ui_menu_label(win, x, text) {
-    ui_text_at(win, x, UI_MENU_TEXT_Y, text, theme_col(TC_TEXT), theme_col(TC_MENU));
+    ui_text_at(win, x, UI_MENU_TEXT_Y, text, UI_COL_TEXT, UI_COL_MENU);
 }
 
 # Dropdown surface with a one-pixel top border. Items are intentionally drawn
 # separately so click handlers can keep simple index math.
 fn ui_dropdown(win, x, y, w, item_count) {
-    ui_rect_at(win, x, y, w, item_count * UI_ITEM_H + UI_DROPDOWN_PAD, theme_col(TC_DROPDOWN));
-    ui_rect_at(win, x, y, w, 1, theme_col(TC_BORDER));
+    ui_rect_at(win, x, y, w, item_count * UI_ITEM_H + UI_DROPDOWN_PAD, UI_COL_DROPDOWN);
+    ui_rect_at(win, x, y, w, 1, UI_COL_BORDER);
 }
 
 fn ui_dropdown_item(win, x, y, index, text) {
-    ui_text_at(win, x + 8, y + UI_DROPDOWN_PAD + index * UI_ITEM_H, text, theme_col(TC_TEXT), theme_col(TC_DROPDOWN));
+    ui_text_at(win, x + 8, y + UI_DROPDOWN_PAD + index * UI_ITEM_H, text, UI_COL_TEXT, UI_COL_DROPDOWN);
 }
 
 # Text insertion caret. It is a drawn rectangle instead of a text glyph so it
 # aligns with editor columns and can be blinked later by the library when a
 # stable time source is exposed to NexusHL.
 fn ui_caret(win, x, y) {
-    ui_rect_at(win, x, y, UI_CARET_W, UI_CARET_H, theme_col(TC_FOCUS));
+    ui_rect_at(win, x, y, UI_CARET_W, UI_CARET_H, UI_COL_FOCUS);
 }
 
 fn ui_ticks() {
@@ -172,10 +218,18 @@ fn ui_caret_blink(win, x, y) {
 
 # Basic text input field. Caller owns the buffer and cursor; this only draws.
 fn ui_input(win, x, y, w, text, cursor_col) {
-    let surface = theme_col(TC_SURFACE);
+    let surface = UI_COL_SURFACE;
+    let border = UI_COL_BORDER_2;
+    let caret_x = x + 4 + cursor_col * UI_FONT_W;
+    let max_caret_x = x + w - 4;
+    if caret_x > max_caret_x { caret_x = max_caret_x; }
     ui_rect_at(win, x, y, w, 18, surface);
-    ui_text_at(win, x + 4, y + 3, text, theme_col(TC_TEXT), surface);
-    ui_caret_blink(win, x + 4 + cursor_col * UI_FONT_W, y + 2);
+    ui_rect_at(win, x, y, w, 1, border);
+    ui_rect_at(win, x, y + 17, w, 1, border);
+    ui_rect_at(win, x, y, 1, 18, border);
+    ui_rect_at(win, x + w - 1, y, 1, 18, border);
+    ui_text_at(win, x + 4, y + 3, text, UI_COL_TEXT, surface);
+    ui_caret_blink(win, caret_x, y + 2);
 }
 
 # Push-button. Filled rect with a left-aligned label in UI_COL_TEXT. If you
@@ -185,7 +239,7 @@ fn ui_input(win, x, y, w, text, cursor_col) {
 const UI_BUTTON_H = 16
 fn ui_button(win, x, y, w, label, bg) {
     ui_rect_at(win, x, y, w, UI_BUTTON_H, bg);
-    ui_text_at(win, x + 4, y + 2, label, theme_col(TC_TEXT), bg);
+    ui_text_at(win, x + 4, y + 2, label, UI_COL_TEXT, bg);
 }
 fn ui_button_hit(cx, cy, x, y, w) {
     if cx < x { return 0; }
@@ -198,23 +252,23 @@ fn ui_button_hit(cx, cy, x, y, w) {
 # Section title. Bold-ish heading drawn at (UI_PAD, y) in the text color.
 # Returns the next cursor-y after the title (so callers can chain).
 fn ui_section_title(win, y, text) {
-    ui_text_at(win, UI_PAD, y, text, theme_col(TC_TEXT), theme_col(TC_BG_BASE));
+    ui_text_at(win, UI_PAD, y, text, UI_COL_TEXT, UI_COL_BG_BASE);
     return y + UI_TITLE_H;
 }
 
 # Caption above a control. Drawn muted at (x, y). Returns next cursor-y
 # placed UI_LABEL_GAP below the caption baseline.
 fn ui_caption(win, x, y, text) {
-    ui_text_at(win, x, y, text, theme_col(TC_TEXT_MUTED), theme_col(TC_BG_BASE));
+    ui_text_at(win, x, y, text, UI_COL_TEXT_MUTED, UI_COL_BG_BASE);
     return y + UI_FONT_H + UI_LABEL_GAP;
 }
 
 # Checkbox with an inline label to its right. Returns the next cursor-y
 # placed UI_ROW_GAP below the row.
 fn ui_checkbox(win, x, y, checked, label) {
-    let surface = theme_col(TC_SURFACE);
-    let border2 = theme_col(TC_BORDER_2);
-    let text    = theme_col(TC_TEXT);
+    let surface = UI_COL_SURFACE;
+    let border2 = UI_COL_BORDER_2;
+    let text    = UI_COL_TEXT;
     ui_rect_at(win, x, y, UI_CHECK_SIZE, UI_CHECK_SIZE, surface);
     ui_rect_at(win, x, y, UI_CHECK_SIZE, 1, border2);
     ui_rect_at(win, x, y + UI_CHECK_SIZE - 1, UI_CHECK_SIZE, 1, border2);
@@ -224,7 +278,7 @@ fn ui_checkbox(win, x, y, checked, label) {
         ui_rect_at(win, x + 4, y + 4, 8, 8, text);
     }
     ui_text_at(win, x + UI_CHECK_SIZE + UI_CHECK_LABEL_GAP, y + 2,
-               label, text, theme_col(TC_BG_BASE));
+               label, text, UI_COL_BG_BASE);
     return y + UI_ROW_H;
 }
 
@@ -244,7 +298,7 @@ fn ui_status_bar(win, label, color) {
     let w = ui_win_w(win) - UI_BORDER * 2;
     let yc = h - UI_TITLEBAR - UI_BORDER - UI_STATUS_H;
     ui_rect_at(win, 0, yc, w, UI_STATUS_H, color);
-    ui_text_at(win, 4, yc + 1, label, theme_col(TC_TEXT_MUTED), color);
+    ui_text_at(win, 4, yc + 1, label, UI_COL_TEXT_MUTED, color);
     return yc;
 }
 
@@ -260,7 +314,7 @@ fn ui_modal_overlay(win, label, text, cursor, color, text_x) {
     let w = ui_win_w(win) - UI_BORDER * 2;
     let yc = h - UI_TITLEBAR - UI_BORDER - UI_STATUS_H - UI_OVERLAY_H;
     ui_rect_at(win, 0, yc, w, UI_OVERLAY_H, color);
-    let invert = theme_col(TC_TEXT_INVERT);
+    let invert = UI_COL_TEXT_INVERT;
     ui_text_at(win, 4, yc + 4, label, invert, color);
     ui_text_at(win, text_x, yc + 4, text, invert, color);
     ui_caret_blink(win, text_x + cursor * UI_FONT_W, yc + 3);
@@ -273,8 +327,8 @@ fn ui_modal_overlay(win, label, text, cursor, color, text_x) {
 const UI_CTX_W = 130
 fn ui_context_menu(win, x, y, count) {
     let h = count * UI_ITEM_H + UI_DROPDOWN_PAD;
-    let dropdown = theme_col(TC_DROPDOWN);
-    let border   = theme_col(TC_BORDER);
+    let dropdown = UI_COL_DROPDOWN;
+    let border   = UI_COL_BORDER;
     ui_rect_at(win, x, y, UI_CTX_W, h, dropdown);
     ui_rect_at(win, x, y, UI_CTX_W, 1, border);
     ui_rect_at(win, x, y + h - 1, UI_CTX_W, 1, border);
@@ -283,7 +337,7 @@ fn ui_context_menu(win, x, y, count) {
 }
 
 fn ui_context_menu_item(win, x, y, index, label, fg) {
-    ui_text_at(win, x + 8, y + UI_DROPDOWN_PAD + index * UI_ITEM_H, label, fg, theme_col(TC_DROPDOWN));
+    ui_text_at(win, x + 8, y + UI_DROPDOWN_PAD + index * UI_ITEM_H, label, fg, UI_COL_DROPDOWN);
 }
 
 # Hit-test a context menu. Returns the item index (0..count-1) the click

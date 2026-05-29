@@ -27,10 +27,15 @@ if ($startIdx -lt 0) { throw "App blob start marker not found in $KernelPath" }
 $endIdx = Find-Marker $bytes $endMarker ($startIdx + $startMarker.Length)
 if ($endIdx -lt 0) { throw "App blob end marker not found in $KernelPath" }
 
-# Blob bytes include the start marker so internal RIP-relative calls preserve
-# the same layout after the blob is copied into an app slot.
+# Blob bytes include BOTH sentinels: the start marker so internal RIP-relative
+# calls preserve the same layout after the blob is copied into a slot, and the
+# end marker so APPS.BIN is byte-for-byte the embedded [app_blob_start,
+# app_blob_end) the KASLR path runs. Keeping the two identical means the user-
+# blob signature (security_todo.md §9, measured_boot.asm) covers the same
+# extent on both the KASLR (embedded) and non-KASLR (APPS.BIN) runtime paths.
+# The trailing 16-byte end sentinel is inert data past all blob code/data.
 $blobStart = $startIdx
-$blobEnd   = $endIdx
+$blobEnd   = $endIdx + $endMarker.Length
 $blobLen   = $blobEnd - $blobStart
 
 $blob = New-Object byte[] $blobLen

@@ -43,21 +43,19 @@ const THEME_DARK  = 1
 # Backing store layout (do not reorder).
 #   theme_palette : TC_COUNT slots × 8 bytes each, accessed via lq/sq.
 #                   Sized to 128 bytes (16 slots) so adding one TC_* slot
-#                   in future does NOT require touching this literal.
-#                   Initial content is don't-care: theme_init() writes
-#                   real values before any reader sees them. If anything
-#                   here changes, keep the literal exactly 128 ASCII chars
-#                   wide — a `scripts/test/test_source_guards.ps1` check
-#                   enforces it.
+#                   in future does not require changing app code.
+#                   Initial content is zeroed by the app slot loader.
 const PALETTE_SLOTS = 16
 const PALETTE_BYTES = 128
-str theme_palette = "                                                                                                                                ";
+state {
+    theme_palette: 128;
+    theme_state: 8;
+}
 
 # theme_state layout (8 bytes, lq-aligned):
 #   byte 0 — active-theme id (THEME_*). Stored as a byte; range 0..255.
 #   byte 1 — initialized flag (0 = unseeded, 1 = seeded).
 #   bytes 2..7 — reserved, must remain 0 (future event-version field).
-str theme_state = "        ";
 
 fn theme_active() {
     return lb(&theme_state);
@@ -75,6 +73,21 @@ fn theme_set_state(id, inited) {
     if id > 255 { id = THEME_LIGHT; }
     sb(&theme_state, id);
     sb(&theme_state + 1, inited);
+}
+
+fn theme_seed_id(id) {
+    if id == THEME_DARK {
+        theme_seed_dark();
+        theme_set_state(THEME_DARK, 1);
+        return;
+    }
+    theme_seed_light();
+    theme_set_state(THEME_LIGHT, 1);
+}
+
+fn theme_sync() {
+    if theme_inited() != 0 { return; }
+    theme_seed_id(THEME_LIGHT);
 }
 
 fn theme_slot_addr(idx) {
@@ -148,21 +161,18 @@ fn theme_seed_dark() {
 # the active pack standard ships.
 fn theme_set(id) {
     if id == THEME_DARK {
-        theme_seed_dark();
-        theme_set_state(THEME_DARK, 1);
+        theme_seed_id(THEME_DARK);
         desktop_set_bg(DESKTOP_BG_GLASS_RIBBONS);
         return;
     }
-    theme_seed_light();
-    theme_set_state(THEME_LIGHT, 1);
+    theme_seed_id(THEME_LIGHT);
     desktop_set_bg(DESKTOP_BG_FROSTED_BLOOM);
 }
 
 # One-shot init. Idempotent — safe to call from every draw if an app does
 # not have a clear startup hook.
 fn theme_init() {
-    if theme_inited() != 0 { return; }
-    theme_set(THEME_LIGHT);
+    theme_sync();
 }
 
 # Resolve a palette slot to a 0x00RRGGBB color. Out-of-range index returns

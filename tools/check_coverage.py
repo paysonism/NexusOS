@@ -24,6 +24,7 @@ DATA_GLOBAL_ALLOW = {
     "wm_drag_preview_h",
     "syscall_count",
     "kernel_canary",
+    "slot_sc_budget",
 }
 
 CONTROL_ALLOW = {

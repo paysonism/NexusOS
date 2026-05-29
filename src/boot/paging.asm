@@ -3,7 +3,10 @@
 ; Identity-maps first 4GB. PD0..PD2 use 2MB pages; the app arena PDEs in PD0
 ; instead point at 4KB page tables so the kernel can toggle USER per slot
 ; (and W^X per page) at ring-3 entry. PD3 is relocated to 0x81000 because
-; 0x75000..0x80FFF now holds the 12 app-arena PTs.
+; 0x75000..0x80FFF now holds the 12 app-arena PTs. A further PT page sits at
+; SYSCALL_STACK_PT_BASE (0x82000); it is zeroed here and wired up later by
+; l3_install_syscall_stack_pt to split the kernel-BSS PDE containing
+; l3_syscall_stacks into 4 KiB pages with per-slot guard PTEs.
 ;
 ; Layout:
 ;   0x70000  PML4
@@ -13,6 +16,7 @@
 ;   0x74000  PD2  (2..3 GB)
 ;   0x75000..0x80FFF  12 app-arena 4KB page tables (APP_ARENA_PT_BASE)
 ;   0x81000  PD3  (3..4 GB)
+;   0x82000  syscall-stack PT (SYSCALL_STACK_PT_BASE, kernel-installed)
 ; ============================================================================
 bits 16   ; We are in 16-bit Unreal Mode
 
@@ -28,11 +32,11 @@ PD3_BASE        equ 0x81000
 
 setup_paging:
     ; Clear page table region: PML4 + PDPT + PD0 + PD1 + PD2
-    ; + APP_USER_PDE_COUNT arena PTs + PD3 = 5 + 12 + 1 = 18 pages
-    ; (0x70000..0x81FFF).
+    ; + APP_USER_PDE_COUNT arena PTs + PD3 + syscall-stack PT
+    ; = 5 + 12 + 1 + 1 = 19 pages (0x70000..0x82FFF).
     mov edi, 0x70000
     xor eax, eax
-    mov ecx, (18 * 4096) / 4
+    mov ecx, (19 * 4096) / 4
     a32 rep stosd
 
     ; PML4[0] -> PDPT at 0x71000
@@ -121,5 +125,18 @@ setup_paging:
     add edi, 8
     dec ecx
     jnz .fill_pt
+
+    ; Per-slot stack guard: clear PAGE_PRESENT on the PTE one 4KB page below
+    ; the user stack of every slot. An overflow past the stack bottom faults
+    ; on this page rather than corrupting slot data below it.
+    mov edi, APP_ARENA_PT_BASE + L3_SLOT_USER_STACK_GUARD_PTE * 8
+    mov ecx, APP_SLOT_COUNT
+.guard_pt:
+    a32 mov eax, [edi]
+    and eax, ~PAGE_PRESENT
+    a32 mov [edi], eax
+    add edi, 0x1000          ; next slot's PT (and same PTE index)
+    dec ecx
+    jnz .guard_pt
 
     ret

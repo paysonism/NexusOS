@@ -5,6 +5,15 @@ bits 64
 
 %include "constants.inc"
 %include "macros.inc"
+; smap.inc is included by usermode.asm too, but that include is reached AFTER
+; main.asm in the monolithic build, so pull it in here for the USER_ACCESS_*
+; macros used by the media live-refresh scanner below. The SMAP_INC guard makes
+; the later includes no-ops; this becomes the sole definition of smap_smep_init.
+%include "smap.inc"
+; CET (security_todo.md §3): SHSTK/IBT detection (always) + the gated hardware
+; enable scaffold. Included here in main.asm so cet_detect/cet_enable have a
+; single definition site in the monolithic build, mirroring smap.inc above.
+%include "cet.inc"
 
 section .text
 ; auto-wrapped (FN_BEGIN emits global): global kmain
@@ -139,6 +148,7 @@ extern smp_core_states
 extern cpu_tsc_per_tick
 extern app_hl_taskmgr_draw
 extern app_media_draw
+extern media_draw_dispatch
 extern app_hl_media_mp_paused
 extern app_blob_start
 
@@ -1235,6 +1245,28 @@ ctx_menu_handle_click:
 ; --- Kernel Entry ---
 FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     call memory_init
+%ifdef ENABLE_SMAP
+    ; Kernel/user boundary hardening: enable CR4.SMEP/SMAP now that the page
+    ; tables (and their PTE.U bits) are live but before any ring-3 entry.
+    ; CPUID-gated inside; APs mirror CR4 from the BSP in apic.asm. Every
+    ; intentional user-pointer deref is bracketed by USER_ACCESS_BEGIN/END.
+    ; smap_smep_init is defined by the smap.inc include at the top of this file.
+    call smap_smep_init
+%endif
+    ; CET detection (security_todo.md §3): record SHSTK (CPUID(7,0).ECX bit 7)
+    ; and IBT (EDX bit 20) into cet_have_shstk/cet_have_ibt. Always run — it is
+    ; a cheap CPUID probe with no side effects, and it is the inventory the
+    ; gated cet_enable (and a future attestation syscall) consults. Under QEMU
+    ; TCG (qemu64) neither bit is reported, so cet_enable below stays inert.
+    call cet_detect
+%ifdef ENABLE_CET
+    ; Hardware CET enable scaffold (gated; OFF by default). No-op unless SHSTK
+    ; was just detected. Establishes CR4.CET + IA32_S_CET without arming the
+    ; supervisor shadow-stack RET-check (that needs a seeded PL0_SSP — the
+    ; documented follow-up); the portable software shadow stack in
+    ; shadow_stack.inc remains the active kernel-ROP defense meanwhile.
+    call cet_enable
+%endif
     extern app_blob_init
     call app_blob_init          ; read loaded APPS.BIN pointer before anyone uses it
     call display_init
@@ -1250,10 +1282,31 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     extern tss_init
     extern syscall_init
     extern kernel_canary_init
+    extern slot_cap_hmac_init
     extern l3_install_syscall_stack_pt
     call gdt64_init
     call tss_init
     call kernel_canary_init
+    ; Seed the per-slot capability-mask HMACs now that kernel_canary holds its
+    ; final value. slot_cap_mask[] is statically CAP_ALL; the matching HMAC
+    ; cannot be assembled in (the canary key is runtime-only), so stamp every
+    ; slot's authenticator here before any syscall can read the mask.
+    call slot_cap_hmac_init
+    ; Measured boot (security_todo.md §9): fold every loaded boot stage
+    ; (kernel image + app blob) into a kernel-owned measurement chain and
+    ; publish the digest to mb_digest. Done now — after the canary is final
+    ; and before any ring-3 entry — so the measurement reflects the image as
+    ; launched. Kernel-only storage; a sealed attestation syscall is a follow-up.
+    extern measured_boot_init
+    call measured_boot_init
+    ; Sign the user blob (security_todo.md §9): verify the kernel-held-key MAC
+    ; over [app_blob_base_v, +app_blob_size_v) against the build-time expected
+    ; MAC before any app can launch. Fails closed (kernel_panic_canary) on a
+    ; tampered/corrupted/truncated blob. Runs here — after the blob extent is
+    ; known (app_blob_init above) and before the first ring-3 entry. See the
+    ; threat-model section in docs/STATUS.md for why a symmetric MAC suffices.
+    extern app_blob_verify_signature
+    call app_blob_verify_signature
     ; Split the PDE covering l3_syscall_stacks into 4 KiB pages and punch
     ; per-slot guard pages BEFORE the first syscall path is wired up.
     call l3_install_syscall_stack_pt
@@ -1310,6 +1363,15 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     ; Also restores xhci_slot_id / xhci_int_ep_dci which rtl8156 overwrote.
     extern usb_hid_requeue_slot1_reads
     call usb_hid_requeue_slot1_reads
+
+    ; Driver capability gates + MMIO bounds policy (security_todo.md §8): now
+    ; that apic_init resolved lapic_base and the xHCI probe resolved
+    ; xhci_mmio_base, declare each driver's reachable-region descriptor into the
+    ; kernel-owned MMIO registry. From here on, instrumented driver MMIO sites
+    ; call mmio_bounds_assert against this same registry and panic fail-closed
+    ; on an out-of-BAR access. mmio_bounds.inc is included via memory.asm.
+    extern mmio_drv_caps_init
+    call mmio_drv_caps_init
 
     ; SMP work queue must be initialised BEFORE the APs are started: workers
     ; gate on workqueue_ready, so init first guarantees they see a clean queue.
@@ -1400,6 +1462,14 @@ FN_BEGIN kmain, 0, 0, FN_RET_SCALAR
     pop rcx
     dec ecx
     jnz .fbp_bench_loop
+
+    ; Read-only kernel after init (security_todo.md §9): all kernel setup is
+    ; done, so lock the kernel .text PDEs read-only and enable CR0.WP. Any
+    ; subsequent kernel-side write into code now page-faults. One-shot; placed
+    ; here, the last thing before the main loop, so every init-time write to
+    ; .text (if any) has already happened.
+    extern kernel_lockdown_ro
+    call kernel_lockdown_ro
 
 .infinite:
     mov byte [main_loop_stage], 1
@@ -4391,6 +4461,11 @@ media_live_refresh:
     call l3_slot_base
     mov rdx, rax
     mov r9, rax
+    ; SMAP: rdx/r9 are a user (PTE.U=1) slot base. This scan reads several slot
+    ; fields before deciding whether to wake the compositor. Arm AC across the
+    ; reads; every exit (.next, .wake) re-arms SMAP via USER_ACCESS_END. clac is
+    ; harmless on the paths that reach those labels without having set AC.
+    USER_ACCESS_BEGIN
     cmp dword [rdx + APP_SLOT_BMP_FILE_OFF], NBA1_MAGIC
     jne .next
     cmp dword [rdx + APP_SLOT_BMP_FILE_OFF + 12], 1    ; frame_count
@@ -4423,6 +4498,7 @@ media_live_refresh:
     jb .next
 
 .wake:
+    USER_ACCESS_END
     cmp byte [scene_dirty], 0
     jne .mark_scene_dirty
     test qword [rbx + WIN_OFF_FLAGS], WF_FOCUSED
@@ -4431,7 +4507,7 @@ media_live_refresh:
     mov byte [media_direct_present], 1
     mov byte [media_direct_presented], 0
     mov rdi, rbx
-    call app_media_draw
+    call media_draw_dispatch
     mov byte [media_direct_present], 0
     cmp byte [media_direct_presented], 1
     je .direct_presented
@@ -4472,6 +4548,7 @@ media_live_refresh:
     mov byte [scene_dirty], 1
     jmp .done
 .next:
+    USER_ACCESS_END
     add rbx, WINDOW_STRUCT_SIZE
     inc ecx
     jmp .scan

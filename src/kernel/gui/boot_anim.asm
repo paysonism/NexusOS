@@ -33,6 +33,7 @@ extern scr_width
 extern scr_height
 extern scr_pitch_q
 extern display_flip
+extern display_flip_rect
 extern tick_count
 extern kb_head
 extern kb_tail
@@ -42,6 +43,7 @@ extern kb_repeat_scancode
 ; backbuffer-save region and is included in SYSTEM_RESERVED_END so the page
 ; allocator never hands it to runtime users.
 BOOT_ANIM_BUF       equ BOOT_ANIM_BUF_ADDR
+BOOT_ANIM_MAX_SCALE equ 2
 
 DIR_FIRST_CLUS_LO   equ 26
 DIR_FILE_SIZE       equ 28
@@ -159,17 +161,21 @@ boot_anim_blit:
     mov eax, [scr_width]
     mov ecx, r10d
     imul ecx, r12d
+    mov [rel boot_anim_rect_w], ecx
     sub eax, ecx
     shr eax, 1
     mov r8d, eax               ; dest_x
+    mov [rel boot_anim_rect_x], eax
 
     ; dest_y = (scr_height - h*scale) / 2
     mov eax, [scr_height]
     mov ecx, r11d
     imul ecx, r12d
+    mov [rel boot_anim_rect_h], ecx
     sub eax, ecx
     shr eax, 1
     mov r9d, eax               ; dest_y
+    mov [rel boot_anim_rect_y], eax
 
     mov rbx, [bb_addr]
     test rbx, rbx
@@ -349,13 +355,14 @@ boot_anim_play:
     jbe .scale_min_ok
     mov edi, eax
 .scale_min_ok:
-    cmp edi, 4
+    cmp edi, BOOT_ANIM_MAX_SCALE
     jbe .scale_cap_ok
-    mov edi, 4
+    mov edi, BOOT_ANIM_MAX_SCALE
 .scale_cap_ok:
     mov [rel boot_anim_scale], edi
 
-    ; ticks_per_frame = max(1, 100 / fps)
+    ; ticks_per_frame = max(1, 100 / fps). The animation plays at source FPS;
+    ; CPU reduction comes from the bounded scale and rectangle-only GOP flush.
     mov eax, 100
     xor edx, edx
     mov esi, ecx                   ; preserve frame_count in rsi temporarily
@@ -379,8 +386,10 @@ boot_anim_play:
     mov rsi, BOOT_ANIM_BUF
     add rsi, 20
 
-    ; Clear backbuffer once
+    ; Clear and present the backbuffer once. Subsequent animation frames only
+    ; flush the changed animation rectangle.
     call boot_anim_clear_bb
+    call display_flip
     BA_DBG '~'                      ; about to play
 
     xor ebx, ebx                   ; frame index
@@ -395,7 +404,11 @@ boot_anim_play:
     call boot_anim_blit
     BA_DBG ','
 
-    call display_flip
+    mov edi, [rel boot_anim_rect_x]
+    mov esi, [rel boot_anim_rect_y]
+    mov edx, [rel boot_anim_rect_w]
+    mov ecx, [rel boot_anim_rect_h]
+    call display_flip_rect
     BA_DBG ';'
 
     mov edi, [rel boot_anim_tpf]
@@ -432,3 +445,7 @@ boot_anim_tpf       resd 1
 boot_anim_frames    resd 1
 boot_anim_stride    resd 1
 boot_anim_scale     resd 1
+boot_anim_rect_x    resd 1
+boot_anim_rect_y    resd 1
+boot_anim_rect_w    resd 1
+boot_anim_rect_h    resd 1

@@ -41,6 +41,26 @@
     syscall
 %endmacro
 
+; SYS_FS_ENTRY(index) -> rax = opaque dir-entry handle (HANDLE_KIND_DIR_ENTRY)
+;   index is the valid-entry index in the current directory (skipping volume
+;   label / LFN / deleted slots), as enumerated by SYS_FS_COUNT.
+;
+;   On success rax is a packed 32-bit handle (magic|kind|gen|index) that:
+;     * is opaque to ring 3 — DO NOT dereference it. The kernel no longer
+;       returns a pointer; the snapshot cache that used to back this call
+;       has been removed.
+;     * is owned by the calling slot. Closing the slot drops every handle;
+;       another slot can never resolve it.
+;     * must be paired with SYS_HANDLE_CLOSE when no longer needed (the
+;       per-slot table is 64 entries — leaking handles eventually wedges
+;       SYS_FS_ENTRY at the alloc step).
+;
+;   To read fields out of the entry (name, size, attr, first cluster) call
+;   SYS_FS_ENTRY_INFO with the handle and a 20-byte user buffer. To act on
+;   the entry (read/format/delete/rename/open) pass the handle directly to
+;   the matching FS syscall — those resolve through the handle table.
+;
+;   rax = 0 on any failure (out-of-range index, table full, kernel skip).
 %macro SYS_FS_ENTRY 1
     mov rax, 5
     mov rdi, %1
@@ -539,6 +559,146 @@
     mov rax, 65
     mov rdi, %1
     mov rsi, %2
+    syscall
+%endmacro
+
+; SYS_WX_INSTALL_MANIFEST(code_start_off, code_end_off)
+;   Commits this slot's W^X manifest. Both bounds are byte offsets into the
+;   slot (NOT addresses) and must be 4KB-aligned and lie inside
+;   [L3_APP_CODE_OFF, L3_SHADOW_WIN_OFF) with code_start < code_end. On
+;   success the kernel re-applies l3_apply_wx_policy immediately, so:
+;     * pages inside [code_start_off, code_end_off) become X+!W
+;     * every other slot page becomes W+NX
+;   Returns 0 on success, -1 on validation failure.
+;   Idempotent — callable any time the app wants to widen/replace its code
+;   range. RWX is never produced at any intermediate step.
+%macro SYS_WX_INSTALL_MANIFEST 2
+    mov rax, 67
+    mov rdi, %1
+    mov rsi, %2
+    syscall
+%endmacro
+
+; SYS_MPROTECT_WX(page_addr, mode)
+;   Flips a single 4KB page between W+NX (mode 0 = MPROT_WX_MODE_WNX) and
+;   X+!W (mode 1 = MPROT_WX_MODE_XRO). Pre-conditions:
+;     * SYS_WX_INSTALL_MANIFEST has been called this session.
+;     * page_addr is 4KB-aligned.
+;     * page_addr lies inside the calling slot.
+;     * page_addr's slot-relative offset lies in the installed code range.
+;   The PTE transition is two-step (W=0+NX=1 intermediate, with invlpg
+;   between) so no TLB cache line ever observes RWX.
+;   Returns 0 on success, -1 on any validation failure.
+%macro SYS_MPROTECT_WX 2
+    mov rax, 68
+    mov rdi, %1
+    mov rsi, %2
+    syscall
+%endmacro
+
+; SYS_WX_JIT_ALIAS(x_va, w_alias_va, length)
+;   Installs a writable alias of an executable range at a separate VA so a
+;   JIT can write generated code via the W alias and execute it via the
+;   X mapping without ever holding RWX on the same VA. Pre-conditions:
+;     * SYS_WX_INSTALL_MANIFEST has been called this session.
+;     * length > 0, page-multiple.
+;     * x_va, w_alias_va are 4KB-aligned and lie inside the calling slot.
+;     * [x_va, x_va+length)  lies fully inside the installed code range.
+;     * [w_alias_va, w_alias_va+length) lies fully OUTSIDE the code range,
+;       inside the slot, and every target PTE is currently present (the
+;       alias overwrites those PTEs' physical frame mappings).
+;   On success each w_alias_va+i*4096 PTE is rewritten to point at the same
+;   physical frame as x_va+i*4096 but with W+NX, while the X mapping
+;   retains its X+!W permissions. The alias persists for the slot's
+;   lifetime; slot teardown tears the PT down.
+;   Returns 0 on success, -1 on any validation failure.
+%macro SYS_WX_JIT_ALIAS 3
+    mov rax, 69
+    mov rdi, %1
+    mov rsi, %2
+    mov rdx, %3
+    syscall
+%endmacro
+
+; SYS_HANDLE_CLOSE(handle) -> rax = 0 on success, -1 on bad handle
+;   Releases an opaque handle previously returned by SYS_FS_ENTRY (or any
+;   future handle-returning syscall). The handle is verified against the
+;   per-slot table first — a stale or forged handle returns -1 without
+;   touching kernel state. After close the entry's generation is bumped
+;   on the next reuse, so the closed handle resolves as invalid forever.
+;
+;   Today only HANDLE_KIND_DIR_ENTRY is allocated, so close() rejects any
+;   handle whose kind tag is something else. When future kinds (XML node,
+;   net socket, window) migrate onto the table, this syscall will dispatch
+;   on the embedded kind tag rather than growing per-kind close syscalls.
+%macro SYS_HANDLE_CLOSE 1
+    mov rax, 70
+    mov rdi, %1
+    syscall
+%endmacro
+
+; SYS_FS_ENTRY_INFO(handle, out_buf, out_buf_len) -> rax = 0 ok, -1 fail
+;   Copies a 20-byte fixed-layout snapshot of the named FAT16 entry into
+;   out_buf. out_buf_len must be >= 20. The snapshot is taken at call time;
+;   if another writer mutates the entry afterwards the values diverge until
+;   the next call. Returns -1 on invalid handle, out-of-range buffer, or
+;   undersized buffer.
+;
+;   Layout (matches the standard FAT16 short-entry head; offsets in bytes):
+;       0  u8[8]  name        (space-padded, raw)
+;       8  u8[3]  ext         (space-padded, raw)
+;      11  u8     attr        (0x10 = directory, 0x08 = vol label, ...)
+;      12  u16    first_cluster_lo
+;      14  u16    reserved (0)
+;      16  u32    size_bytes
+;
+;   This replaces the previous "SYS_FS_ENTRY returns a snapshot pointer you
+;   dereference directly" contract — kernel VAs no longer leak to ring 3.
+%macro SYS_FS_ENTRY_INFO 3
+    mov rax, 71
+    mov rdi, %1
+    mov rsi, %2
+    mov rdx, %3
+    syscall
+%endmacro
+
+; Size of the SYS_FS_ENTRY_INFO output struct. Apps that allocate the buffer
+; statically should use this so a layout bump shows up at build time.
+SYS_FS_ENTRY_INFO_SIZE equ 20
+
+; Manifest version-1 / mode constants mirror boot_memory.inc.
+%ifndef MPROT_WX_MODE_WNX
+MPROT_WX_MODE_WNX equ 0
+MPROT_WX_MODE_XRO equ 1
+%endif
+
+; SYS_APP_DECLARE_MANIFEST(app_id) — opt the calling slot into sandboxing.
+;   AND-narrows this slot's capability mask to the static manifest declared
+;   for app_id in src/include/syscall_caps.inc. After this call, any syscall
+;   outside the manifest returns -1 without invoking its handler.
+;
+;   Call this once, as early as possible in the app's entry point (before
+;   any handler that might touch attacker-controlled input). The narrowing
+;   is one-way: a second call for a *different* app_id can only remove caps
+;   further, never restore them.
+;
+;   Returns: rax = the effective mask after narrowing, or -1 on bad app_id.
+%macro SYS_APP_DECLARE_MANIFEST 1
+    mov rax, 72
+    mov rdi, %1
+    syscall
+%endmacro
+
+; SYS_WM_GET_USER_ARG(win_id) -> rax = 48-bit value (zero-extended) or -1.
+;   Tag-verified read of WIN_OFF_USER_ARG. The kernel stamps a per-window
+;   16-bit tag (derived from kernel_canary) into the high bits on the
+;   matching SET; this getter strips and verifies it. A stored zero is
+;   returned as 0 (the "never set" sentinel). Apps that previously read the
+;   field by dereferencing &window+160 must migrate to this syscall — direct
+;   reads now see the tag bytes and won't decode the original value.
+%macro SYS_WM_GET_USER_ARG 1
+    mov rax, 73
+    mov rdi, %1
     syscall
 %endmacro
 

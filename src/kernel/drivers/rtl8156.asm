@@ -41,6 +41,16 @@ extern debug_print
 extern usb_poll_mouse
 extern net_rx_frame
 
+; --- Driver capability gate (security_todo.md §8) ---------------------------
+; This driver performs NO direct MMIO of its own: every register poke reaches
+; the controller through the xHCI doorbell/ring path (xhci.asm) at offsets
+; inside xhci_mmio_base. Its "regions I may touch" capability descriptor is
+; therefore the xHCI BAR, declared under MMIO_DRV_RTL8156 by mmio_drv_caps_init
+; (mmio_bounds.inc). Should this driver ever gain a direct MMIO store, bracket
+; it with `mmio_bounds_assert(addr, len, MMIO_DRV_RTL8156)` against that
+; registered window. The id is reserved here so the registry already covers it.
+MMIO_DRV_RTL8156_DESC equ MMIO_DRV_RTL8156
+
 section .text
 
 RTL8156_VENDOR_REALTEK equ 0x0BDA
@@ -2534,8 +2544,8 @@ rtl8156_bulk_in:
     mov r10d, ecx
     mov r11d, TRB_NORMAL | TRB_IOC | (1 << 2)
     mov rdi, RTL8156_BULK_IN_RING_ADDR
-    mov esi, rtl8156_bulk_in_enqueue
-    mov edx, rtl8156_bulk_in_cycle
+    lea rsi, [rel rtl8156_bulk_in_enqueue]
+    lea rdx, [rel rtl8156_bulk_in_cycle]
     call rtl8156_queue_bulk_trb
     ; Doorbell the NIC's own slot, NOT the shared xhci_slot_id — that global
     ; gets clobbered by usb_hid / re-enumeration after rtl8156 init returns.
@@ -2616,8 +2626,8 @@ rtl8156_consume_event:
     mov r10d, 4096
     mov r11d, TRB_NORMAL | TRB_IOC | (1 << 2)
     mov rdi, RTL8156_BULK_IN_RING_ADDR
-    mov esi, rtl8156_bulk_in_enqueue
-    mov edx, rtl8156_bulk_in_cycle
+    lea rsi, [rel rtl8156_bulk_in_enqueue]
+    lea rdx, [rel rtl8156_bulk_in_cycle]
     call rtl8156_queue_bulk_trb
     movzx edi, byte [rtl8156_slot_id]
     movzx esi, byte [rtl8156_bulk_in_dci]
@@ -2659,8 +2669,8 @@ rtl8156_arm_rx:
     mov r10d, 4096
     mov r11d, TRB_NORMAL | TRB_IOC | (1 << 2)
     mov rdi, RTL8156_BULK_IN_RING_ADDR
-    mov esi, rtl8156_bulk_in_enqueue
-    mov edx, rtl8156_bulk_in_cycle
+    lea rsi, [rel rtl8156_bulk_in_enqueue]
+    lea rdx, [rel rtl8156_bulk_in_cycle]
     call rtl8156_queue_bulk_trb
     movzx edi, byte [rtl8156_slot_id]
     movzx esi, byte [rtl8156_bulk_in_dci]
@@ -2700,8 +2710,8 @@ rtl8156_bulk_in_nonblocking:
     mov r10d, ecx
     mov r11d, TRB_NORMAL | TRB_IOC | (1 << 2)
     mov rdi, RTL8156_BULK_IN_RING_ADDR
-    mov esi, rtl8156_bulk_in_enqueue
-    mov edx, rtl8156_bulk_in_cycle
+    lea rsi, [rel rtl8156_bulk_in_enqueue]
+    lea rdx, [rel rtl8156_bulk_in_cycle]
     call rtl8156_queue_bulk_trb
     movzx edi, byte [rtl8156_slot_id]
     movzx esi, byte [rtl8156_bulk_in_dci]
@@ -2764,8 +2774,8 @@ rtl8156_bulk_out:
     mov r10d, ecx
     mov r11d, TRB_NORMAL | TRB_IOC
     mov rdi, RTL8156_BULK_OUT_RING_ADDR
-    mov esi, rtl8156_bulk_out_enqueue
-    mov edx, rtl8156_bulk_out_cycle
+    lea rsi, [rel rtl8156_bulk_out_enqueue]
+    lea rdx, [rel rtl8156_bulk_out_cycle]
     call rtl8156_queue_bulk_trb
     movzx edi, byte [rtl8156_slot_id]
     movzx esi, byte [rtl8156_bulk_out_dci]
@@ -2775,7 +2785,7 @@ rtl8156_bulk_out:
     pop rcx
     ret
 
-; RDI=ring, ESI=&enqueue, EDX=&cycle, R8-R11=TRB.
+; RDI=ring, RSI=&enqueue, RDX=&cycle, R8-R11=TRB.
 rtl8156_queue_bulk_trb:
     push rax
     push rbx

@@ -27,7 +27,7 @@ jobs; an idle AP picks one up, runs it, and publishes the result.
 
 | Piece | File | Role |
 |-------|------|------|
-| AP bring-up | `src/kernel/arch/apic.asm` | INIT/SIPI trampoline; each AP ends in `smp_worker_loop` instead of a HLT park loop. |
+| AP bring-up | `src/kernel/arch/apic.asm` | INIT/SIPI trampoline; each AP ends in `smp_worker_loop` and sleeps in HLT when no job is pending. |
 | Work queue + worker loop | `src/kernel/proc/workqueue.asm` | Job array, submit/poll/reap API, and the AP worker loop. |
 | Wiring | `src/kernel/core/main.asm` | `kmain` calls `workqueue_init` before `smp_ap_startup`, then `workqueue_selftest`. |
 
@@ -36,7 +36,9 @@ jobs; an idle AP picks one up, runs it, and publishes the result.
 `smp_ap_startup` (in `apic.asm`) copies a real-mode trampoline low in memory and
 sends INIT/SIPI IPIs. Each AP walks 16-bit → 32-bit → 64-bit mode, enables SSE
 (so vectorised job code does not `#UD`), records itself live, and then jumps to
-`smp_worker_loop`. It never returns; the core is a permanent worker.
+`smp_worker_loop`. It never returns; the core is a permanent worker. When no
+job is claimable it enables interrupts, executes `hlt`, and wakes on the
+workqueue IPI sent after the BSP publishes a job.
 
 Build profiles that define `NEXUS_CACHE32_AP_STARTUP` start AP workers. UEFI
 enables that path in both `Default` and `Cache32Max`; BIOS enables it only in
@@ -167,7 +169,8 @@ real cross-core path; otherwise it exercises the inline fallback.
 
 - Offload SVG tile rasterisation and image decode to the queue.
 - A `workqueue_submit_many` / barrier helper for data-parallel splits.
-- Per-AP idle `mwait` instead of a `pause` spin to cut power draw.
+- Per-AP `mwait` can still replace the current IPI + `hlt` idle path later if
+  the scheduler needs lower wake latency.
 
 ## Process-manager roadmap (Stage 1 → Stage 3)
 

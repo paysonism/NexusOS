@@ -10,6 +10,8 @@ bits 64
 %include "trace.inc"
 %include "syscall_caps.inc"
 %include "shadow_stack.inc"
+%include "syscall_trace.inc"
+%include "qrng_seed.inc"          ; quantum entropy blob folded into the canary
 
 ; MSR Addresses for Syscall
 IA32_EFER           equ 0xC0000080
@@ -48,6 +50,15 @@ SYSCALL_ARGC_OFF    equ 8
 SYSCALL_KIND_OFF    equ 9
 ; Single-byte cap mask packed into what used to be a padding byte.
 SYSCALL_CAP_OFF     equ 13
+; Single-byte per-entry flags packed into a former padding byte (offset 14).
+; SC_FLAG_STRICT (security_todo.md §2, "Mandatory non-zero arg_desc for every
+; PTR arg") opts a row into deny-on-unmigrated: any FN_KIND_PTR arg whose
+; arg_desc nibble is still 0 (never migrated to a sibling-length descriptor)
+; is rejected by the validator instead of falling back to the legacy 1-byte
+; probe. Lets rows be flipped to strict one at a time as their descriptors
+; land; un-flagged rows keep the legacy probe.
+SYSCALL_FLAGS_OFF   equ 14
+SC_FLAG_STRICT      equ 0x01
 ; Optional per-arg descriptor qword. 4 bits per arg (6 args = 24 bits used);
 ; nibble N != 0 means "byte length of this PTR arg lives in scalar arg
 ; (nibble - 1)". The validator pulls that sibling and uses it as the real
@@ -125,6 +136,9 @@ extern l3_runtime
 extern l3_syscall_stacks
 extern call_app_l3_return
 extern ser_print_hex64
+extern serial_puts
+extern serial_putc
+extern serial_crlf
 extern app_blob_base_v
 extern app_blob_end_v
 extern l3_app_arena_base_v
@@ -291,11 +305,12 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     pop r10
     pop rdx
     pop rbx
-    mov ax, GDT64_DATA_SEG
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
+    ; Kernel-entry FS/GS sanitization (security_todo.md §3). Load kernel data
+    ; selectors into ds/es/fs/gs so no user-controlled selector is in force
+    ; while in ring 0; under -dENABLE_FSGS_MSR_SCRUB also zeroes the FS/GS base
+    ; MSRs (no-op in the flat model, deterministic if FSGSBASE is ever enabled).
+    ; Clobbers ax only — rcx (user RIP) and the rest of the live state survive.
+    SANITIZE_SEG_KERNEL_ENTRY
 
     ; Switch to syscall stack without calling out while we're still on the
     ; user stack. A normal CALL would push a return address to user memory.
@@ -347,6 +362,17 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     cld
     PUSH_ALL
 
+    ; Always-on per-syscall trace ring + per-slot histogram (security_todo.md
+    ; §11). Promotes the old compile-gated ENABLE_TRACE serial logger to a cheap
+    ; in-memory, slot-isolated record of the last SC_TRACE_RING_ENTRIES calls
+    ; per slot, plus a per-slot syscall-number histogram. The ring gives a
+    ; crash/panic the faulting slot's recent call sequence; the histogram is the
+    ; data source the §11 anomaly detector (sc_anomaly_scan_all, run on the pit
+    ; cadence) scans for a syscall mix that deviates from the app's profile.
+    ; Inline (no CALL), a handful of instructions; clobbers only rax/rbx/rcx/
+    ; rdx/r8, all reloaded from the saved PUSH_ALL frame before the handler runs.
+    SC_TRACE_APPEND
+
 %ifdef ENABLE_TRACE
     mov rdi, [rsp + ALL_RAX]
     mov esi, r15d
@@ -387,6 +413,20 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 %endif
 
 .dispatch:
+%ifdef ENABLE_DEBUG_SERIAL
+    ; Validator post-condition (§2, debug build only): clear this slot's
+    ; snapshot-valid flag at the start of every dispatch so only a fully
+    ; validated syscall (which re-sets it after sc_validate_from_table passes)
+    ; is rechecked at return. Reject and non-validated paths leave it cleared,
+    ; so .done skips them. rax holds the syscall number here — preserve it.
+    push rax
+    push rcx
+    lea rcx, [rel sc_postcond_valid]
+    movzx eax, r15b
+    mov byte [rcx + rax], 0
+    pop rcx
+    pop rax
+%endif
     cmp rax, syscall_table_count
     jae .sc_invalid
     mov rbx, rax
@@ -405,21 +445,120 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     lea rcx, [rel slot_cap_mask]
     movzx edx, r15b
     mov dl, [rcx + rdx]
+    ; Time-of-check authentication of the cap mask. slot_cap_mask[] is plain
+    ; kernel data; any kernel-write bug that flips a bit there would silently
+    ; widen this slot's capabilities. Before trusting dl we recompute the
+    ; per-slot HMAC (low8(kernel_canary ^ slot ^ mask ^ CAP_HMAC_DOMAIN)) and
+    ; compare it against the authenticator stamped alongside the mask. A
+    ; mismatch means the mask was tampered with after the last legitimate
+    ; write, so we panic on the same CANARY path as CPI corruption rather than
+    ; dispatch on a forged mask. Done before the cap AND so a widened mask is
+    ; never even consulted. Clobbers r8/r9 only (rax=cap bit, rcx/rdx live).
+    mov r9, [rel kernel_canary]
+    movzx r8d, r15b
+    xor r9, r8                      ; mix slot id
+    movzx r8d, dl
+    xor r9, r8                      ; mix the (claimed) mask byte
+    xor r9, CAP_HMAC_DOMAIN
+    lea r8, [rel slot_cap_hmac]
+    movzx eax, r15b                 ; reload slot into a scratch index reg
+    add r8, rax
+    movzx eax, byte [r8]            ; stored authenticator for this slot
+    cmp r9b, al
+    jne .sc_cap_tamper
+    movzx eax, byte [r12 + SYSCALL_CAP_OFF]   ; restore cap bit (al was scratch)
     and dl, al
     cmp dl, al
     jne .sc_cap_reject
+    ; Per-syscall allowlist gate (security_todo.md §2, "Manifest declares
+    ; syscall set, not just cap bits"). The coarse cap mask above only proves
+    ; this syscall's *domain* is granted; slot_syscall_allow[] is a finer
+    ; per-slot bitmap (one bit per syscall number) so an app is confined to the
+    ; exact call set its manifest implies — e.g. Notepad keeps CAP_FS but its
+    ; bitmap clears SYS_FS_DELETE. Undeclared/legacy slots have an all-ones
+    ; bitmap (BSS 0xFF fill), so this gate is a no-op until a manifest narrows
+    ; it. Checked after the cap gate so a forbidden-domain call still rejects
+    ; for the cap reason, but before rate/arg validation so a denied syscall
+    ; can't probe pointer behaviour. r8/r9/rcx scratch here (rcx reloaded by
+    ; the rate gate below); rax=cap bit and rdx=mask are dead past this point.
+    mov r9, [rsp + ALL_RAX]             ; syscall number (validated < count above)
+    mov r8, r9
+    shr r8, 3                           ; byte index within the bitmap
+    movzx ecx, r15b
+    imul ecx, ecx, SC_ALLOW_BYTES       ; slot's bitmap base offset
+    add r8, rcx
+    lea rcx, [rel slot_syscall_allow]
+    movzx r8d, byte [rcx + r8]          ; the bitmap byte holding this syscall's bit
+    and r9d, 7                          ; bit position 0..7
+    bt r8d, r9d
+    jnc .sc_cap_reject                  ; bit clear == syscall not in slot's set
+    ; Rate-limit gate: spend one token from this slot's per-tick bucket. The
+    ; bucket is refilled to SC_BUDGET_PER_TICK by pit_handler each timer tick;
+    ; a slot that has drained it this tick is throttled (deny -1) so a fuzzer
+    ; can't issue millions of calls between ticks. Checked after the cap gate
+    ; so a forbidden syscall is still rejected for the right reason, but before
+    ; argument validation so a throttled slot can't probe pointer behaviour.
+    ;
+    ; GUI rendering syscalls are exempt from the budget. A single desktop/window
+    ; redraw issues thousands of draw calls, and continuous content (video
+    ; playback) redraws every frame, so charging them drains the bucket and the
+    ; rejected draw calls leave the window painted as a blank/white frame. GUI
+    ; calls are not the fuzzing/side-channel oracle the budget defends against
+    ; (those are the FS/probe/WX surfaces) — their worst-case abuse is spamming
+    ; the screen, which is visible and vsync-bounded, not a hidden oracle. See
+    ; security_todo.md §2.
+    test byte [r12 + SYSCALL_CAP_OFF], CAP_GUI
+    jnz .sc_rate_ok
+    movzx ecx, r15b
+    lea rdx, [rel slot_sc_budget]
+    movzx eax, word [rdx + rcx*2]
+    test eax, eax
+    jz .sc_rate_reject
+    dec eax
+    mov [rdx + rcx*2], ax
+.sc_rate_ok:
     call sc_validate_from_table
     test eax, eax
     jz .sc_validate_reject
+%ifdef ENABLE_DEBUG_SERIAL
+    ; Validator post-condition snapshot (§2, debug build only). The arg
+    ; registers were validated above; copy the 6 saved arg qwords from the
+    ; PUSH_ALL frame into this slot's snapshot buffer so the return path can
+    ; detect a handler that scribbles its own saved-frame args (handler-side
+    ; TOCTOU on the validated values). Done before the handler runs and before
+    ; the arg-register reloads below, so it captures exactly what was validated.
+    ; rax/rcx clobbered here are reloaded from the frame by the reloads below.
+    movzx eax, r15b
+    imul eax, eax, 48                    ; 6 qwords * 8 = 48 bytes per slot
+    lea rcx, [rel sc_postcond_args]
+    add rcx, rax
+    mov rax, [rsp + ALL_RDI]
+    mov [rcx + 0], rax
+    mov rax, [rsp + ALL_RSI]
+    mov [rcx + 8], rax
+    mov rax, [rsp + ALL_RDX]
+    mov [rcx + 16], rax
+    mov rax, [rsp + ALL_R10]
+    mov [rcx + 24], rax
+    mov rax, [rsp + ALL_R8]
+    mov [rcx + 32], rax
+    mov rax, [rsp + ALL_R9]
+    mov [rcx + 40], rax
+    lea rcx, [rel sc_postcond_valid]
+    movzx eax, r15b
+    mov byte [rcx + rax], 1              ; arm the return-path recheck for this slot
+%endif
     mov rdi, [rsp + ALL_RDI]
     mov rsi, [rsp + ALL_RSI]
     mov rdx, [rsp + ALL_RDX]
     mov r10, [rsp + ALL_R10]
     mov r8,  [rsp + ALL_R8]
     mov r9,  [rsp + ALL_R9]
+    lfence                                  ; Spectre-v2 barrier: serialize speculation before the dispatcher's indirect branch
     jmp qword [r12 + SYSCALL_HANDLER_OFF]
 
 .sc_validate_reject:
+    call sc_record_strike                   ; §12: count this security reject; may kill the slot
 %ifdef ENABLE_TRACE
     mov rdi, [rsp + ALL_RAX]
     mov esi, r15d
@@ -431,6 +570,39 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jmp .done
 
 .sc_cap_reject:
+    call sc_record_strike                   ; §12: count this security reject; may kill the slot
+%ifdef ENABLE_TRACE
+    mov rdi, [rsp + ALL_RAX]
+    mov esi, r15d
+    mov rdx, [rsp + ALL_RDI]
+    mov ecx, TRACE_FLAG_VALIDATE_FAIL
+    call trace_syscall
+%endif
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+
+; Cap-mask authenticator mismatch: slot_cap_mask[r15] no longer matches its
+; HMAC, so the mask was corrupted after the last legitimate (re-stamped)
+; write. This is a security-fatal condition (a deny is not enough — the mask
+; the kernel can see is untrustworthy), so route it to the existing CANARY
+; panic path. rdi = observed (unauthenticated) mask byte, rsi = detection RIP.
+.sc_cap_tamper:
+    movzx edi, dl
+    lea rsi, [rel .sc_cap_tamper]
+    jmp kernel_panic_canary
+
+.sc_rate_reject:
+    push rax
+    push rdx
+    mov dx, 0x3F8
+    mov al, '#'
+    out dx, al
+    mov al, '0'
+    add al, r15b
+    out dx, al
+    pop rdx
+    pop rax
+    call sc_record_strike                   ; §12: count this security reject; may kill the slot
 %ifdef ENABLE_TRACE
     mov rdi, [rsp + ALL_RAX]
     mov esi, r15d
@@ -644,6 +816,9 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov rcx, [rsp + ALL_RDX]     ; w
     mov r8,  [rsp + ALL_R10]     ; h
     mov r9,  [rsp + ALL_R9]      ; drawfn
+    ; DEBUG: log every SYS_WM_CREATE with the calling slot (r15) and the drawfn
+    ; so the serial log shows which app is spawning windows and how often.
+    call dbg_wmcreate_log
     call wm_create_window_ex
     mov [rsp + ALL_RAX], rax
     jmp .done
@@ -929,9 +1104,24 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     ; Slot is being recycled — restore an unsandboxed cap mask so the next
     ; app that lands here isn't accidentally constrained by the prior
     ; tenant's manifest. The new tenant re-narrows via its own declare call.
-    lea rax, [rel slot_cap_mask]
-    movzx ecx, r15b
-    mov byte [rax + rcx], CAP_ALL
+    ; Re-stamp the authenticator alongside the mask (cap_mask_store) so the
+    ; reset mask is recognised as legitimate, not as tampering, at the next
+    ; dispatch for this slot. Default-deny (security_todo.md §4): a recycled
+    ; slot drops to CAP_CORE, not CAP_ALL — the next tenant re-narrows to its
+    ; own manifest via kernel_apply_app_manifest at launch (APPLY_MANIFEST).
+    ; Audit the transition first (cap_audit_log preserves all caller regs).
+    lea rcx, [rel slot_cap_mask]
+    movzx edx, r15b
+    movzx ebx, byte [rcx + rdx]       ; old mask before the reset
+    movzx edi, r15b
+    mov esi, ebx                      ; old_mask
+    mov edx, CAP_CORE                 ; new_mask
+    mov ecx, CAP_AUDIT_RECYCLE
+    xor r8d, r8d                      ; no app_id for a recycle
+    call cap_audit_log
+    movzx edi, r15b
+    mov esi, CAP_CORE
+    call cap_mask_store               ; (rdi=slot, rsi=CAP_CORE)
     xor eax, eax
     mov [rsp + ALL_RAX], rax
     jmp .done
@@ -1393,6 +1583,10 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     ;   [12..13] first_cluster_lo  (u16 at offset 26)
     ;   [14..15] reserved          (0)
     ;   [16..19] size              (u32 at offset 28)
+    ; rdi = kernel FAT16 entry (supervisor); rsi = user out buffer (PTE.U=1).
+    ; Bracket the whole copy so the [rsi+...] stores don't SMAP-#PF; stac does
+    ; not affect the supervisor [rdi+...] loads.
+    USER_ACCESS_BEGIN
     mov rax, [rdi + 0]
     mov [rsi + 0], rax
     mov eax, [rdi + 8]
@@ -1402,6 +1596,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov word [rsi + 14], 0
     mov eax, [rdi + 28]
     mov [rsi + 16], eax
+    USER_ACCESS_END
     xor eax, eax
     mov [rsp + ALL_RAX], rax
     jmp .done
@@ -1424,13 +1619,32 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jb .sc_app_declare_manifest_reject
     cmp edi, APP_MAX_ID
     ja .sc_app_declare_manifest_reject
+    push rdi                          ; stash original app_id for the audit record
     sub edi, APP_MIN_ID
     lea rcx, [rel app_manifest_table]
-    movzx eax, byte [rcx + rdi]
+    movzx eax, byte [rcx + rdi]       ; manifest cap bits for this app
     lea rcx, [rel slot_cap_mask]
     movzx edx, r15b
-    and [rcx + rdx], al
-    movzx eax, byte [rcx + rdx]
+    movzx ebx, byte [rcx + rdx]       ; old mask (for the audit record)
+    and al, bl                        ; AND-narrow against the current mask
+    ; Audit this capability transition before persisting it (security_todo.md
+    ; §4). cap_audit_log(dil=slot, sil=old, dl=new, cl=reason, r8d=app_id);
+    ; it preserves all caller regs.
+    movzx edi, r15b
+    mov esi, ebx                      ; old_mask
+    movzx edx, al                     ; new_mask
+    mov ecx, CAP_AUDIT_DECLARE
+    mov r8, [rsp]                     ; original app_id (stashed above)
+    push rax
+    call cap_audit_log
+    pop rax
+    add rsp, 8                         ; discard stashed app_id
+    ; Persist the narrowed mask together with a fresh authenticator so the
+    ; dispatcher's HMAC check accepts it. cap_mask_store(rdi=slot, rsi=mask).
+    movzx edi, r15b
+    movzx esi, al
+    call cap_mask_store
+    movzx eax, sil                    ; resulting effective mask
     mov [rsp + ALL_RAX], rax
     jmp .done
 .sc_app_declare_manifest_reject:
@@ -1440,6 +1654,11 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
 .sc_app_open:
     mov rsi, APP_OPEN_CMD_MAX
     call sc_validate_user_cstring
+    test eax, eax
+    jz .sc_app_open_reject
+    mov rdi, [rsp + ALL_RDI]                ; reload ptr (cstring scan clobbered it)
+    mov rsi, APP_OPEN_CMD_MAX
+    call sc_validate_path_canonical         ; reject .., abs/drive escapes, ctrl bytes
     test eax, eax
     jz .sc_app_open_reject
     mov rdi, [rsp + ALL_RDI]
@@ -2491,6 +2710,49 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov ecx, TRACE_FLAG_SYSCALL_EXIT
     call trace_syscall
 %endif
+%ifdef ENABLE_DEBUG_SERIAL
+    ; Validator post-condition recheck (§2, debug build only). If this slot was
+    ; armed at dispatch (a fully validated syscall ran), re-read the 6 saved arg
+    ; qwords from the still-present PUSH_ALL frame and compare them against the
+    ; snapshot taken at validation entry. A handler that mutated its own saved
+    ; arg frame mid-syscall (TOCTOU against a value the validator approved) is a
+    ; kernel-integrity violation, so route it to the CANARY panic path. Runs
+    ; before POP_ALL so [rsp + ALL_*] is the saved frame. rax/rcx/rdx are dead
+    ; here (POP_ALL reloads them from the frame), so clobbering them is safe.
+    lea rcx, [rel sc_postcond_valid]
+    movzx eax, r15b
+    cmp byte [rcx + rax], 0
+    je .sc_postcond_skip
+    mov byte [rcx + rax], 0             ; consume the snapshot
+    movzx eax, r15b
+    imul eax, eax, 48
+    lea rcx, [rel sc_postcond_args]
+    add rcx, rax
+    mov rax, [rsp + ALL_RDI]
+    cmp rax, [rcx + 0]
+    jne .sc_postcond_fail
+    mov rax, [rsp + ALL_RSI]
+    cmp rax, [rcx + 8]
+    jne .sc_postcond_fail
+    mov rax, [rsp + ALL_RDX]
+    cmp rax, [rcx + 16]
+    jne .sc_postcond_fail
+    mov rax, [rsp + ALL_R10]
+    cmp rax, [rcx + 24]
+    jne .sc_postcond_fail
+    mov rax, [rsp + ALL_R8]
+    cmp rax, [rcx + 32]
+    jne .sc_postcond_fail
+    mov rax, [rsp + ALL_R9]
+    cmp rax, [rcx + 40]
+    jne .sc_postcond_fail
+    jmp .sc_postcond_skip
+.sc_postcond_fail:
+    mov rdi, rax                        ; observed (mutated) saved arg value
+    lea rsi, [rel .sc_postcond_fail]
+    jmp kernel_panic_canary
+.sc_postcond_skip:
+%endif
     POP_ALL
     ; Stack canary check before SYSRET. Layout after POP_ALL:
     ;   [rsp+0]  = slot id, [rsp+8] = canary, [rsp+16] = alignment pad.
@@ -2517,6 +2779,21 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     ; instruction after SYSRETQ.
     mov edi, edx
     call l3_apply_wx_policy
+    ; FS/GS sanitization on the SYSRET exit (security_todo.md §3). SYSRETQ does
+    ; NOT reload DS/ES/FS/GS, so the kernel GDT64_DATA_SEG selector loaded at
+    ; entry would otherwise stay visible to ring 3. Load the ring-3
+    ; GDT64_USER_DATA selector into all four before returning. The macro
+    ; clobbers ax, which here is the low half of the rax syscall-return value,
+    ; so bracket it with a save/restore — rax (return) and rdx (slot id, still
+    ; needed for the runtime-ptr math below) are the only contract regs live,
+    ; and rdx is untouched by the selector loads. (Under the optional MSR-scrub
+    ; the macro also clobbers rcx/rdx, so save rdx too — rdx is reloaded into
+    ; the runtime-ptr math right after.) Done before rcx/r11/rsp are loaded.
+    push rax
+    push rdx
+    SANITIZE_SEG_USER_EXIT
+    pop rdx
+    pop rax
     imul rdx, L3_RT_SIZE
     lea rcx, [rel l3_runtime]
     add rdx, rcx
@@ -2525,6 +2802,83 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov r11, [rdx + L3_RT_USER_RFLAGS]
     ; Encode SYSRETQ directly to avoid NASM's spurious label-orphan warning.
     db 0x48, 0x0F, 0x07
+
+; Diagnostic: log every SYS_WM_CREATE with calling slot (r15) and drawfn (r9).
+; Self-contained, preserves all registers. Prints "[WCREATE] slot=.. dfn=..".
+dbg_wmcreate_log:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r15
+    mov r10, r15                              ; save slot before clobber
+    mov r11, r9                               ; save drawfn before clobber
+    lea rdi, [rel dbg_wc_s1]
+    call serial_puts
+    mov rsi, r10
+    call dbg_wc_hex64
+    lea rdi, [rel dbg_wc_s2]
+    call serial_puts
+    mov rsi, r11
+    call dbg_wc_hex64
+    call serial_crlf
+    pop r15
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; rsi=value -> 16 hex digits via serial_putc. Clobbers rax,rcx,rdx (saved here).
+dbg_wc_hex64:
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    mov rcx, 16
+.dwc_loop:
+    rol rsi, 4
+    mov rax, rsi
+    and rax, 0x0F
+    cmp rax, 10
+    jb .dwc_dec
+    add rax, 'a' - 10
+    jmp .dwc_emit
+.dwc_dec:
+    add rax, '0'
+.dwc_emit:
+    mov dil, al
+    push rsi
+    push rcx
+    mov al, dil
+    movzx edi, al
+    call serial_putc
+    pop rcx
+    pop rsi
+    dec rcx
+    jnz .dwc_loop
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    ret
+
+section .data
+dbg_wc_s1: db "[WCREATE] slot=", 0
+dbg_wc_s2: db " dfn=", 0
+section .text
 
 ; R12=syscall table entry, PUSH_ALL frame on RSP. EAX=1 ok, 0 reject.
 sc_validate_from_table:
@@ -2579,7 +2933,16 @@ sc_validate_from_table:
     shr rdx, cl
     pop rcx
     and edx, 0x0F
-    jz .check_ptr_do
+    jnz .check_ptr_has_desc
+    ; Nibble 0 = this PTR arg was never migrated to a sibling-length
+    ; descriptor. STRICT rows (security_todo.md §2, "Mandatory non-zero
+    ; arg_desc for every PTR arg") deny-on-unmigrated instead of falling back
+    ; to the 1-byte probe — eliminates the "handler forgot the range check"
+    ; class for opted-in rows. Non-STRICT rows keep the legacy 1-byte probe.
+    test byte [r12 + SYSCALL_FLAGS_OFF], SC_FLAG_STRICT
+    jnz .validate_fail
+    jmp .check_ptr_do
+.check_ptr_has_desc:
     ; edx = 1-based sibling index; reload that scalar via the same helper.
     push rdi
     push r8                     ; save current arg index (loop state)
@@ -2656,34 +3019,21 @@ sc_validate_from_table:
 SC_VALIDATE_FRAME_OFF equ 72
 sc_load_arg_for_validation:
     KPROLOGUE                           ; shadow-stack guard (syscall-stack only)
-    cmp r8d, 0
-    je .arg0
-    cmp r8d, 1
-    je .arg1
-    cmp r8d, 2
-    je .arg2
-    cmp r8d, 3
-    je .arg3
-    cmp r8d, 4
-    je .arg4
-    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_R9]
+    ; Constant-time arg select (Spectre-v1): no data-dependent branch on the
+    ; index. Clamp index>5 to 5 (ALL_R9, the old default) with cmova, then read
+    ; the frame offset from a fixed table and load the saved register.
+    mov eax, 5
+    cmp r8d, 5
+    cmova r8d, eax                      ; clamp any index > 5 to 5 (branchless)
+    lea rax, [rel sc_arg_off_table]
+    mov eax, [rax + r8*4]               ; eax = ALL_* frame offset for this index
+    add eax, SC_VALIDATE_FRAME_OFF      ; eax = full displacement from rsp
+    mov rdi, [rsp + rax]                ; load the selected saved register
     KEPILOGUE
 
-.arg0:
-    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_RDI]
-    KEPILOGUE
-.arg1:
-    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_RSI]
-    KEPILOGUE
-.arg2:
-    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_RDX]
-    KEPILOGUE
-.arg3:
-    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_R10]
-    KEPILOGUE
-.arg4:
-    mov rdi, [rsp + SC_VALIDATE_FRAME_OFF + ALL_R8]
-    KEPILOGUE
+align 4
+sc_arg_off_table:
+    dd ALL_RDI, ALL_RSI, ALL_RDX, ALL_R10, ALL_R8, ALL_R9
 
 ; sc_resolve_dir_entry_arg — translate an untrusted user-supplied dir-entry
 ; handle into the matching real FAT16 root-cache entry pointer.
@@ -2763,12 +3113,17 @@ sc_resolve_dir_entry_arg:
 ; SYSCALL_ARG_DESC_OFF above and the SC_DESC_LEN macros below. Default 0
 ; keeps the legacy 1-byte probe for PTR args; non-zero opts a row into
 ; sibling-driven range validation done in one place at the dispatcher.
-%macro SYSCALL_ENTRY 3-5 CAP_ALL, 0
+;
+; The optional 6th argument is the per-entry flags byte (offset 14) — see
+; SYSCALL_FLAGS_OFF above. SC_FLAG_STRICT makes the validator deny any PTR
+; arg whose arg_desc nibble is still 0/unmigrated rather than 1-byte-probing.
+%macro SYSCALL_ENTRY 3-6 CAP_ALL, 0, 0
     dq %1
     db %2
     dd %3
     db %4
-    db 0, 0       ; pad bytes 14..15
+    db %6         ; flags at offset 14 (SYSCALL_FLAGS_OFF)
+    db 0          ; pad byte 15
     dq %5         ; arg_desc at offset 16
 %endmacro
 
@@ -2790,7 +3145,7 @@ syscall_table:
     SYSCALL_ENTRY syscall_entry.sc_fs_entry,         1, SC_KIND1(FN_KIND_SCALAR),   CAP_FS
     SYSCALL_ENTRY syscall_entry.sc_fs_chdir,         1, SC_KIND1(FN_KIND_SCALAR),   CAP_FS
     SYSCALL_ENTRY syscall_entry.sc_wm_create,        6, SC_KIND6(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_CSTRING, FN_KIND_SCALAR), CAP_GUI
-    SYSCALL_ENTRY syscall_entry.sc_fs_read,          3, SC_KIND3(FN_KIND_HANDLE, FN_KIND_PTR, FN_KIND_SCALAR), CAP_FS, SC_DESC_LEN(1, 3)
+    SYSCALL_ENTRY syscall_entry.sc_fs_read,          3, SC_KIND3(FN_KIND_HANDLE, FN_KIND_PTR, FN_KIND_SCALAR), CAP_FS, SC_DESC_LEN(1, 3), SC_FLAG_STRICT
     SYSCALL_ENTRY syscall_entry.sc_wm_handlers,      3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR), CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_app_done,         0, 0,                          CAP_CORE
     SYSCALL_ENTRY syscall_entry.sc_fs_format_name,   2, SC_KIND2(FN_KIND_HANDLE, FN_KIND_PTR), CAP_FS
@@ -2812,15 +3167,15 @@ syscall_table:
     SYSCALL_ENTRY syscall_entry.sc_desktop_set_bg,   1, SC_KIND1(FN_KIND_SCALAR),   CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_display_native,   0, 0,                          CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_display_size,     0, 0,                          CAP_GUI
-    SYSCALL_ENTRY syscall_entry.sc_xml_parse,        2, SC_KIND2(FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(0, 2)
+    SYSCALL_ENTRY syscall_entry.sc_xml_parse,        2, SC_KIND2(FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(0, 2), SC_FLAG_STRICT
     SYSCALL_ENTRY syscall_entry.sc_xml_root,         0, 0,                          CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_xml_tag,          1, SC_KIND1(FN_KIND_SCALAR),   CAP_GUI
-    SYSCALL_ENTRY syscall_entry.sc_xml_tag_name,     3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(1, 3)
+    SYSCALL_ENTRY syscall_entry.sc_xml_tag_name,     3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(1, 3), SC_FLAG_STRICT
     SYSCALL_ENTRY syscall_entry.sc_xml_first_child,  1, SC_KIND1(FN_KIND_SCALAR),   CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_xml_next_sibling, 1, SC_KIND1(FN_KIND_SCALAR),   CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_xml_parent,       1, SC_KIND1(FN_KIND_SCALAR),   CAP_GUI
-    SYSCALL_ENTRY syscall_entry.sc_xml_attr,         5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, (SC_DESC_LEN(1, 3) | SC_DESC_LEN(3, 5))
-    SYSCALL_ENTRY syscall_entry.sc_xml_text,         3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(1, 3)
+    SYSCALL_ENTRY syscall_entry.sc_xml_attr,         5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, (SC_DESC_LEN(1, 3) | SC_DESC_LEN(3, 5)), SC_FLAG_STRICT
+    SYSCALL_ENTRY syscall_entry.sc_xml_text,         3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(1, 3), SC_FLAG_STRICT
     SYSCALL_ENTRY syscall_entry.sc_xml_free,         0, 0,                          CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_draw_line,        5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR), CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_fill_circle,      4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR), CAP_GUI
@@ -2830,10 +3185,10 @@ syscall_table:
     SYSCALL_ENTRY syscall_entry.sc_blend_pixel,      3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR), CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_blend_span,       4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR), CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_xml_text_runs,    1, SC_KIND1(FN_KIND_SCALAR),   CAP_GUI
-    SYSCALL_ENTRY syscall_entry.sc_xml_text_run,     4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(2, 4)
-    SYSCALL_ENTRY syscall_entry.sc_xml_namespace,    5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(3, 5)
-    SYSCALL_ENTRY syscall_entry.sc_xml_node_namespace, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(1, 3)
-    SYSCALL_ENTRY syscall_entry.sc_xml_entity_value, 4, SC_KIND4(FN_KIND_PTR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, (SC_DESC_LEN(0, 2) | SC_DESC_LEN(2, 4))
+    SYSCALL_ENTRY syscall_entry.sc_xml_text_run,     4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(2, 4), SC_FLAG_STRICT
+    SYSCALL_ENTRY syscall_entry.sc_xml_namespace,    5, SC_KIND5(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(3, 5), SC_FLAG_STRICT
+    SYSCALL_ENTRY syscall_entry.sc_xml_node_namespace, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, SC_DESC_LEN(1, 3), SC_FLAG_STRICT
+    SYSCALL_ENTRY syscall_entry.sc_xml_entity_value, 4, SC_KIND4(FN_KIND_PTR, FN_KIND_SCALAR, FN_KIND_PTR, FN_KIND_SCALAR), CAP_GUI, (SC_DESC_LEN(0, 2) | SC_DESC_LEN(2, 4)), SC_FLAG_STRICT
     SYSCALL_ENTRY syscall_entry.sc_blend_span_argb,  4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR), CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_blend_span_argb_screen, 4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR), CAP_GUI
     SYSCALL_ENTRY syscall_entry.sc_blend_span_argb_multiply, 4, SC_KIND4(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_PTR), CAP_GUI
@@ -2908,6 +3263,23 @@ FN_BEGIN kernel_canary_init, 0, 0, FN_RET_VOID
 .kc_have_rdrand:
     xor rbx, rax
 .kc_no_rdrand:
+    ; Fold the quantum entropy blob (IBM ibm_marrakesh, job d8cved7d0j8c73f3fjq0)
+    ; into the canary: XOR-compress all qrng_seed_len bytes so the canary depends
+    ; on every byte of certified-irreproducible randomness. Critically this makes
+    ; the RDRAND-absent fallback (QEMU TCG / old CPUs) unguessable instead of
+    ; RDTSC-only. Provenance: tools/quantum/qrng_manifest.txt.
+    push rsi
+    push rcx
+    lea rsi, [rel qrng_seed_blob]
+    mov ecx, qrng_seed_len / 8
+.kc_qrng_fold:
+    xor rbx, [rsi]
+    add rsi, 8
+    rol rbx, 17                       ; cheap avalanche: every byte touches every bit
+    dec ecx
+    jnz .kc_qrng_fold
+    pop rcx
+    pop rsi
     test rbx, rbx
     jnz .kc_store
     mov rbx, 0xDEADC0DEDEADC0DE
@@ -3007,6 +3379,415 @@ FN_BEGIN cpi_verify_callback, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIN
     jmp kernel_panic_canary
 
 ; ----------------------------------------------------------------------------
+; Cap-mask authenticator — the data-side counterpart to CPI-lite. The same
+; kernel_canary key authenticates each slot's capability mask so a stray
+; kernel write that widens slot_cap_mask[slot] is caught at the next dispatch
+; instead of silently granting privileges. Tag = low8(kernel_canary ^ slot ^
+; mask ^ CAP_HMAC_DOMAIN); 8 bits is all the room a 1-byte mask alongside a
+; 1-byte authenticator affords, but it still forces an attacker to leak the
+; canary before they can forge a matching pair. The dispatcher verifies inline
+; (hot path); these helpers are the single source of truth for the write side.
+; ----------------------------------------------------------------------------
+
+; cap_mask_sign(rdi=slot, rsi=mask) -> rax = authenticator byte (0..255).
+; Pure function of the inputs and kernel_canary; clobbers only rax (rcx saved).
+global cap_mask_sign
+FN_BEGIN cap_mask_sign, 2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR), FN_RET_SCALAR
+    push rcx
+    mov rcx, [rel kernel_canary]
+    movzx eax, dil                    ; slot id (low byte)
+    xor rcx, rax
+    movzx eax, sil                    ; mask byte
+    xor rcx, rax
+    xor rcx, CAP_HMAC_DOMAIN
+    movzx eax, cl                     ; truncate to 8 bits
+    pop rcx
+    FN_END cap_mask_sign
+    ret
+
+; cap_mask_store(rdi=slot, rsi=mask): write slot_cap_mask[slot]=mask AND its
+; authenticator slot_cap_hmac[slot] together, so the pair is always consistent.
+; The single place mask writes should go through. Clobbers rax, rcx, r8.
+; Caller must have already range-checked slot < MAX_WINDOWS.
+global cap_mask_store
+FN_BEGIN cap_mask_store, 2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR), FN_RET_VOID
+    call cap_mask_sign                ; rax = authenticator for (slot, mask)
+    movzx r8d, dil                    ; slot index
+    lea rcx, [rel slot_cap_mask]
+    mov [rcx + r8], sil               ; mask byte
+    lea rcx, [rel slot_cap_hmac]
+    mov [rcx + r8], al                ; matching authenticator
+    FN_END cap_mask_store
+    ret
+
+; ----------------------------------------------------------------------------
+; cap_audit_log(dil=slot, sil=old_mask, dl=new_mask, cl=reason, r8d=app_id)
+;
+; Append one capability-transition record to the kernel-only audit ring
+; (security_todo.md §4, "Capability transitions logged + auditable"). Called
+; from every legitimate cap-mask write site (declare_manifest narrowing,
+; kernel_apply_app_manifest, slot recycle) so a failure to narrow — or any
+; unexpected widening — leaves a forensic trail instead of being silent.
+;
+; The ring is fixed-size (CAP_AUDIT_ENTRIES records of CAP_AUDIT_ENT_SIZE
+; bytes); cap_audit_head is the running event count and (head & IDX_MASK) is
+; the next write slot, so the ring overwrites oldest-first. Kernel-only: no
+; ring-3 reader yet. Self-contained — preserves every register a caller could
+; rely on so it can be dropped into any write site without clobber surprises.
+FN_BEGIN cap_audit_log, 5, 0, FN_RET_VOID
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    ; rbx = byte offset of this record = (head & IDX_MASK) * CAP_AUDIT_ENT_SIZE
+    mov eax, [rel cap_audit_head]
+    mov r9d, eax                      ; r9d = seq for this record
+    and eax, CAP_AUDIT_IDX_MASK
+    imul ebx, eax, CAP_AUDIT_ENT_SIZE
+    lea r9, [rel cap_audit_ring]
+    add rbx, r9                       ; rbx -> record base
+    ; reload the (clobbered) seq for the +0 field
+    mov eax, [rel cap_audit_head]
+    mov [rbx + 0], eax                ; +0 seq
+    mov [rbx + 4], dil                ; +4 slot
+    mov [rbx + 5], sil                ; +5 old_mask
+    mov [rbx + 6], dl                 ; +6 new_mask
+    mov [rbx + 7], cl                 ; +7 reason
+    mov [rbx + 8], r8d                ; +8 app_id
+    mov dword [rbx + 12], 0           ; +12 reserved
+    inc dword [rel cap_audit_head]    ; advance event counter (wraps at 2^32)
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    FN_END cap_audit_log
+    ret
+
+; slot_cap_hmac_init(): stamp every slot's authenticator to match the current
+; (static CAP_ALL) mask, using the now-final kernel_canary. Called once from
+; kernel_main right after kernel_canary_init, before any syscall can dispatch.
+; Clobbers rax, rcx, rdx, rsi, rdi, r8.
+global slot_cap_hmac_init
+FN_BEGIN slot_cap_hmac_init, 0, 0, FN_RET_VOID
+    xor edx, edx                      ; slot index
+.schi_loop:
+    cmp edx, MAX_WINDOWS
+    jae .schi_done
+    lea rcx, [rel slot_cap_mask]
+    movzx esi, byte [rcx + rdx]       ; current mask for this slot
+    mov rdi, rdx                      ; slot id
+    push rdx
+    call cap_mask_sign                ; rax = authenticator (saves/restores rcx)
+    pop rdx
+    lea rcx, [rel slot_cap_hmac]
+    mov [rcx + rdx], al
+    inc edx
+    jmp .schi_loop
+.schi_done:
+    FN_END slot_cap_hmac_init
+    ret
+
+; ----------------------------------------------------------------------------
+; sc_record_strike - slot teardown on suspect syscall return (security_todo.md
+; §12). Called from each dispatcher security-reject label (.sc_cap_reject,
+; .sc_validate_reject, .sc_rate_reject) when a syscall is denied for a security
+; reason. Increments this slot's strike counter; once it reaches
+; SC_STRIKE_LIMIT the slot is auto-killed (the existing window/slot teardown
+; path) and a CAP_AUDIT_STRIKE record is appended to the cap-transition audit
+; ring, so repeated probing/fuzzing is no longer silent and cost-free.
+;
+; In:  r15 = current slot id (set by syscall_entry before dispatch).
+; Out: nothing. The caller still sets rax=-1 and falls through to .done; if the
+;      slot was killed, .done's W^X scrub + SYSRET land back in (now-recycled)
+;      slot state, which is exactly the close-window outcome.
+; Clobbers rax, rcx, rdx, rsi, rdi, r8 (all dead at the reject labels — they
+; reload from the saved frame or set constants afterward). r15 preserved.
+; ----------------------------------------------------------------------------
+sc_record_strike:
+    movzx ecx, r15b
+    cmp ecx, MAX_WINDOWS
+    jae .srs_ret                        ; defensive: never index past the array
+    lea rdx, [rel slot_sc_strikes]
+    movzx eax, word [rdx + rcx*2]
+    inc eax
+    mov [rdx + rcx*2], ax
+    cmp eax, SC_STRIKE_LIMIT
+    jb .srs_ret
+    ; Strike limit reached. Reset the counter first so a recycled slot starts
+    ; clean, then audit and tear the slot down.
+    mov word [rdx + rcx*2], 0
+    ; Audit the kill: old_mask = this slot's current cap mask, new_mask = 0
+    ; (caps gone), reason = CAP_AUDIT_STRIKE, app_id = 0. cap_audit_log
+    ; preserves every register.
+    movzx edi, r15b                     ; dil = slot
+    lea rcx, [rel slot_cap_mask]
+    movzx eax, r15b
+    mov sil, [rcx + rax]                ; sil = old_mask
+    xor edx, edx                        ; dl  = new_mask = 0
+    mov cl, CAP_AUDIT_STRIKE            ; cl  = reason
+    xor r8d, r8d                        ; r8d = app_id = 0
+    call cap_audit_log
+    ; Kill the slot via the existing teardown path. For app slots the window id
+    ; equals the slot id (enforced by .sc_wm_close / .sc_wm_close ownership
+    ; checks), so closing window r15 reclaims this slot. wm_close_window range-
+    ; checks its argument and is a no-op for an already-closed window.
+    movzx edi, r15b
+    call wm_close_window
+.srs_ret:
+    ret
+
+; ----------------------------------------------------------------------------
+; sc_anomaly_scan_all - behavioral anomaly detector on the dispatcher
+; (security_todo.md §11, "Anomaly detector on the dispatcher"). Pure-software
+; behavioral sandbox: it never touches the hot dispatch path. pit_handler calls
+; it once every ANOMALY_SCAN_PERIOD ticks (the same coarse-cadence pattern as
+; l3_code_hash_verify_all), so the per-syscall cost of the §11 machinery stays
+; in the cheap inline SC_TRACE_APPEND only.
+;
+; It consumes the per-slot syscall histogram (sc_trace_hist[], the data source
+; built by the trace ring) — NOT the ring records — so the scan is just a few
+; counter reads per slot. For every LIVE slot it sums that slot's accumulated
+; count over the high-risk syscall set (the CAP_WX W^X/JIT trio + SYS_FS_DELETE)
+; and compares it against a per-slot budget chosen by whether the slot's manifest
+; actually grants the matching capability:
+;   * slot lacks the cap  -> expected rate is ZERO, so budget = ANOMALY_HIRISK_
+;     DENY_BUDGET (tiny). Because SC_TRACE_APPEND bumps the histogram at dispatch
+;     entry *before* the cap gate, a sandboxed Notepad slot probing SYS_WX_JIT_
+;     ALIAS is counted even though every call is cap-rejected — this is the
+;     "Notepad slot suddenly hammering SYS_WX_JIT_ALIAS" signal from the doc.
+;   * slot holds the cap  -> budget = ANOMALY_HIRISK_HOLD_BUDGET (a real JIT app
+;     may legitimately use the surface, but a flood far above sane warm-up is
+;     still throttled).
+; A slot over budget is driven through the EXISTING §12 strike path
+; (sc_record_strike) — so excessive high-risk behaviour throttles toward the
+; same SC_STRIKE_LIMIT slot-kill, with no new teardown path invented. A
+; CAP_AUDIT_ANOMALY record is appended at the flagging moment so the forensic
+; trail shows what tripped it, then the slot's high-risk histogram buckets are
+; reset so each scan window is judged on fresh behaviour (and a slow legitimate
+; app never accretes a false positive across many windows).
+;
+; In:  none.  Out: none.  r15 must equal the scanned slot id for the duration of
+; each sc_record_strike call (it keys off r15); we set it per slot and restore
+; the caller's r15 at the end. Preserves all caller regs (called from the ISR
+; landing pad). Internal helper — plain label, no FN_BEGIN (matches
+; sc_build_allow_bitmap). Exported so pit.asm can drive it (FN_BEGIN, which
+; emits the global, matching cap_audit_log — the coverage tool requires every
+; global to carry a signature).
+; ----------------------------------------------------------------------------
+FN_BEGIN sc_anomaly_scan_all, 0, 0, FN_RET_VOID
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r15                             ; preserve caller's slot id
+    xor r10d, r10d                       ; r10d = slot index
+.asa_slot:
+    cmp r10d, MAX_WINDOWS
+    jae .asa_done
+    ; Only scan live slots — a recycled/empty slot has no tenant to judge and
+    ; its histogram is stale until the next tenant repopulates it.
+    lea rax, [rel l3_slot_live]
+    cmp qword [rax + r10*8], 0
+    je .asa_next
+    ; r11 = this slot's histogram base = sc_trace_hist + slot*SC_TRACE_HIST_SLOTS*2
+    imul eax, r10d, SC_TRACE_HIST_SLOTS * 2
+    lea r11, [rel sc_trace_hist]
+    add r11, rax
+    ; Sum the high-risk buckets. SC_HIRISK_TABLE is a NUL(0xFFFF)-terminated
+    ; list of syscall numbers; r9d accumulates the total (u16s, can't overflow
+    ; a dword across the short list).
+    xor r9d, r9d
+    lea rbx, [rel sc_hirisk_table]
+.asa_sum:
+    movzx ecx, word [rbx]
+    cmp ecx, SC_TRACE_REC_INVALID        ; 0xFFFF terminator
+    je .asa_sum_done
+    movzx eax, word [r11 + rcx*2]        ; this slot's count for that syscall
+    add r9d, eax
+    add rbx, 2
+    jmp .asa_sum
+.asa_sum_done:
+    ; Pick the budget by whether this slot's (authenticated) cap mask grants
+    ; CAP_WX. Reading slot_cap_mask raw is fine here: a tampered mask is caught
+    ; by the dispatcher's HMAC gate on the next syscall; the worst this scan can
+    ; do with a forged-wide mask is apply the more generous HOLD budget, which
+    ; only delays — never suppresses — a strike, and the dispatcher would panic
+    ; on that mask anyway.
+    lea rax, [rel slot_cap_mask]
+    movzx eax, byte [rax + r10]
+    test al, CAP_WX
+    jnz .asa_hold_budget
+    mov edx, ANOMALY_HIRISK_DENY_BUDGET
+    jmp .asa_have_budget
+.asa_hold_budget:
+    mov edx, ANOMALY_HIRISK_HOLD_BUDGET
+.asa_have_budget:
+    cmp r9d, edx
+    jbe .asa_reset_window                ; within profile — just roll the window
+    ; --- Anomaly: this slot's high-risk mix is over budget for its class. -----
+    ; Audit the flag (old_mask = current cap mask, new_mask = the over-budget
+    ; count truncated to a byte for the record, reason = CAP_AUDIT_ANOMALY).
+    ; cap_audit_log preserves all caller regs.
+    lea rax, [rel slot_cap_mask]
+    movzx esi, byte [rax + r10]          ; sil = old_mask (current caps)
+    movzx edi, r10b                      ; dil = slot
+    mov edx, r9d                         ; dl  = observed high-risk count (low8)
+    mov ecx, CAP_AUDIT_ANOMALY           ; cl  = reason
+    xor r8d, r8d                         ; r8d = app_id (unknown at scan time)
+    call cap_audit_log
+    ; Drive the slot through the existing §12 strike path. sc_record_strike
+    ; keys off r15, so point r15 at the flagged slot for the call. It increments
+    ; the strike counter and, at SC_STRIKE_LIMIT, kills the slot via the same
+    ; wm_close_window teardown the §12 path uses. r10 (loop index) survives the
+    ; call (sc_record_strike clobbers rax/rcx/rdx/rsi/rdi/r8 only).
+    movzx r15d, r10b
+    call sc_record_strike
+.asa_reset_window:
+    ; Reset this slot's high-risk buckets so each scan window judges fresh
+    ; behaviour. Non-high-risk buckets are left to keep accreting (cheap, and
+    ; the detector only reads the high-risk ones). r11 still = histogram base.
+    lea rbx, [rel sc_hirisk_table]
+.asa_reset:
+    movzx ecx, word [rbx]
+    cmp ecx, SC_TRACE_REC_INVALID
+    je .asa_next
+    mov word [r11 + rcx*2], 0
+    add rbx, 2
+    jmp .asa_reset
+.asa_next:
+    inc r10d
+    jmp .asa_slot
+.asa_done:
+    pop r15
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    FN_END sc_anomaly_scan_all
+    ret
+
+; ----------------------------------------------------------------------------
+; sc_trace_dump(rdi = slot) - ship a slot's per-syscall trace ring on serial
+; (security_todo.md §11, "Crashes ship the last N syscalls"). Called from the
+; syscall-path panic handlers with the faulting slot in rdi. Walks the slot's
+; ring oldest-first and prints one line per record: "Tn <seq> <sysno> <arg0>
+; <rip>". Best-effort forensic aid; preserves all caller regs (the panic banner
+; reads its own rdi/rsi afterward).
+; ----------------------------------------------------------------------------
+sc_trace_dump:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    movzx ecx, dil
+    cmp ecx, MAX_WINDOWS
+    jae .std_done                        ; bad slot id — nothing to dump
+    SER 'T'
+    SER 'R'
+    SER 'C'
+    SER ' '
+    mov edi, ecx
+    add edi, '0'
+    cmp edi, '9'
+    jbe .std_slot_digit
+    add edi, ('A' - '9' - 1)             ; slots >9 print as A.. (MAX_WINDOWS small)
+.std_slot_digit:
+    mov dx, 0x3F8
+    mov eax, edi
+    out dx, al
+    call serial_crlf
+    ; r8 = ring base for this slot; ebx = head event counter (low16).
+    imul eax, ecx, SC_TRACE_SLOT_BYTES
+    lea r8, [rel sc_trace_ring]
+    add r8, rax
+    lea rax, [rel sc_trace_head]
+    movzx ebx, word [rax + rcx*2]
+    ; Walk the SC_TRACE_RING_ENTRIES records in chronological order. If the ring
+    ; has wrapped (head >= ENTRIES) the oldest live record is (head - ENTRIES);
+    ; otherwise records [0, head) are valid. Either way iterate index =
+    ; (head - ENTRIES .. head-1) & IDX_MASK, skipping not-yet-written slots.
+    mov r9d, SC_TRACE_RING_ENTRIES       ; remaining to consider
+    mov ecx, ebx
+    sub ecx, SC_TRACE_RING_ENTRIES       ; oldest candidate seq
+.std_rec:
+    test r9d, r9d
+    jz .std_done
+    cmp ebx, SC_TRACE_RING_ENTRIES
+    jae .std_rec_live                    ; full ring: every slot is live
+    cmp ecx, 0
+    jl .std_rec_skip                     ; not-yet-written (seq < 0): skip
+.std_rec_live:
+    mov edx, ecx
+    and edx, SC_TRACE_IDX_MASK
+    imul edx, edx, SC_TRACE_ENT_SIZE
+    push r8
+    add r8, rdx                          ; r8 -> record
+    movzx edi, word [r8 + 2]             ; sysno
+    push rcx
+    push r8
+    mov dx, 0x3F8
+    mov al, ' '
+    out dx, al
+    pop r8
+    mov rdi, [r8 + 8]                    ; user_rip — the most useful field
+    call ser_print_hex64
+    pop rcx
+    pop r8
+    call serial_crlf
+.std_rec_skip:
+    inc ecx
+    dec r9d
+    jmp .std_rec
+.std_done:
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; High-risk syscall set the §11 anomaly detector watches. NUL-terminated with
+; SC_TRACE_REC_INVALID (0xFFFF). The CAP_WX W^X/JIT-alias trio (install_manifest
+; / mprotect_wx / jit_alias) are the classic code-injection surface; SYS_FS_DELETE
+; rounds out a destructive op a doc-style "Notepad" should essentially never
+; touch in bulk. Numbers must track the syscall_table order (see SC_SYS_FS_DELETE
+; in syscall_caps.inc and the SYS_WX_* macros in syscall_user.inc).
+align 2
+sc_hirisk_table:
+    dw 67                                ; SYS_WX_INSTALL_MANIFEST
+    dw 68                                ; SYS_MPROTECT_WX
+    dw 69                                ; SYS_WX_JIT_ALIAS
+    dw SC_SYS_FS_DELETE                  ; SYS_FS_DELETE (=19)
+    dw SC_TRACE_REC_INVALID              ; terminator
+
+; ----------------------------------------------------------------------------
 ; kernel_panic_canary - reached only from the syscall exit paths when the
 ; saved canary slot does not match kernel_canary. rdi = observed bad value,
 ; rsi = approximate kernel RIP at detection. Serial-logs and halts; never
@@ -3015,6 +3796,17 @@ FN_BEGIN cpi_verify_callback, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIN
 global kernel_panic_canary
 kernel_panic_canary:
     cli
+    ; §11: a kernel-integrity panic on the syscall path means *this* slot's last
+    ; few syscalls are the prime forensic evidence. Ship them on serial before
+    ; halting (r15 still holds the faulting slot id here). Save rdi/rsi — the
+    ; dumper preserves them but the explicit push documents the contract that
+    ; the panic banner below still reads the original args.
+    push rdi
+    push rsi
+    movzx edi, r15b
+    call sc_trace_dump
+    pop rsi
+    pop rdi
     SER 'C'
     SER 'A'
     SER 'N'
@@ -3124,14 +3916,251 @@ sc_net_tcp_busy: db 0
 sc_net_dns_busy: db 0
 szHelloUser: db "-> Hello from RING 3 (via SYSCALL)!", 0
 
-; Per-slot effective capability mask. Initialised to CAP_ALL so unsandboxed
-; apps see no behaviour change. SYS_APP_DECLARE_MANIFEST narrows entries
-; with AND; nothing widens them. The dispatcher reads slot_cap_mask[r15]
-; on every syscall before invoking the handler.
+; Per-slot effective capability mask. Default-deny (security_todo.md §4): every
+; slot boots at CAP_CORE only (print/exit/ticks/sysinfo/handles), NOT CAP_ALL —
+; so a slot that runs a syscall before its manifest is applied can only touch
+; the core surface, killing the old CAP_ALL race window. Each launch path
+; re-stamps the slot's real, possibly-wider manifest via
+; kernel_apply_app_manifest (APPLY_MANIFEST in launch.inc) right after
+; wm_create_window_ex, so every legit app still gets the caps it declares.
+; SYS_APP_DECLARE_MANIFEST narrows entries with AND; nothing widens them past
+; the manifest. The dispatcher reads slot_cap_mask[r15] on every syscall.
+;
+; NOTE: because CAP_CORE is the floor, every launched app MUST have an
+; APPLY_MANIFEST (kernel_apply_app_manifest) on its launch path or it will be
+; restricted to CAP_CORE. All current launch paths in launch.inc do; a new
+; launch path must add one or the app will lose GUI/FS/etc. access.
 align 8
-slot_cap_mask: times MAX_WINDOWS db CAP_ALL
+slot_cap_mask: times MAX_WINDOWS db CAP_CORE
+
+; Per-slot authenticator paralleling slot_cap_mask[] (security_todo.md §4,
+; "Time-of-check capability cache"). Each byte is
+;   low8(kernel_canary ^ slot ^ mask ^ CAP_HMAC_DOMAIN)
+; recomputed by cap_mask_sign whenever the mask is legitimately written, and
+; verified inline by the dispatcher's cap gate before the mask is trusted. The
+; static CAP_ALL masks above can't have their HMAC assembled in (the canary key
+; is runtime-only), so slot_cap_hmac_init seeds every entry at boot once
+; kernel_canary holds its final value. The zeros here are just the pre-init
+; placeholder; the dispatcher never runs before slot_cap_hmac_init.
+align 8
+slot_cap_hmac: times MAX_WINDOWS db 0
+
+; Capability-transition audit ring (security_todo.md §4). Fixed-size,
+; kernel-only forensic trail of every cap-mask write. cap_audit_head is the
+; running event count; (head & CAP_AUDIT_IDX_MASK) is the next record index, so
+; the ring overwrites oldest-first once it fills. See cap_audit_log (the single
+; append point) and CAP_AUDIT_* layout/reason codes in syscall_caps.inc. No
+; ring-3 read syscall yet — inspected from the kernel/debugger only.
+align 8
+cap_audit_head: dd 0                         ; monotonic event counter
+align 16
+cap_audit_ring: times (CAP_AUDIT_ENTRIES * CAP_AUDIT_ENT_SIZE) db 0
+
+; Per-slot syscall rate-limiting token bucket (security_todo.md §2).
+; One word budget per slot, decremented at dispatch entry and refilled to
+; SC_BUDGET_PER_TICK by pit_handler on every timer tick. A slot that drains
+; its budget within a single tick has further syscalls denied (-1) until the
+; next refill. This caps the syscall rate to SC_BUDGET_PER_TICK * PIT rate,
+; which is far below the millions-of-calls a fuzzer or side-channel oracle
+; needs while leaving plenty of headroom for legitimate GUI apps.
+; SC_BUDGET_PER_TICK lives in constants.inc so pit_handler shares the value.
+; Exported so pit.asm's refill loop can reach it.
+global slot_sc_budget
+align 16
+slot_sc_budget: times MAX_WINDOWS dw SC_BUDGET_PER_TICK
+
+; Per-slot security-reject strike counter (security_todo.md §12, "Slot teardown
+; on suspect syscall return"). One word per slot, incremented by sc_record_strike
+; on every -1 return for a security reason (cap mismatch, validator reject, rate
+; reject). When a slot reaches SC_STRIKE_LIMIT (constants.inc) the dispatcher
+; auto-kills it (wm_close_window) and appends a CAP_AUDIT_STRIKE record to the
+; cap audit ring, then resets the counter so a recycled slot starts clean.
+; Turns previously-silent, cost-free rejections into a self-terminating probe.
+align 16
+slot_sc_strikes: times MAX_WINDOWS dw 0
+
+; Per-slot syscall allowlist bitmap (security_todo.md §2, "Manifest declares
+; syscall set, not just cap bits"). One bit per syscall number, SC_ALLOW_BYTES
+; bytes per slot; bit i set == slot may invoke syscall i. The dispatcher tests
+; this bit right after the coarse cap gate, so an app is confined to the exact
+; syscall set its manifest implies — finer than the CAP_* mask alone (Notepad
+; keeps CAP_FS but is denied SYS_FS_DELETE).
+;
+; Default is every bit set (0xFF fill): legacy/undeclared slots are
+; unrestricted at the bitmap layer, exactly as before this gate existed, so the
+; cap mask stays the only constraint until a manifest is applied.
+; sc_build_allow_bitmap rewrites a slot's bitmap from {cap mask, app deny list}
+; at every cap-mask transition (declare_manifest, kernel_apply_app_manifest,
+; recycle). syscall_table_count is the assembly-time equ resolved at the table.
+SC_ALLOW_BYTES equ ((syscall_table_count + 7) / 8)
+align 16
+slot_syscall_allow: times (MAX_WINDOWS * SC_ALLOW_BYTES) db 0xFF
+
+; --- Always-on per-syscall trace ring + per-slot histogram (security_todo.md
+; §11). Layout/sizing constants and the inline append live in
+; syscall_trace.inc. All three arrays are kernel BSS, OUTSIDE the ring-3 slot
+; arena, so an app can neither read its own forensic trail nor forge its
+; histogram to dodge the anomaly detector.
+;
+; sc_trace_ring[]  — per slot, the last SC_TRACE_RING_ENTRIES syscall records
+;                    (oldest-first). Shipped by sc_trace_dump for crash triage.
+; sc_trace_head[]  — per slot, a running u16 event counter; low bits index the
+;                    ring. BSS-zero starts each slot's ring empty.
+; sc_trace_hist[]  — per slot, SC_TRACE_HIST_SLOTS saturating u16 counters keyed
+;                    by syscall number. THE data source for sc_anomaly_scan_all.
+align 16
+sc_trace_ring:  times (MAX_WINDOWS * SC_TRACE_SLOT_BYTES) db 0
+align 16
+sc_trace_head:  times MAX_WINDOWS dw 0
+align 16
+sc_trace_hist:  times (MAX_WINDOWS * SC_TRACE_HIST_SLOTS) dw 0
+
+%ifdef ENABLE_DEBUG_SERIAL
+; Validator post-condition snapshot storage (security_todo.md §2, debug build
+; only). For each slot, sc_postcond_args holds the 6 saved arg qwords captured
+; right after sc_validate_from_table passes; sc_postcond_valid[slot] is set then
+; and cleared/consumed at the return-path recheck. Debug-only — release builds
+; allocate none of this and pay nothing (see the ENABLE_DEBUG_SERIAL gates on
+; the dispatch/snapshot/recheck sites).
+align 8
+sc_postcond_args:  times (MAX_WINDOWS * 6) dq 0
+align 8
+sc_postcond_valid: times MAX_WINDOWS db 0
+%endif
 
 section .text
+; ----------------------------------------------------------------------------
+; sc_build_allow_bitmap(rdi=slot, rsi=cap_mask, rdx=app_id)
+;
+; Rebuild slot_syscall_allow[slot] from the slot's effective cap mask and the
+; per-app explicit deny list (security_todo.md §2, "Manifest declares syscall
+; set, not just cap bits"). Two passes:
+;   1. For each syscall table row i, set bit i iff the row's CAP tag is fully
+;      covered by cap_mask (row.cap & mask == row.cap) — i.e. the cap gate
+;      would let this slot reach syscall i. This makes the bitmap the exact
+;      cap-implied call set, no hand-authoring.
+;   2. Walk the app's deny list (app_syscall_deny_table[app_id - APP_MIN_ID],
+;      a run of syscall numbers ended by SC_DENY_LIST_END) and CLEAR each named
+;      bit — the finer-than-caps trim. Notepad denies SYS_FS_DELETE here.
+; app_id out of [APP_MIN_ID, APP_MAX_ID] skips pass 2 (cap-derived set only).
+;
+; Internal helper (plain label, not global — so check_coverage.py doesn't
+; require FN_BEGIN, matching sc_record_strike). Preserves all caller regs.
+; ----------------------------------------------------------------------------
+sc_build_allow_bitmap:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    ; r11 = slot's bitmap base = slot_syscall_allow + slot*SC_ALLOW_BYTES
+    movzx eax, dil
+    imul eax, eax, SC_ALLOW_BYTES
+    lea r11, [rel slot_syscall_allow]
+    add r11, rax
+    mov r10b, sil                       ; r10b = cap_mask (sil dies in pass 2 setup)
+    ; Pass 0: clear the slot's bitmap bytes.
+    xor ecx, ecx
+.sba_zero:
+    cmp ecx, SC_ALLOW_BYTES
+    jae .sba_zero_done
+    mov byte [r11 + rcx], 0
+    inc ecx
+    jmp .sba_zero
+.sba_zero_done:
+    ; Pass 1: set bit i for every row whose cap tag is covered by the mask.
+    lea rbx, [rel syscall_table]
+    xor ecx, ecx                        ; ecx = syscall index i
+.sba_set:
+    cmp ecx, syscall_table_count
+    jae .sba_set_done
+    movzx eax, byte [rbx + SYSCALL_CAP_OFF]   ; row.cap
+    mov r8b, al
+    and r8b, r10b                       ; row.cap & mask
+    cmp r8b, al
+    jne .sba_set_next                   ; not fully covered -> leave bit clear
+    ; set bit ecx: byte = ecx>>3, bit = ecx&7
+    mov eax, ecx
+    mov r9d, ecx
+    shr eax, 3                          ; byte index
+    and r9d, 7                          ; bit position
+    mov r8b, [r11 + rax]
+    bts r8d, r9d
+    mov [r11 + rax], r8b
+.sba_set_next:
+    add rbx, SYSCALL_ENTRY_SIZE
+    inc ecx
+    jmp .sba_set
+.sba_set_done:
+    ; Pass 2: apply the per-app explicit deny list. Skip if app_id is out of
+    ; range (rdx still holds the original app_id from the caller).
+    cmp rdx, APP_MIN_ID
+    jb .sba_done
+    cmp rdx, APP_MAX_ID
+    ja .sba_done
+    mov eax, edx
+    sub eax, APP_MIN_ID
+    lea rbx, [rel app_syscall_deny_table]
+    mov rbx, [rbx + rax*8]              ; rbx -> this app's deny list
+.sba_deny:
+    movzx eax, byte [rbx]
+    cmp al, SC_DENY_LIST_END
+    je .sba_done
+    ; clear bit al: byte = al>>3, bit = al&7
+    movzx ecx, al
+    mov r9d, ecx
+    shr ecx, 3
+    and r9d, 7
+    mov r8b, [r11 + rcx]
+    btr r8d, r9d
+    mov [r11 + rcx], r8b
+    inc rbx
+    jmp .sba_deny
+.sba_done:
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+; ----------------------------------------------------------------------------
+; sc_reset_allow_bitmap(rdi=slot) — set the slot's bitmap back to all-ones
+; (unrestricted), the BSS default. Used on slot recycle so a recycled slot
+; isn't stuck with the previous tenant's narrowed set before its manifest is
+; re-applied. Preserves all caller regs.
+; ----------------------------------------------------------------------------
+sc_reset_allow_bitmap:
+    push rax
+    push rcx
+    push r11
+    movzx eax, dil
+    imul eax, eax, SC_ALLOW_BYTES
+    lea r11, [rel slot_syscall_allow]
+    add r11, rax
+    xor ecx, ecx
+.sra_loop:
+    cmp ecx, SC_ALLOW_BYTES
+    jae .sra_done
+    mov byte [r11 + rcx], 0xFF
+    inc ecx
+    jmp .sra_loop
+.sra_done:
+    pop r11
+    pop rcx
+    pop rax
+    ret
+
 ; kernel_apply_app_manifest(rdi=slot, rsi=app_id)
 ;
 ; Kernel-only helper that sets slot_cap_mask[slot] = manifest(app_id).
@@ -3145,7 +4174,7 @@ section .text
 ; default CAP_ALL in place; if you want strict deny-by-default, change the
 ; .kam_done fallback to clear slot_cap_mask[slot] instead.
 ;
-; Clobbers: rax, rcx.
+; Clobbers: rax, rcx, rsi, r8.
 FN_BEGIN kernel_apply_app_manifest, 2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR), FN_RET_VOID
     cmp rsi, APP_MIN_ID
     jb .kam_done
@@ -3153,11 +4182,30 @@ FN_BEGIN kernel_apply_app_manifest, 2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR),
     ja .kam_done
     cmp edi, MAX_WINDOWS
     jae .kam_done
+    push rsi                          ; stash original app_id for the audit record
     sub rsi, APP_MIN_ID
     lea rcx, [rel app_manifest_table]
-    mov al, [rcx + rsi]
+    movzx esi, byte [rcx + rsi]       ; new mask = manifest(app_id)
+    ; Audit this capability transition (security_todo.md §4) before persisting.
+    ; cap_audit_log(dil=slot, sil=old, dl=new, cl=reason, r8d=app_id); it
+    ; preserves all caller regs, so rdi (slot) and rsi (new mask) survive.
     lea rcx, [rel slot_cap_mask]
-    mov [rcx + rdi], al
+    movzx eax, dil
+    movzx eax, byte [rcx + rax]       ; old mask before the apply
+    push rdi
+    push rsi
+    movzx edi, dil                    ; slot
+    mov edx, esi                      ; new_mask (dl)
+    mov esi, eax                      ; old_mask (sil)
+    mov ecx, CAP_AUDIT_APPLY
+    mov r8, [rsp + 16]                ; original app_id (stashed first)
+    call cap_audit_log
+    pop rsi
+    pop rdi
+    add rsp, 8                         ; discard stashed app_id
+    ; Write mask + authenticator together so the dispatcher's HMAC check trusts
+    ; this (legitimate) narrowing instead of treating it as tampering.
+    call cap_mask_store               ; (rdi=slot, rsi=mask)
 .kam_done:
     ret
 section .data
@@ -3177,5 +4225,29 @@ app_manifest_table:
     db MANIFEST_TASKMGR                 ; APP_TASKMGR          (9)
     db MANIFEST_PING                    ; APP_PING            (10)
     db MANIFEST_MEDIA                   ; APP_MEDIA           (11)
+
+; Per-app syscall deny lists (security_todo.md §2). Each list is a run of
+; syscall numbers terminated by SC_DENY_LIST_END (0xFF); sc_build_allow_bitmap
+; walks it and CLEARS each named bit after the cap-derived baseline is laid
+; down. Apps with nothing to trim share sc_deny_none (just the terminator).
+; The canonical trim: Notepad keeps CAP_FS (it reads/writes files) but must
+; never DELETE one, so its list denies SYS_FS_DELETE.
+sc_deny_none:           db SC_DENY_LIST_END
+sc_deny_notepad:        db SC_SYS_FS_DELETE, SC_DENY_LIST_END
+
+; app_id -> deny list pointer. Indexed by (app_id - APP_MIN_ID); parallels
+; app_manifest_table row-for-row. Keep the two in sync.
+align 8
+app_syscall_deny_table:
+    dq sc_deny_none                     ; APP_EXPLORER         (2)
+    dq sc_deny_none                     ; APP_TERMINAL         (3)
+    dq sc_deny_notepad                  ; APP_NOTEPAD          (4)
+    dq sc_deny_none                     ; APP_SETTINGS         (5)
+    dq sc_deny_none                     ; APP_PAINT            (6)
+    dq sc_deny_none                     ; APP_ABOUT            (7)
+    dq sc_deny_none                     ; APP_SECURITY_PROBE   (8)
+    dq sc_deny_none                     ; APP_TASKMGR          (9)
+    dq sc_deny_none                     ; APP_PING            (10)
+    dq sc_deny_none                     ; APP_MEDIA           (11)
 
 section .text

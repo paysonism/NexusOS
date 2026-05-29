@@ -6,6 +6,10 @@ param(
     [switch]$NoFbWc,         # Phase A baseline: skip fbperf WC arm+activate
     [switch]$NoKaslr,        # Disable KASLR (random kernel base per boot). KASLR is on by default since 2026-05-27 after multi-boot QEMU verification.
     [switch]$ShadowStackPoc, # Build-gated kernel shadow-stack proof harness (debug only). Trips KEPILOGUE on a corrupted return address at boot; never ship.
+    [switch]$SecurityRegression, # Security PoC regression suite (debug only). Compile-gates every ring-3 PoC harness in src/user/poc/ (catches mitigation-ABI drift at build time) AND builds the kernel shadow-stack trip into the image (asserted at boot by scripts/test/test_security_regression.ps1). Never ship.
+    [switch]$NoSmap,         # Disable CR4.SMEP/SMAP enforcement. SMAP is ON by default (CPUID-gated at runtime); pass -NoSmap only for CPUs/emulators that lack SMAP and where the run target can't expose +smap.
+    [switch]$Cet,            # Enable the hardware CET scaffold (CR4.CET + IA32_S_CET). CPUID-gated at runtime (no-op on CPUs/VMs without SHSTK, incl. QEMU TCG); complements the always-on software kernel shadow stack. SHSTK/IBT *detection* is always compiled regardless of this flag. The supervisor shadow-stack RET-check itself is NOT armed yet (needs a seeded PL0_SSP — documented follow-up in src/include/cet.inc).
+    [switch]$CetIbt,         # Additionally arm the IBT-side S_CET bits when IBT is present. Requires -Cet. OFF by default: endbr64 markers are not yet emitted at indirect-branch targets, so enabling ENDBR_EN would #CP. Plumbing only.
     [switch]$CopyToE         # Copy built ESP\EFI tree to E:\ for boot from removable media.
     # GFX/DCN bring-up flags (-Gfx, -GfxWave3, -GfxWave3L, -GfxImuKick,
     # -DiagLegacy) were retired 2026-05-26 along with the AMD 780M iGPU
@@ -38,9 +42,39 @@ if ($NoFbWc) {
     $KernelDefines += '-dFBPERF_NO_WC'
     Write-Host '  (FBPERF: WC activation DISABLED -- Phase A baseline build)' -ForegroundColor Magenta
 }
-if ($ShadowStackPoc) {
+if ($SecurityRegression -and $Release) {
+    Write-Host '  FAILED - -SecurityRegression is a debug-only harness; do not combine with -Release.' -ForegroundColor Red
+    exit 1
+}
+# -SecurityRegression is a superset of -ShadowStackPoc: it builds the kernel
+# shadow-stack trip into the image (so the run harness can assert it fires) AND
+# compile-gates every ring-3 PoC below.
+if ($ShadowStackPoc -or $SecurityRegression) {
     $KernelDefines += '-dENABLE_SHADOW_STACK_POC'
     Write-Host '  (SHADOW: kernel shadow-stack PoC trip ENABLED -- debug only)' -ForegroundColor Magenta
+}
+if (-not $NoSmap) {
+    $KernelDefines += '-dENABLE_SMAP'
+    Write-Host '  (SMAP: CR4.SMEP/SMAP enforcement + stac/clac user-access brackets ENABLED -- default; -NoSmap to disable)' -ForegroundColor Magenta
+} else {
+    Write-Host '  (SMAP: DISABLED via -NoSmap -- CR4 left as loaders configured it)' -ForegroundColor Yellow
+}
+# CET (security_todo.md §3). Detection (cet_detect) is ALWAYS compiled; -Cet
+# only compiles the cet_enable CR4.CET/S_CET programming, which is itself
+# CPUID-gated at runtime and thus inert without hardware support (incl. TCG).
+if ($CetIbt -and -not $Cet) {
+    Write-Host '  FAILED - -CetIbt requires -Cet.' -ForegroundColor Red
+    exit 1
+}
+if ($Cet) {
+    $KernelDefines += '-dENABLE_CET'
+    Write-Host '  (CET: hardware shadow-stack scaffold ENABLED -- CPUID-gated; SS RET-check not yet armed; software shadow stack still active)' -ForegroundColor Magenta
+    if ($CetIbt) {
+        $KernelDefines += '-dENABLE_CET_IBT'
+        Write-Host '  (CET: IBT S_CET bits armed -- plumbing only, endbr64 markers pending)' -ForegroundColor Magenta
+    }
+} else {
+    Write-Host '  (CET: hardware enable OFF -- SHSTK/IBT detection still compiled; -Cet to enable scaffold)' -ForegroundColor Gray
 }
 if (-not $NoKaslr) {
     # Loader-only switch: kernel assembles transparently at the chosen ORG;
@@ -96,6 +130,59 @@ if (Test-Path $BootAnimTool) {
     if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED boot anim gen' -ForegroundColor Red; exit 1 }
 }
 
+# 0d. Security PoC regression compile-gate (-SecurityRegression).
+# Assemble every ring-3 PoC harness in src/user/poc/ as a standalone flat
+# binary. These exercise landed mitigations through the syscall ABI
+# (SYS_WX_INSTALL_MANIFEST, SYS_MPROTECT_WX / MPROT_WX_MODE_XRO, SYS_WX_JIT_ALIAS,
+# SYS_PRINT, SYS_EXIT). If a future change regresses any of that ABI the PoC
+# stops assembling and the build fails HERE -- a mitigation regression breaks
+# the build instead of hiding until a manual audit (security_todo.md §13).
+if ($SecurityRegression) {
+    Write-Host '[0d] Security regression: compile-gating ring-3 PoC harnesses...' -ForegroundColor Yellow
+    $PocSrcDir = Join-Path $SRC_DIR 'user\poc'
+    $PocBuildDir = Join-Path $BUILD_DIR 'poc'
+    New-Item -Path $PocBuildDir -ItemType Directory -Force | Out-Null
+    # Ring-3 harnesses that anchor manifest offsets against app_blob_start and
+    # must keep assembling against the current syscall ABI. shadow_stack_poc.asm
+    # and exploit_poc_syscall9.asm are kernel-side / reference-only and are not
+    # in this list (the shadow harness is asserted at runtime instead).
+    $PocHarnesses = @(
+        'wx_poc_write_x.asm',
+        'wx_poc_exec_w.asm',
+        'wx_poc_pos.asm',
+        'wx_jit_alias_pos.asm',
+        'wx_jit_alias_fuzz.asm',
+        'stack_overflow_poc.asm'
+    )
+    foreach ($poc in $PocHarnesses) {
+        $pocPath = Join-Path $PocSrcDir $poc
+        if (-not (Test-Path $pocPath)) {
+            Write-Host "  FAILED - PoC harness missing: $poc" -ForegroundColor Red
+            exit 1
+        }
+        # Generate a tiny standalone wrapper that supplies app_blob_start, then
+        # %includes the harness. Includes resolve via -I to the poc dir.
+        $wrapPath = Join-Path $PocBuildDir ('wrap_' + ($poc -replace '\.asm$', '') + '.asm')
+        $outBin = Join-Path $PocBuildDir (($poc -replace '\.asm$', '') + '.bin')
+        @(
+            'bits 64',
+            '%include "poc_standalone_prelude.inc"',
+            ('%include "' + $poc + '"')
+        ) | Set-Content -Path $wrapPath -Encoding ASCII
+        $ErrorActionPreference = 'Continue'
+        & $NASM @KernelDefines -f bin -o $outBin `
+            -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$PocSrcDir\" $wrapPath 2>&1 |
+        ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
+        $ErrorActionPreference = 'Stop'
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  FAILED - PoC harness no longer assembles (mitigation-ABI regression?): $poc" -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "  OK - $poc" -ForegroundColor Green
+    }
+    Write-Host "  All $($PocHarnesses.Count) ring-3 PoC harnesses assemble; kernel shadow-stack trip armed." -ForegroundColor Green
+}
+
 # 1. Assemble UEFI Loader -> BOOTX64.EFI
 Write-Host '[1/2] Assembling UEFI Loader...' -ForegroundColor Yellow
 $ErrorActionPreference = 'Continue'
@@ -119,6 +206,35 @@ Write-Host "  OK - BOOTX64.EFI ($sz bytes)" -ForegroundColor Green
 # Pass B: ORG = 0x200000 (slide of +0x100000)
 # Differ on exactly the qwords that hold absolute label references; the
 # extractor diffs them into a fixup table and wraps Pass A as the payload.
+# Generate the quantum-entropy include the kernel folds into kernel_canary.
+# The raw seed (tools/quantum/seed.bin) is a PRIVATE build secret and is NOT in
+# the repo. If present we emit it; if absent we emit 1024 zero bytes, which
+# XOR-fold to a no-op so a clean public checkout still builds and behaves
+# exactly like the pre-quantum kernel (RDTSC^RDRAND only). Regenerate the seed
+# with tools/quantum/qrng_seed.py.
+$qseedBin = Join-Path $Root 'tools\quantum\seed.bin'
+$qseedInc = Join-Path $BUILD_DIR 'qrng_seed.inc'
+$QSEED_LEN = 1024
+if (Test-Path $qseedBin) {
+    $bytes = [System.IO.File]::ReadAllBytes($qseedBin)
+    if ($bytes.Length -ne $QSEED_LEN) { throw "seed.bin must be $QSEED_LEN bytes, got $($bytes.Length)" }
+    Write-Host "  (QRNG: folding $QSEED_LEN bytes of quantum entropy from tools/quantum/seed.bin)" -ForegroundColor Green
+    $hdr = "; Auto-generated from tools/quantum/seed.bin (PRIVATE) -- DO NOT COMMIT"
+} else {
+    $bytes = New-Object byte[] $QSEED_LEN   # all zeros -> fold is a no-op
+    Write-Host "  (QRNG: seed.bin absent -- emitting zero fallback; canary uses RDTSC^RDRAND only)" -ForegroundColor DarkYellow
+    $hdr = "; Auto-generated ZERO FALLBACK (no tools/quantum/seed.bin present)"
+}
+$sb = [System.Text.StringBuilder]::new()
+[void]$sb.AppendLine($hdr)
+[void]$sb.AppendLine('qrng_seed_blob:')
+for ($i = 0; $i -lt $bytes.Length; $i += 16) {
+    $row = for ($j = $i; $j -lt [Math]::Min($i + 16, $bytes.Length); $j++) { '0x{0:x2}' -f $bytes[$j] }
+    [void]$sb.AppendLine('    db ' + ($row -join ', '))
+}
+[void]$sb.AppendLine("qrng_seed_len equ $($bytes.Length)")
+[System.IO.File]::WriteAllText($qseedInc, $sb.ToString(), [System.Text.Encoding]::ASCII)
+
 Write-Host '[2/2] Assembling Kernel (two-pass for KASLR fixup table)...' -ForegroundColor Yellow
 $kernelA = Join-Path $BUILD_DIR 'KERNEL.A.RAW'
 $kernelB = Join-Path $BUILD_DIR 'KERNEL.B.RAW'
@@ -140,6 +256,19 @@ if ($szA -ne $szB) {
     Write-Host "  FAILED - pass A/B size mismatch ($szA vs $szB). ORG-dependent sizing in kernel sources?" -ForegroundColor Red
     exit 1
 }
+
+# 2a. Sign the user blob (security_todo.md §9). Compute the kernel-held-key MAC
+# over the embedded blob [app_blob_start, app_blob_end), EXCLUDING the absolute
+# qwords that the loader relocates under KASLR (derived by diffing the two ORG
+# passes), and patch the expected MAC + the sliding-offset exclusion table into
+# BOTH raw passes identically. The patched bytes are constant across A/B, so
+# they stay non-fixup; the runtime verifier folds 0x00 over the same excluded
+# windows, making the MAC slide-independent and matching by construction. Must
+# run after both passes assemble and before the KASLR diff (2c) so the patched
+# bytes are inside the wrapped payload.
+Write-Host '[2a] Signing user blob (kernel-held-key MAC)...' -ForegroundColor Yellow
+& python (Join-Path $Root 'tools\build\patch_blob_sig.py') --a $kernelA --b $kernelB
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED - blob signing' -ForegroundColor Red; exit 1 }
 
 # 2b. Extract APPS.BIN from pass A BEFORE wrapping. The extractor scans for
 # byte markers in the raw kernel image; the KASLR container header would shift

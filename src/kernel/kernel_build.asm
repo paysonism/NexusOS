@@ -31,6 +31,10 @@ section .text
 section .text
 %include "src/kernel/core/main.asm"
 section .text
+%include "src/kernel/core/measured_boot.asm"
+section .text
+%include "src/kernel/core/kernel_lockdown.asm"
+section .text
 %include "src/kernel/core/klog.asm"
 section .text
 %include "src/kernel/core/idt.asm"
@@ -190,6 +194,21 @@ fn_strlen_wrapper:
 memcpy equ fn_memcpy
 memset equ fn_memset
 strlen equ fn_strlen
+
+; End-of-text marker. NASM `-f bin` concatenates section CONTENT by name in the
+; order [.text | .data | .rodata | .bss] regardless of include order, so every
+; `section .text` block above aggregates ahead of all .data/.rodata. This label
+; therefore sits at the top of the kernel code+helper region: [_start ..
+; _kernel_text_end) is exactly the executable kernel image (no writable .data).
+; Consumers:
+;   - measured_boot.asm hashes this range as "the kernel code" stage.
+;   - kernel_lockdown.asm marks this range read-only at PT level after init
+;     (security_todo.md §9 "read-only kernel after init"). Writable .data lives
+;     past this label, so locking [_start, _kernel_text_end) cannot fault a
+;     legitimate global write.
+section .text
+global _kernel_text_end
+_kernel_text_end:
 
 ; --- BSS Section ---
 section .bss

@@ -144,6 +144,67 @@ Full source layout in `docs/source-layout.md`.
 
 ---
 
+## Security threat model & hardware-anchoring scope (§9 boundary)
+
+This section defines the scope boundary that the boot/firmware (§9) and
+cryptographic-identity (§10) hardening in `docs/security_todo.md` are
+evaluated against. It is the prerequisite decision for the rest of those
+sections — fix the threat model first, then build to it.
+
+**Root of trust = measured boot + a kernel-held key, NOT silicon.** NexusOS
+targets UEFI-GOP / broadly-compatible hardware (see MEMORY.md: per-vendor
+MMIO bring-up is discontinued). We do **not** assume a Secure Enclave, a TPM,
+TEE/SEV memory encryption, fused per-device keys, or any hardware-anchored
+PCR. The trust anchor is purely software: the kernel image as loaded into RAM,
+self-measured into a kernel-owned chain (`measured_boot.asm` → `mb_digest`),
+plus secrets the kernel derives and holds in kernel-only BSS/.rodata
+(`kernel_canary`, `l3_slot_key[]`, the build-time blob-signing key). These
+secrets never enter ring-3 memory, and after `kernel_lockdown_ro` the .text
+/.rodata that holds compiled-in keys is mapped read-only.
+
+**A physical attacker with the boot medium is explicitly OUT of scope**
+(unlike iOS / a TEE). Someone who can rewrite the ESP, swap KERNEL.BIN/APPS.BIN
+on the USB stick, or attach a debugger to DRAM can already replace the whole
+software stack — there is no silicon to stop them, and we do not pretend to.
+A fused, hardware-verified boot chain is a non-goal for this project.
+
+**What IS in scope** (the things a software root of trust can and must
+defend against):
+  - A malicious or buggy **ring-3 app** escalating, escaping its slot, or
+    forging kernel-checked authenticators (the bulk of §1–§8, §12).
+  - **Accidental or casual tampering** of a loaded artifact (a corrupted
+    APPS.BIN, a truncated blob, a build/packaging mistake, bit-rot on the
+    medium) — detected, not cryptographically defeated.
+  - **Runtime corruption** of an already-trusted artifact (a kernel-write
+    bug mutating code/blob bytes after load) — caught by measured boot,
+    code-range hashing, and the blob signature check below.
+
+**Calibration — "good enough for a portable software root of trust", NOT
+"matches a TEE".** Because there is no hardware anchor and no physical-attacker
+requirement, primitives in §9/§10 are sized for *detection of tampering by a
+non-physical adversary*, not for *cryptographic resistance against an attacker
+who controls the medium*:
+  - A **kernel-held-key MAC/HMAC** over an artifact is fully acceptable and is
+    preferred over a public-key signature (Ed25519). The key lives in the
+    kernel and the verifier is the kernel; there is no third party to convince
+    and no offline-forgery requirement that a symmetric key fails to meet.
+  - The non-cryptographic **FNV-1a family** already used across the tree
+    (`measured_boot.asm`, `l3_slot_key`, the CPI/cap-mask tags) is an
+    acceptable documented stopgap for the *integrity-fingerprint* role. It
+    detects accidental/casual tampering; it is NOT preimage- or
+    collision-resistant against a determined adversary, and is labelled as
+    such at every use. Swapping in SHA-256/real HMAC later is a primitive
+    substitution behind the same call sites — the structure does not change.
+
+Concretely, §9 "Sign the user blob" is satisfied by a **kernel-verified keyed
+MAC** over `[app_blob_start, app_blob_end)` with a build-time key compiled
+into the kernel, refusing to launch (fail closed) on mismatch — see
+`measured_boot.asm` (`app_blob_verify_signature`) and TODO note in
+`docs/security_todo.md` §9. Reaching for Ed25519 here would buy nothing the
+threat model requires while adding a hard-to-audit NASM bignum.
+
+---
+
 ## Open invariants worth not forgetting
 
 - All async polling that runs every frame must be non-blocking state

@@ -234,9 +234,21 @@ HANDLE_KIND_XML_NODE    equ 2     ; reserved for follow-up migration
 HANDLE_KIND_NET_SOCKET  equ 3     ; reserved
 HANDLE_KIND_WINDOW      equ 4     ; reserved (today win_id is a bare int)
 
+; Per-slot soft quota on live handles (max FD count). The table's physical
+; capacity (HANDLE_TABLE_CAP) is the hard ceiling; a per-manifest quota may
+; lower it. handle_alloc fails once a slot reaches its quota. Default quota =
+; full capacity (no extra restriction) until a manifest narrows it via
+; handle_set_quota. Stored in kernel BSS (slot_handle_quota[] in
+; handle_table.inc), not in the slot's own (ring-3-writable) memory.
+HANDLE_DEFAULT_QUOTA    equ HANDLE_TABLE_CAP
+
+; Per-entry flags byte (HANDLE_ENT_FLAGS_OFF). A sealed handle is bound to the
+; slot it was issued to and any transfer/duplication path must refuse it.
+HANDLE_FLAG_SEALED      equ 0x01
+
 ; Per-entry layout (16 bytes):
 ;   off 0  u8  kind             (0 = free)
-;   off 1  u8  flags            (reserved)
+;   off 1  u8  flags            (HANDLE_FLAG_*; 0 = none)
 ;   off 2  u16 generation       (monotonic; allocator wraps 0xFFFF -> 1
 ;                                so a valid generation is never 0)
 ;   off 4  u32 reserved

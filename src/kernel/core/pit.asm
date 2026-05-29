@@ -6,6 +6,26 @@ bits 64
 
 extern fb_addr, main_loop_stage, main_loop_stage_done
 extern scr_pitch_q, scr_width, scr_height
+; Per-slot syscall rate-limit token bucket, defined in syscall.asm. Refilled to
+; SC_BUDGET_PER_TICK once per timer tick (security_todo.md §2).
+extern slot_sc_budget
+; Code-range integrity re-verify (security_todo.md §12), defined in
+; usermode.asm. Re-hashes each slot's executable code range against its
+; install-time baseline; panics on mismatch. Called on a tick cadence below.
+extern l3_code_hash_verify_all
+; Behavioral anomaly detector (security_todo.md §11), defined in syscall.asm.
+; Scans each live slot's syscall-mix histogram for a deviation from its app
+; profile and drives an over-budget slot through the §12 strike path. Called on
+; the coarse ANOMALY_SCAN_PERIOD cadence below.
+extern sc_anomaly_scan_all
+
+; Re-verify cadence in PIT ticks. MUST be a power of two (masked, not divided).
+; PIT_FREQUENCY ticks ≈ 1 s, so 64 ticks re-hashes every code range a few times
+; per second — frequent enough to catch a transient W^X breach quickly, coarse
+; enough that the per-tick branch is free on the 63/64 ticks it is skipped.
+%ifndef CODE_HASH_VERIFY_PERIOD
+CODE_HASH_VERIFY_PERIOD equ 64
+%endif
 
 section .text
 global pit_init
@@ -171,6 +191,50 @@ pit_handler:
     push rcx
 
     inc qword [tick_count]
+
+    ; --- Syscall rate-limit refill (security_todo.md §2) ---------------------
+    ; Restore every slot's token bucket to SC_BUDGET_PER_TICK. Slots that
+    ; drained their budget this tick are throttled (dispatcher denies -1) until
+    ; this runs. MAX_WINDOWS is tiny (12) so the unconditional store is cheap;
+    ; an idle slot just gets its full bucket back. rax/rcx/rdi are already saved
+    ; by the pit_handler prologue.
+    lea rdi, [rel slot_sc_budget]
+    mov ecx, MAX_WINDOWS
+    mov ax, SC_BUDGET_PER_TICK
+.sc_budget_refill:
+    mov [rdi], ax
+    add rdi, 2
+    dec ecx
+    jnz .sc_budget_refill
+
+    ; --- Code-range integrity re-verify (security_todo.md §12) ---------------
+    ; Every CODE_HASH_VERIFY_PERIOD ticks, re-hash each slot's executable code
+    ; range and compare against the install-time baseline. A mismatch means an
+    ; unintended W landed on a code page (e.g. an undiscovered JIT-alias bug
+    ; mutated executable bytes) -> l3_code_hash_verify_all panics fail-closed.
+    ; Throttled to a coarse cadence so the per-tick cost stays negligible; the
+    ; hash skips the handle-table carve-out, so legit handle writes never trip
+    ; it. Done before EOI/clock-advance so a detected violation halts promptly.
+    mov eax, [tick_count]                 ; low dword of the 64-bit tick counter
+    and eax, CODE_HASH_VERIFY_PERIOD - 1  ; power-of-two cadence mask
+    jnz .skip_code_hash_verify
+    call l3_code_hash_verify_all
+.skip_code_hash_verify:
+
+    ; --- Behavioral anomaly scan (security_todo.md §11) ----------------------
+    ; Every ANOMALY_SCAN_PERIOD ticks, scan each live slot's syscall-mix
+    ; histogram (built by the always-on trace ring) for a deviation from its
+    ; app profile — e.g. a Notepad slot hammering the W^X/JIT-alias surface — and
+    ; drive an over-budget slot through the existing §12 strike/kill path. Coarser
+    ; than the code-hash cadence and far coarser than the per-tick budget refill,
+    ; so the per-tick branch is free on the ticks it is skipped and the detector
+    ; never touches the hot dispatch path. rax/rcx/rdi already saved by the
+    ; pit_handler prologue; sc_anomaly_scan_all preserves all regs regardless.
+    mov eax, [tick_count]
+    and eax, ANOMALY_SCAN_PERIOD - 1      ; power-of-two cadence mask
+    jnz .skip_anomaly_scan
+    call sc_anomaly_scan_all
+.skip_anomaly_scan:
 
     ; --- HANG DEBUG: write main_loop_stage and stage_done to a known
     ; framebuffer location every PIT tick so we can SEE which call hung even

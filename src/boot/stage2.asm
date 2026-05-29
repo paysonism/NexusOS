@@ -113,10 +113,14 @@ bits 32
     mov eax, 0x70000         ; PML4 physical address
     mov cr3, eax
 
-    ; Step 9: Enable Long Mode in EFER MSR
+    ; Step 9: Enable Long Mode and NX in EFER MSR
+    ; NXE (bit 11) must be set before any PTE uses PAGE_NX (bit 63);
+    ; the per-slot W^X enforcement in l3_apply_wx_policy relies on this.
+    ; UEFI path sets the same bits in uefi_loader.asm; keep both in sync.
     mov ecx, 0xC0000080      ; IA32_EFER MSR
     rdmsr
     or eax, (1 << 8)         ; Set LME (Long Mode Enable)
+    or eax, (1 << 11)        ; Set NXE (No-Execute Enable) -- enables PAGE_NX
     wrmsr
 
     ; Step 10: Enable paging (enters compatibility mode)

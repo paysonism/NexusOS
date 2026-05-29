@@ -8,6 +8,9 @@
 bits 64
 
 %include "net_driver.inc"
+; Per-slot destination policy (security_todo.md §7). Provides
+; sec_net_check_port, consulted in net_tcp_connect_ipv4.
+%include "net_slot_policy.inc"
 
 extern net_checksum
 extern net_arp_resolve_ipv4
@@ -47,8 +50,11 @@ net_tcp_send_syn_l2:
     mov ax, si                           ; destination port
     xchg al, ah
     mov [rel net_tcp_segment + 2], ax
-    inc dword [rel net_tcp_iss]
-    mov eax, [rel net_tcp_iss]
+    ; Per-connection ISN from a keyed PRNG (RFC 6528 in spirit): never a
+    ; predictable monotone counter. net_tcp_next_isn mixes a one-time secret
+    ; key with a per-connection nonce, so an off-path attacker cannot guess
+    ; the sequence space even after observing prior connections.
+    call net_tcp_next_isn                ; -> EAX = fresh ISN
     mov [rel net_tcp_connect_iss], eax
     bswap eax
     mov [rel net_tcp_segment + 4], eax
@@ -80,7 +86,24 @@ net_tcp_connect_ipv4:
     push rdi
     mov [rel net_tcp_connect_dst], edi
     mov [rel net_tcp_connect_dport], si
-    mov [rel net_tcp_connect_sport], dx
+    ; Per-slot destination port allowlist (security_todo.md §7). If the calling
+    ; slot opted into a port-range policy, the destination port (SI, host order)
+    ; must fall inside the slot's allowed [lo, hi]; otherwise this is a no-op
+    ; (allow). Fails closed: a port outside the range aborts the connect before
+    ; any ARP/SYN goes on the wire.
+    push rdx
+    mov dx, si
+    call sec_net_check_port              ; DX = dest port; EAX=1 allow / 0 deny
+    pop rdx
+    test eax, eax
+    jz .fail
+    ; Source-port randomization: the kernel — not ring-3 — picks the ephemeral
+    ; port, drawn fresh per outbound connection from the same keyed PRNG that
+    ; produces the ISN, mapped into the IANA dynamic range [49152, 65535]. The
+    ; caller-supplied DX is intentionally ignored so an app cannot pin a
+    ; predictable 4-tuple for off-path injection.
+    call net_tcp_rand_sport              ; -> AX = ephemeral source port
+    mov [rel net_tcp_connect_sport], ax
 
     mov rdi, 6                           ; NI_NEXT_HOP
     call net_info
@@ -271,11 +294,116 @@ net_tcp_rx_ipv4:
     pop rbx
     ret
 
+; ----------------------------------------------------------------------------
+; Keyed PRNG for TCP ISN + ephemeral source port.
+;
+; net_tcp_rng_key is seeded exactly once (lazily, on first use) from
+; RDTSC ^ RDRAND, the same entropy source kernel_canary_init uses; RDRAND
+; failure (older CPUs / QEMU TCG) falls back to RDTSC alone and a final
+; non-zero guard prevents an all-zero key. net_tcp_rng_state is a
+; per-connection nonce advanced on every draw. Each draw runs a SplitMix64
+; finaliser over (key ^ state), giving a well-distributed 64-bit value with
+; no exposed linear relationship to prior outputs.
+; ----------------------------------------------------------------------------
+
+; Ensures net_tcp_rng_key is seeded. Clobbers nothing the callers rely on
+; (saves/restores rax,rbx,rcx,rdx).
+net_tcp_rng_ensure_seed:
+    cmp byte [rel net_tcp_rng_inited], 0
+    jne .seeded
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov rbx, rax
+    mov eax, 1
+    cpuid
+    test ecx, 1 << 30                    ; CPUID.01H:ECX.RDRAND[bit 30]
+    jz .no_rdrand
+    mov ecx, 8
+.try_rdrand:
+    rdrand rax
+    jc .have_rdrand
+    dec ecx
+    jnz .try_rdrand
+    jmp .no_rdrand
+.have_rdrand:
+    xor rbx, rax
+.no_rdrand:
+    test rbx, rbx
+    jnz .store
+    mov rbx, 0x9E3779B97F4A7C15          ; non-zero guard
+.store:
+    mov [rel net_tcp_rng_key], rbx
+    ; Mix RDTSC into the running state too so the first nonce isn't 0.
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov [rel net_tcp_rng_state], rax
+    mov byte [rel net_tcp_rng_inited], 1
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+.seeded:
+    ret
+
+; Draws the next 64-bit PRNG value. Returns RAX = value. Clobbers RAX only
+; (saves/restores rcx, rdx).
+net_tcp_rng_next:
+    call net_tcp_rng_ensure_seed
+    push rcx
+    push rdx
+    ; Advance the per-connection nonce by the golden-ratio odd constant.
+    mov rax, [rel net_tcp_rng_state]
+    mov rcx, 0x9E3779B97F4A7C15
+    add rax, rcx
+    mov [rel net_tcp_rng_state], rax
+    ; z = (state ^ key); SplitMix64 finaliser.
+    xor rax, [rel net_tcp_rng_key]
+    mov rdx, rax
+    shr rdx, 30
+    xor rax, rdx
+    mov rcx, 0xBF58476D1CE4E5B9
+    imul rax, rcx
+    mov rdx, rax
+    shr rdx, 27
+    xor rax, rdx
+    mov rcx, 0x94D049BB133111EB
+    imul rax, rcx
+    mov rdx, rax
+    shr rdx, 31
+    xor rax, rdx
+    pop rdx
+    pop rcx
+    ret
+
+; Returns EAX = fresh per-connection initial sequence number.
+net_tcp_next_isn:
+    call net_tcp_rng_next
+    ; Full 32-bit ISN from the high lane of the 64-bit draw.
+    shr rax, 32
+    ret
+
+; Returns AX = ephemeral source port in the IANA dynamic range
+; [49152, 65535] (16384-wide window, a power of two -> exact mask).
+net_tcp_rand_sport:
+    call net_tcp_rng_next
+    and eax, 0x3FFF                      ; [0, 16383]
+    add eax, 49152                       ; [49152, 65535]
+    ret
+
 section .bss
 alignb 16
 net_tcp_segment: resb 1500
 net_tcp_pseudo:  resb 1536
-net_tcp_iss:     resd 1
+net_tcp_rng_key:   resq 1
+net_tcp_rng_state: resq 1
+net_tcp_rng_inited: resb 1
+alignb 4
 net_tcp_connect_dst:   resd 1
 net_tcp_connect_dport: resw 1
 net_tcp_connect_sport: resw 1
