@@ -10,6 +10,7 @@ param(
     [switch]$NoSmap,         # Disable CR4.SMEP/SMAP enforcement. SMAP is ON by default (CPUID-gated at runtime); pass -NoSmap only for CPUs/emulators that lack SMAP and where the run target can't expose +smap.
     [switch]$Cet,            # Enable the hardware CET scaffold (CR4.CET + IA32_S_CET). CPUID-gated at runtime (no-op on CPUs/VMs without SHSTK, incl. QEMU TCG); complements the always-on software kernel shadow stack. SHSTK/IBT *detection* is always compiled regardless of this flag. The supervisor shadow-stack RET-check itself is NOT armed yet (needs a seeded PL0_SSP — documented follow-up in src/include/cet.inc).
     [switch]$CetIbt,         # Additionally arm the IBT-side S_CET bits when IBT is present. Requires -Cet. OFF by default: endbr64 markers are not yet emitted at indirect-branch targets, so enabling ENDBR_EN would #CP. Plumbing only.
+    [switch]$Kpti,           # Kernel Page-Table Isolation (security_todo.md §3). Compiles the user-view-PML4 builder + CR3-swap entry/exit macros (src/include/kpti.inc). OFF by default -> macros emit nothing, no kpti.inc code/data, default image byte-for-byte unchanged. Even with -Kpti the feature is a runtime no-op (kpti_active=0) until the SYSCALL (syscall.asm) + IRQ/exception (isr.asm) CR3-swap points and the kmain kpti_init flip are wired -- see the scoped-out note in kpti.inc. The usermode.asm iretq exits are already wired (inert until armed). Compile-gate verification only for now.
     [switch]$SyscallPerm,    # Heterogeneous syscall numbering per slot (security_todo.md §12). Per-launch keyed-random permutation of the syscall table; the dispatcher applies the kernel-side inverse mapping on entry. OFF by default -> identity (default image byte-for-byte unchanged). Kernel-side storage+generation+inverse-lookup only; the loader-side SYS_* constant rewrite is documented but scoped out (would touch every built-in app).
     [switch]$CopyToE         # Copy built ESP\EFI tree to E:\ for boot from removable media.
     # GFX/DCN bring-up flags (-Gfx, -GfxWave3, -GfxWave3L, -GfxImuKick,
@@ -87,6 +88,19 @@ if ($SyscallPerm) {
     Write-Host '  (SYSCALLPERM: per-slot syscall-number permutation ENABLED -- kernel-side inverse map; loader-side SYS_* rewrite scoped out)' -ForegroundColor Magenta
 } else {
     Write-Host '  (SYSCALLPERM: OFF -- identity syscall numbering; -SyscallPerm to enable per-slot permutation)' -ForegroundColor Gray
+}
+# KPTI (security_todo.md §3). -Kpti compiles the user-view-PML4 builder + the
+# CR3-swap entry/exit macro bodies (src/include/kpti.inc). OFF by default: the
+# macros emit nothing and no kpti.inc code/data is generated, so the default
+# image is byte-for-byte unchanged. Even with -Kpti the feature is a RUNTIME
+# no-op (kpti_active=0) until the contended syscall.asm / isr.asm CR3-swap points
+# and the kmain kpti_init flip are wired (see scoped-out note in kpti.inc); this
+# flag is a compile-gate for that landing.
+if ($Kpti) {
+    $KernelDefines += '-dENABLE_KPTI'
+    Write-Host '  (KPTI: user-view PML4 + CR3-swap macros COMPILED -- runtime-inert until syscall/IRQ switch points + kpti_init are wired; see kpti.inc)' -ForegroundColor Magenta
+} else {
+    Write-Host '  (KPTI: OFF -- kernel fully mapped while ring 3 runs; -Kpti to compile the user-view PML4 + CR3-swap scaffold)' -ForegroundColor Gray
 }
 if (-not $NoKaslr) {
     # Loader-only switch: kernel assembles transparently at the chosen ORG;

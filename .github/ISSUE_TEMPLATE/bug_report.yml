@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a non-security bug in NexusOS
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report security vulnerabilities here.** For anything with a
+        security impact (privilege escalation, sandbox/syscall-capability bypass,
+        W^X / NX / SMAP / CET bypass, boot-integrity, memory corruption), use the
+        **Security** tab > **Report a vulnerability**. See SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Build flags, boot command, and exact steps. A minimal repro helps a lot.
+      placeholder: |
+        1. Build with `scripts/build/build_uefi.ps1`
+        2. Run `scripts/run/run_uefi.ps1`
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit / branch
+      description: Output of `git rev-parse HEAD` or the tag/branch you built.
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - QEMU
+        - Real hardware
+        - Both
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / serial output / screenshots
+      render: shell
