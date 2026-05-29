@@ -9,6 +9,7 @@ bits 64
 %include "syscall_user.inc"
 %include "l3_runtime.inc"
 %include "smap.inc"
+%include "kpti.inc"
 
 extern ser_print_hex64
 extern app_terminal_blob_end
@@ -166,6 +167,15 @@ FN_DECL enter_usermode, 0, 0, FN_RET_SCALAR
     push rax
     push qword GDT64_USER_CODE
     push r10
+    ; KPTI (security_todo.md §3): swap to the kernel-unmapped user-view PML4
+    ; before returning to ring 3 so the kernel address space is not present
+    ; while user code runs (defeats Meltdown-class speculative leaks). No-op
+    ; unless -dENABLE_KPTI AND kpti_init has armed it. rax is dead here (its
+    ; RFLAGS value is already pushed above). NOTE: for the LIVE path the iret
+    ; frame just pushed must reside in the trampoline window the user view keeps
+    ; mapped — that stack-relocation is the documented scoped-out wiring in
+    ; kpti.inc; until kpti_active is set this is inert.
+    KPTI_SWITCH_TO_USER_CR3 rax
     iretq
 
 ; l3_runtime_ptr - EDI=slot -> RAX=runtime ptr
@@ -1331,6 +1341,12 @@ FN_DECL call_app_l3, 0, 0, FN_RET_SCALAR
     mov rdi, r14
     mov rsi, r15
     mov rdx, rbx
+    ; KPTI (security_todo.md §3): swap to the user-view PML4 before the iretq
+    ; into the ring-3 callback. No-op unless -dENABLE_KPTI AND armed. rax is
+    ; dead (its RFLAGS value was pushed above); rdi/rsi/rdx (the callback args)
+    ; and r12..r15/rbx survive. Same LIVE-path caveat as enter_usermode: the
+    ; iret frame's stack must be in the trampoline window once KPTI is armed.
+    KPTI_SWITCH_TO_USER_CR3 rax
     iretq
 
 call_app_l3_app_done:
