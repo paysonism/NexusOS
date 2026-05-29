@@ -1,0 +1,14 @@
+# Code owners for NexusOS.
+# These owners are requested for review on matching paths.
+# Docs: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repo.
+*                       @StruckGuide8154
+
+# Security-sensitive areas (explicit, for visibility).
+/SECURITY.md            @StruckGuide8154
+/.github/               @StruckGuide8154
+/src/kernel/proc/       @StruckGuide8154
+/src/kernel/core/       @StruckGuide8154
+/src/boot/              @StruckGuide8154
+/tools/                 @StruckGuide8154
