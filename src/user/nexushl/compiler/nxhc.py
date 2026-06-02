@@ -434,12 +434,20 @@ class CG:
         s.prefix=app_prefix
         s.str_lbls={}
         s.state_defs={}
+        s.state_sizes={}      # state buffer name -> byte size (for bounds checks)
         s.consts={}
         s.externs=set()
         s.loops=[]  # (brk_lbl, cont_lbl)
         s.sigs=[]
+        s.need_oob=False      # an out-of-bounds trap stub is referenced
     def L(s,base="L"):
         s.lbl+=1; return f".{base}{s.lbl}"
+    def oob(s):
+        # Shared per-unit out-of-bounds trap target. Referencing it marks the
+        # stub for emission at unit end. The stub is `ud2` — an unforgeable #UD
+        # fault — so a bounds violation can never silently corrupt memory.
+        s.need_oob=True
+        return f"{s.prefix}_nhlk_oob"
     def emit(s,line): s.text.append(line)
     def str_label(s,val):
         if val in s.str_lbls: return s.str_lbls[val]
@@ -668,6 +676,7 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None):
                     raise SyntaxError(f"state {nm}: size must be positive")
                 lbl=f"{app_prefix}_{nm}"
                 cg.state_defs[nm]=lbl
+                cg.state_sizes[nm]=sz
                 cg.data.append(f"{lbl}: times {sz} db 0")
     cg.str_defs=str_defs
     # collect local fn names (so calls resolve to prefixed symbols)
@@ -680,6 +689,13 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None):
                 gen_kernel_fn(cg,d)
             else:
                 gen_fn(cg,d,app_prefix)
+    # Out-of-bounds trap stub (emitted once, only if referenced by a checked
+    # index). `ud2` raises #UD — an unforgeable, non-resumable fault — so a
+    # state-buffer bounds violation halts at the faulting site instead of
+    # writing past the buffer into adjacent memory.
+    if cg.need_oob:
+        cg.emit(f"{cg.prefix}_nhlk_oob:")
+        cg.emit("    ud2")
     # assemble output
     out=[]
     out.append(f"; NexusHL generated — do not edit by hand")
@@ -1073,8 +1089,14 @@ def _gen_stmt_body(st,s):
         cg.emit(f"    mov [rbp{rbpoff(off)}], rax")
     elif k=="assign":
         lhs=s["lhs"]
+        if lhs["k"]=="index":
+            # Bounds-checked store into a state buffer: buf[idx] = val.
+            # Guarantees the write lands inside buf — out-of-range traps (#UD)
+            # before touching memory, so this path cannot corrupt neighbours.
+            _gen_state_index_store(st,lhs,s["rhs"])
+            return
         if lhs["k"]!="ident":
-            raise SyntaxError("only simple variable assignment supported")
+            raise SyntaxError("only simple variable / state-buffer-index assignment supported")
         if lhs["name"] not in st.scope:
             raise SyntaxError(f"unknown var {lhs['name']}")
         gen_expr(st,s["rhs"])
@@ -1166,6 +1188,25 @@ def const_fold_int(cg, e):
             return cg.consts[n]
     return None
 
+def _gen_state_index_store(st,lhs,rhs):
+    # buf[idx] = val, with a compile-time-sized bounds check. The store address
+    # is computed only after the index is proven in-range (else #UD), so this
+    # is the safe, non-corrupting way to write a state buffer.
+    cg=st.cg
+    tgt=lhs["target"]
+    if tgt.get("k")!="ident" or tgt["name"] not in cg.state_sizes:
+        raise SyntaxError("[] store target must be a `state` buffer (bounds-checked)")
+    nm=tgt["name"]; sz=cg.state_sizes[nm]; base=cg.state_defs[nm]
+    gen_expr(st,rhs); cg.emit("    push rax")     # value
+    gen_expr(st,lhs["idx"])                        # idx -> rax
+    cg.emit(f"    cmp rax, {sz}")
+    cg.emit(f"    jae {cg.oob()}")
+    cg.emit(f"    lea rcx, [rel {base}]")
+    cg.emit("    add rcx, rax")
+    cg.emit("    pop rax")                          # value
+    cg.emit("    mov [rcx], al")
+    cg.emit("    xor rax, rax")
+
 def gen_expr(st,e):
     cg=st.cg; k=e["k"]
     if k=="int":
@@ -1197,6 +1238,20 @@ def gen_expr(st,e):
             cg.emit(f"    lea rax, [rel {cg.state_defs[n]}]")
         else:
             raise SyntaxError(f"unknown identifier {n}")
+    elif k=="index":
+        # Bounds-checked load: buf[idx] -> rax (zero-extended byte). idx is
+        # compared against the buffer's compile-time size; out-of-range jumps
+        # to the unit's #UD trap. There is no way to express an unchecked
+        # state-buffer access, so NHLK code cannot read past a buffer.
+        tgt=e["target"]
+        if tgt.get("k")!="ident" or tgt["name"] not in cg.state_sizes:
+            raise SyntaxError("[] indexing is only supported on a `state` buffer (bounds-checked)")
+        nm=tgt["name"]; sz=cg.state_sizes[nm]; base=cg.state_defs[nm]
+        gen_expr(st,e["idx"])
+        cg.emit(f"    cmp rax, {sz}")
+        cg.emit(f"    jae {cg.oob()}")
+        cg.emit(f"    lea rcx, [rel {base}]")
+        cg.emit("    movzx rax, byte [rcx+rax]")
     elif k=="addr":
         n=e["name"]
         if n in st.scope:
