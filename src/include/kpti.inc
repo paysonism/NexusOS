@@ -254,6 +254,22 @@ kpti_build_user_pml4:
     jmp .copy_arena_pde
 .arena_done:
 
+    ; Keep the supervisor kernel-stack PDE mapped so IRET can read ring-3 entry
+    ; frames built on the kernel stack after KPTI_SWITCH_TO_USER_CR3. The leaf
+    ; mappings remain supervisor-only; ring 3 cannot architecturally read them.
+    mov rax, KERNEL_STACK_TOP - 1
+    shr rax, 21
+    mov rdx, [r9 + rax*8]
+    lea rdi, [rel kpti_user_pd0]
+    mov [rdi + rax*8], rdx
+
+    ; Keep the syscall-stack PT PDE mapped supervisor-only for SYSRET/IRET
+    ; transitions whose final frame still lives on a kernel syscall stack.
+    mov rax, L3_SYSCALL_STACK_ADDR
+    shr rax, 21
+    mov rdx, [r9 + rax*8]
+    mov [rdi + rax*8], rdx
+
     ; Publish the user CR3 (physical base of kpti_user_pml4). VA==PA for the
     ; identity-mapped kernel BSS, so the label address is the physical base.
     lea rax, [rel kpti_user_pml4]
@@ -282,6 +298,32 @@ kpti_init:
     call kpti_build_user_pml4
     mov byte [rel kpti_active], 1
     ret
+
+global kpti_log_state
+kpti_log_state:
+    push rax
+    push rdi
+    SER 'K'
+    SER 'P'
+    SER 'T'
+    SER 'I'
+    SER ' '
+    SER 'a'
+    movzx edi, byte [rel kpti_active]
+    call ser_print_hex64
+    SER ' '
+    SER 'k'
+    mov rdi, [rel kpti_kernel_cr3]
+    call ser_print_hex64
+    SER ' '
+    SER 'u'
+    mov rdi, [rel kpti_user_cr3]
+    call ser_print_hex64
+    SER 13
+    SER 10
+    pop rdi
+    pop rax
+    ret
 %endif ; ENABLE_KPTI
 
 ; ---------------------------------------------------------------------------
@@ -295,11 +337,10 @@ kpti_init:
 ; ---------------------------------------------------------------------------
 %macro KPTI_SWITCH_TO_KERNEL_CR3 1
 %ifdef ENABLE_KPTI
-    cmp byte [rel kpti_active], 0
-    je %%kpti_skip_k
-    mov %1, [rel kpti_kernel_cr3]
+    ; Entry may be running under the user-view CR3, where kpti_active and other
+    ; kernel data are intentionally unmapped. Use the loader PML4 constant.
+    mov %1, PAGE_TABLE_ADDR
     mov cr3, %1
-%%kpti_skip_k:
 %endif
 %endmacro
 
