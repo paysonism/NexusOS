@@ -16,7 +16,8 @@ global wm_create_window_ex
 global wm_draw_window
 global wm_draw_desktop
 global wm_handle_mouse_event
-global wm_get_window_at
+; wm_get_window_at migrated to src/kernel/nexushlk/wm_helpers.nxh (its `global`
+; is emitted by that module's FN_BEGIN).
 global wm_close_window
 global wm_window_count
 global wm_focused_window
@@ -594,150 +595,10 @@ wm_wallpaper_cache_addr:
     mov rax, WALLPAPER_CACHE2_ADDR
     ret
 
-; Paint the back buffer with the plain desktop color. Used as the background
-; whenever no wallpaper has been selected yet (notably the whole boot path) so
-; the expensive SVG rasterizer never runs unprompted. Preserves all registers.
-wm_bg_fill_solid:
-    push rax
-    push rcx
-    push rdx
-    push rdi
-    push r8
-    push r9
-    mov rdi, [bb_addr]
-    mov r8d, [scr_height]
-    mov r9d, [scr_width]
-    mov rdx, [scr_pitch_q]          ; bytes per scanline
-    mov eax, r9d
-    shl eax, 2
-    sub rdx, rax                    ; rdx = end-of-row gap (pitch - width*4)
-    mov eax, DESKTOP_SOLID_COLOR
-.fs_row:
-    test r8d, r8d
-    jz .fs_done
-    mov ecx, r9d
-    rep stosd                       ; EAX is preserved across rep stosd
-    add rdi, rdx
-    dec r8d
-    jmp .fs_row
-.fs_done:
-    pop r9
-    pop r8
-    pop rdi
-    pop rdx
-    pop rcx
-    pop rax
-    ret
-
-wm_bg_save_cache:
-    push rdi
-    push rsi
-    push rcx
-    push rdx
-    push r8
-    push r9
-
-    mov rsi, [bb_addr]
-    mov r8d, [scr_height]
-    mov r9d, [scr_width]
-.save_row:
-    test r8d, r8d
-    jz .save_done
-    mov ecx, r9d
-    rep movsd
-    mov rax, [scr_pitch_q]
-    mov rdx, r9
-    shl rdx, 2
-    add rsi, rax
-    sub rsi, rdx
-    dec r8d
-    jmp .save_row
-.save_done:
-    pop r9
-    pop r8
-    pop rdx
-    pop rcx
-    pop rsi
-    pop rdi
-    ret
-
-wm_bg_restore_cache:
-    push rdi
-    push rsi
-    push rcx
-    push rdx
-    push r8
-    push r9
-
-    mov rsi, rdi
-    mov rdi, [bb_addr]
-    mov r8d, [scr_height]
-    mov r9d, [scr_width]
-.restore_row:
-    test r8d, r8d
-    jz .restore_done
-    mov ecx, r9d
-    rep movsd
-    mov rax, [scr_pitch_q]
-    mov rdx, r9
-    shl rdx, 2
-    add rdi, rax
-    sub rdi, rdx
-    dec r8d
-    jmp .restore_row
-.restore_done:
-    pop r9
-    pop r8
-    pop rdx
-    pop rcx
-    pop rsi
-    pop rdi
-    ret
-
-; Draw a soft diamond from one-pixel scanlines.
-; EDI=cx, ESI=cy, EDX=radius, R8D=color.
-wm_bg_diamond:
-    push rbx
-    push r12
-    push r13
-    push r14
-    push r15
-
-    mov r12d, edi                  ; cx
-    mov r13d, esi                  ; cy
-    mov r14d, edx                  ; radius
-    mov r15d, r8d                  ; color
-    mov ebx, edx
-    neg ebx                        ; dy = -radius
-.diamond_loop:
-    cmp ebx, r14d
-    jg .diamond_done
-    mov eax, ebx
-    test eax, eax
-    jge .abs_ok
-    neg eax
-.abs_ok:
-    mov edx, r14d
-    sub edx, eax                   ; half width
-    jle .diamond_next
-    mov edi, r12d
-    sub edi, edx                   ; x
-    mov esi, r13d
-    add esi, ebx                   ; y
-    mov ecx, 1
-    mov r8d, r15d
-    shl edx, 1                     ; width
-    call render_rect
-.diamond_next:
-    inc ebx
-    jmp .diamond_loop
-.diamond_done:
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    ret
+; wm_bg_fill_solid, wm_bg_save_cache, wm_bg_restore_cache, wm_bg_diamond migrated
+; to src/kernel/nexushlk/wm_helpers.nxh (zero-asm; per-pixel dword loops replace
+; the rep stosd/movsd with a byte-identical pixel stream). DESKTOP_SOLID_COLOR is
+; mirrored as a const there.
 
 ; Draw a specific window: RDI = window ID
 FN_BEGIN wm_draw_window, 1, 0, FN_RET_VOID
@@ -1542,113 +1403,11 @@ FN_BEGIN wm_draw_drag_outline, 0, 0, FN_RET_VOID
     FN_END wm_draw_drag_outline
     ret
 
-wm_mark_outline_dirty:
-    ; Args: R8=x, R9=y, R10=w, R11=h
-    push r8
-    push r9
-    push r10
-    push r11
-    mov edi, r8d
-    mov esi, r9d
-    mov edx, r10d
-    mov ecx, 2
-    call render_mark_dirty
-    mov edi, r8d
-    mov esi, r9d
-    add esi, r11d
-    sub esi, 2
-    mov edx, r10d
-    mov ecx, 2
-    call render_mark_dirty
-    mov edi, r8d
-    mov esi, r9d
-    mov edx, 2
-    mov ecx, r11d
-    call render_mark_dirty
-    mov edi, r8d
-    add edi, r10d
-    sub edi, 2
-    mov esi, r9d
-    mov edx, 2
-    mov ecx, r11d
-    call render_mark_dirty
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    ret
+; wm_mark_outline_dirty migrated to src/kernel/nexushlk/wm_helpers.nxh
+; (R8=x R9=y R10=w R11=h; four render_mark_dirty edge calls).
 
-; Find topmost window at (X, Y): RDI=x, RSI=y -> RAX=window ID or -1
-FN_BEGIN wm_get_window_at, 2, 0, FN_RET_HANDLE
-    push r12
-
-    ; Check focused window first (it's drawn on top)
-    mov rax, [wm_focused_window]
-    cmp rax, -1
-    je .scan_all
-    cmp rax, MAX_WINDOWS
-    jge .scan_all
-    mov r12, rax
-    imul rax, WINDOW_STRUCT_SIZE
-    add rax, WINDOW_POOL_ADDR
-    test qword [rax + WIN_OFF_FLAGS], WF_ACTIVE
-    jz .scan_all
-    test qword [rax + WIN_OFF_FLAGS], WF_VISIBLE
-    jz .scan_all
-    ; Bounds check
-    mov r8, [rax + WIN_OFF_X]
-    cmp rdi, r8
-    jl .scan_all
-    add r8, [rax + WIN_OFF_W]
-    cmp rdi, r8
-    jge .scan_all
-    mov r9, [rax + WIN_OFF_Y]
-    cmp rsi, r9
-    jl .scan_all
-    add r9, [rax + WIN_OFF_H]
-    cmp rsi, r9
-    jge .scan_all
-    mov rax, r12
-    jmp .found
-
-.scan_all:
-    mov r12, MAX_WINDOWS
-    dec r12
-.check_loop:
-    cmp r12, 0
-    jl .not_found
-    mov rax, r12
-    imul rax, WINDOW_STRUCT_SIZE
-    add rax, WINDOW_POOL_ADDR
-    test qword [rax + WIN_OFF_FLAGS], WF_ACTIVE
-    jz .continue
-    test qword [rax + WIN_OFF_FLAGS], WF_VISIBLE
-    jz .continue
-    ; Bounds
-    mov r8, [rax + WIN_OFF_X]
-    cmp rdi, r8
-    jl .continue
-    add r8, [rax + WIN_OFF_W]
-    cmp rdi, r8
-    jge .continue
-    mov r9, [rax + WIN_OFF_Y]
-    cmp rsi, r9
-    jl .continue
-    add r9, [rax + WIN_OFF_H]
-    cmp rsi, r9
-    jge .continue
-    mov rax, r12
-    jmp .found
-.continue:
-    dec r12
-    jmp .check_loop
-
-.not_found:
-    mov rax, -1
-.found:
-    FN_END wm_get_window_at
-    pop r12
-    ret
+; wm_get_window_at migrated to src/kernel/nexushlk/wm_helpers.nxh
+; (RDI=x RSI=y -> RAX=window ID or -1; pure geometry hit-test).
 
 ; ============================================================================
 ; §6 — Kernel-owned per-slot callback trampoline
@@ -1700,56 +1459,11 @@ WM_CB_FIELD_DRAG    equ 2
 WM_CB_FIELD_RCLICK  equ 3
 WM_CB_FIELDS        equ 4
 
-; wm_cb_intern — record a callback target for (slot, field) in the kernel-owned
-; table and return its slot-local id.
-;   EDI = slot index (== window index for app windows), 0..MAX_WINDOWS-1
-;   ESI = field id (WM_CB_FIELD_*)
-;   RDX = target (0 allowed -> "no callback").
-; Returns:
-;   EAX = packed slot-local callback id (slot * WM_CB_FIELDS + field) + 1, or
-;         0 if (slot,field) is out of range OR target is 0. The +1 bias keeps a
-;         valid id non-zero so 0 stays a clean "none" sentinel.
-; Clobbers RAX, RCX. Preserves RDI/RSI/RDX/R8 and the rest.
-wm_cb_intern:
-    cmp edi, MAX_WINDOWS
-    jae .ci_fail
-    cmp esi, WM_CB_FIELDS
-    jae .ci_fail
-    test rdx, rdx
-    jz .ci_fail                       ; no target -> no id
-    mov eax, edi
-    imul eax, WM_CB_FIELDS
-    add eax, esi                      ; eax = flat row index
-    mov ecx, eax                      ; save row index for the id
-    lea rax, [rel wm_cb_table + rax*8]
-    mov [rax], rdx                    ; store target
-    lea eax, [rcx + 1]                ; id = row + 1 (non-zero)
-    ret
-.ci_fail:
-    xor eax, eax
-    ret
-
-; wm_cb_resolve — look up a slot-local callback id in the kernel-owned table and
-; return the stored TRUSTED target. Single read point the dispatch sites take
-; their call target from; the window struct is never the source here.
-;   EDI = slot-local callback id (as returned by wm_cb_intern; 0 = none)
-; Returns:
-;   RAX = trusted target, or 0 if id is 0 / out of range / table slot empty.
-; Clobbers RAX, RCX. Preserves RSI/RDX/R8 etc. so callers can keep args live.
-; File-local leaf helper (no FN_BEGIN trace frame on this hot path); the future
-; cross-file KEYFN consumer in main.asm should call wm_cb_trampoline, not this.
-wm_cb_resolve:
-    test edi, edi
-    jz .cr_none
-    lea eax, [rdi - 1]                ; flat row index
-    cmp eax, MAX_WINDOWS * WM_CB_FIELDS
-    jae .cr_none
-    lea rcx, [rel wm_cb_table]
-    mov rax, [rcx + rax*8]            ; trusted target
-    ret
-.cr_none:
-    xor eax, eax
-    ret
+; wm_cb_intern and wm_cb_resolve migrated to src/kernel/nexushlk/wm_helpers.nxh
+; (bounded callback-table fill/lookup with #UD-on-OOB indexing). WM_CB_FIELDS /
+; WM_CB_FIELD_* equs above stay here (used by the mouse handler + trampoline);
+; the wm_cb_table BSS array is defined below. wm_cb_trampoline (CPI-adjacent
+; dispatch) stays in asm and calls wm_cb_resolve cross-module within this unit.
 
 ; wm_cb_trampoline — the kernel-owned invoker. Resolve a slot-local callback id
 ; against the table and dispatch the stored TRUSTED target.

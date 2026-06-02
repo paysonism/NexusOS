@@ -187,6 +187,13 @@ section .text
 section .text
 %include "src/kernel/drivers/xhci.asm"
 section .text
+; NexusHLK: USB HID LEAF helpers (zero-asm). Must precede usb_hid.asm so its
+; globals (usb_log_ch, usb_log_str, usb_log_crlf, usb_log_hex_nib,
+; usb_hid_flush_log, usb_find_endpoint, usb_try_known_mouse_endpoint) are
+; defined before usb_hid.asm's remaining asm references them. The data symbols
+; they touch are still defined in usb_hid.asm's section .data (one NASM unit).
+%include "build/nxh/usb_hid_helpers.asm"
+section .text
 %include "src/kernel/drivers/usb_hid.asm"
 section .text
 %include "src/kernel/drivers/rtl8156.asm"
@@ -214,6 +221,11 @@ section .text
 %include "src/kernel/gui/resources.asm"
 section .text
 %include "src/kernel/gui/render.asm"
+section .text
+; NexusHLK (zero-asm) window-manager leaf helpers — included BEFORE window.asm
+; so wm_get_window_at / wm_cb_intern / wm_cb_resolve / wm_bg_* /
+; wm_mark_outline_dirty symbols resolve for window.asm's callers.
+%include "build/nxh/wm_helpers.asm"
 section .text
 %include "src/kernel/gui/window.asm"
 section .text
