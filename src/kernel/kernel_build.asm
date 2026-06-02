@@ -76,10 +76,6 @@ section .text
 section .text
 %include "src/kernel/core/security_status.asm"
 section .text
-%include "src/kernel/core/measured_boot.asm"
-section .text
-%include "src/kernel/core/kernel_lockdown.asm"
-section .text
 %include "src/kernel/core/klog.asm"
 section .text
 %include "src/kernel/core/idt.asm"
