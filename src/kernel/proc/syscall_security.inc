@@ -25,67 +25,14 @@
 ; just yields 0. Real handlers should never be 0.
 ; ----------------------------------------------------------------------------
 
-; cpi_sign_callback(rdi=raw_fn, rsi=&window, rdx=field_offset) -> rax=stamped.
-; Clobbers only rax (rcx saved/restored internally).
-global cpi_sign_callback
-FN_BEGIN cpi_sign_callback, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR), FN_RET_SCALAR
-    test rdi, rdi
-    jz .csc_zero
-    push rcx
-    mov rax, rdi
-    mov rcx, 0x0000FFFFFFFFFFFF
-    and rax, rcx                      ; mask the would-be tag bits
-    ; tag = low16(kernel_canary ^ &window ^ field_offset) — KDOM_CPI is 0 so
-    ; this is byte-identical to the former hand-written sequence (see §13).
-    KHMAC_TAG rcx, ecx, cx, rsi, rdx, KDOM_CPI
-    shl rcx, 48
-    or rax, rcx
-    pop rcx
-    FN_END cpi_sign_callback
-    ret
-.csc_zero:
-    xor eax, eax
-    FN_END cpi_sign_callback
-    ret
-
-; cpi_verify_callback(rdi=stored, rsi=&window, rdx=field_offset)
-;   returns rax = raw_fn pointer (top 16 bits cleared) on success,
-;   or rax = 0 if stored was 0 (handler detached / never installed).
-; A non-zero stored value whose tag does NOT match is a CPI violation:
-; we jump to kernel_panic_canary so corruption never reaches dispatch.
-; Clobbers only rax (rcx, r8 saved/restored internally) on the success path.
-global cpi_verify_callback
-FN_BEGIN cpi_verify_callback, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIND_SCALAR), FN_RET_SCALAR
-    test rdi, rdi
-    jz .cvc_zero
-    push rcx
-    push r8
-    KHMAC_TAG rcx, ecx, cx, rsi, rdx, KDOM_CPI
-    shl rcx, 48                       ; expected tag bits
-    mov rax, rdi
-    mov r8, 0xFFFF000000000000
-    and rax, r8
-    cmp rax, rcx
-    jne .cvc_bad
-    mov rax, rdi
-    mov r8, 0x0000FFFFFFFFFFFF
-    and rax, r8
-    pop r8
-    pop rcx
-    FN_END cpi_verify_callback
-    ret
-.cvc_zero:
-    xor eax, eax
-    FN_END cpi_verify_callback
-    ret
-.cvc_bad:
-    ; Pointer corruption detected. Hand the forged value to the existing
-    ; canary panic path so the operator sees the same CANARY <bad> @<rip>
-    ; serial trace. rdi already holds the observed bad stored qword.
-    pop r8
-    pop rcx
-    lea rsi, [rel .cvc_bad]
-    jmp kernel_panic_canary
+; cpi_sign_callback / cpi_verify_callback — MIGRATED to zero-asm NexusHLK
+; (Stage 2b, docs/nhlk-syscall-rearchitecture.md). The structured fns now live
+; in src/kernel/nexushlk/syscall_secure.nxh (compiled to build/nxh/
+; syscall_secure.asm, %include'd by kernel_build.asm BEFORE this file). Same
+; global names, same register ABI (rdi/rsi/rdx in, rax out, all else preserved),
+; same KDOM_CPI=0 HMAC arithmetic; cpi_verify's violation path still tail-calls
+; kernel_panic_canary (which remains below). Removed from here to avoid a
+; duplicate definition.
 
 ; ----------------------------------------------------------------------------
 ; Cap-mask authenticator — the data-side counterpart to CPI-lite. The same
@@ -98,37 +45,14 @@ FN_BEGIN cpi_verify_callback, 3, SC_KIND3(FN_KIND_SCALAR, FN_KIND_SCALAR, FN_KIN
 ; (hot path); these helpers are the single source of truth for the write side.
 ; ----------------------------------------------------------------------------
 
-; cap_mask_sign(rdi=slot, rsi=mask) -> rax = authenticator byte (0..255).
-; Pure function of the inputs and kernel_canary; clobbers only rax (rcx saved).
-global cap_mask_sign
-FN_BEGIN cap_mask_sign, 2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR), FN_RET_SCALAR
-    push rcx
-    push r8
-    movzx eax, dil                    ; slot id (low byte)
-    movzx r8d, sil                    ; mask byte
-    ; tag = low8(kernel_canary ^ slot ^ mask ^ KDOM_CAP_MASK). KDOM_CAP_MASK is
-    ; the former CAP_HMAC_DOMAIN (0x5C) so the byte is unchanged (see §13).
-    KHMAC_TAG rcx, ecx, cl, rax, r8, KDOM_CAP_MASK
-    mov eax, ecx                      ; authenticator byte -> result reg
-    pop r8
-    pop rcx
-    FN_END cap_mask_sign
-    ret
-
-; cap_mask_store(rdi=slot, rsi=mask): write slot_cap_mask[slot]=mask AND its
-; authenticator slot_cap_hmac[slot] together, so the pair is always consistent.
-; The single place mask writes should go through. Clobbers rax, rcx, r8.
-; Caller must have already range-checked slot < MAX_WINDOWS.
-global cap_mask_store
-FN_BEGIN cap_mask_store, 2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR), FN_RET_VOID
-    call cap_mask_sign                ; rax = authenticator for (slot, mask)
-    movzx r8d, dil                    ; slot index
-    lea rcx, [rel slot_cap_mask]
-    mov [rcx + r8], sil               ; mask byte
-    lea rcx, [rel slot_cap_hmac]
-    mov [rcx + r8], al                ; matching authenticator
-    FN_END cap_mask_store
-    ret
+; cap_mask_sign / cap_mask_store — MIGRATED to zero-asm NexusHLK (Stage 2b).
+; Now structured fns in src/kernel/nexushlk/syscall_secure.nxh. Same global
+; names + register ABI (rdi=slot, rsi=mask; cap_mask_sign -> rax; cap_mask_store
+; void). Same low8(kernel_canary ^ slot ^ mask ^ KDOM_CAP_MASK=0x5C) tag, now
+; with a bounds check on the slot index before the two byte writes (the gained
+; safety property). cap_mask_store computes the authenticator inline (identical
+; arithmetic) rather than calling cap_mask_sign — a regabi callee's rax return
+; cannot be captured into a NHLK local. Removed here to avoid a duplicate def.
 
 ; ----------------------------------------------------------------------------
 ; cap_audit_log(dil=slot, sil=old_mask, dl=new_mask, cl=reason, r8d=app_id)
@@ -181,29 +105,12 @@ FN_BEGIN cap_audit_log, 5, 0, FN_RET_VOID
     FN_END cap_audit_log
     ret
 
-; slot_cap_hmac_init(): stamp every slot's authenticator to match the current
-; (static CAP_ALL) mask, using the now-final kernel_canary. Called once from
-; kernel_main right after kernel_canary_init, before any syscall can dispatch.
-; Clobbers rax, rcx, rdx, rsi, rdi, r8.
-global slot_cap_hmac_init
-FN_BEGIN slot_cap_hmac_init, 0, 0, FN_RET_VOID
-    xor edx, edx                      ; slot index
-.schi_loop:
-    cmp edx, MAX_WINDOWS
-    jae .schi_done
-    lea rcx, [rel slot_cap_mask]
-    movzx esi, byte [rcx + rdx]       ; current mask for this slot
-    mov rdi, rdx                      ; slot id
-    push rdx
-    call cap_mask_sign                ; rax = authenticator (saves/restores rcx)
-    pop rdx
-    lea rcx, [rel slot_cap_hmac]
-    mov [rcx + rdx], al
-    inc edx
-    jmp .schi_loop
-.schi_done:
-    FN_END slot_cap_hmac_init
-    ret
+; slot_cap_hmac_init() — MIGRATED to zero-asm NexusHLK (Stage 2b). Now a
+; structured fn in src/kernel/nexushlk/syscall_secure.nxh: loops slot=0..
+; MAX_WINDOWS-1, reads slot_cap_mask[slot] (bounds-checked), computes the
+; authenticator inline, writes slot_cap_hmac[slot]. Same global name + boot
+; contract (called once from kernel_main after kernel_canary_init). Removed
+; here to avoid a duplicate definition.
 
 ; ----------------------------------------------------------------------------
 ; sc_record_strike - slot teardown on suspect syscall return (security_todo.md

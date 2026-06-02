@@ -102,7 +102,25 @@ section .text
 section .text
 %include "src/kernel/proc/process.asm"
 section .text
+; NexusHLK Stage 2a: syscall LEAF validators/support (zero-asm). Must precede
+; syscall.asm so its globals (sc_get_slot_bounds, sc_range_in_bounds,
+; sc_validate_user_range/_io_range, sc_validate_callback_target, dbg_wc_hex64,
+; dbg_wmcreate_log) are defined before the dispatcher/handler .inc files use them.
+%include "build/nxh/syscall_validate.asm"
+section .text
+; NexusHLK Stage 2b: syscall HMAC / cap-mask security LEAF helpers (zero-asm).
+; Must precede syscall.asm so its globals (cpi_sign_callback, cpi_verify_callback,
+; cap_mask_sign, cap_mask_store, slot_cap_hmac_init) are defined before the
+; dispatcher/handler/security .inc files (and kernel_main) reference them.
+%include "build/nxh/syscall_secure.asm"
+section .text
 %include "src/kernel/proc/syscall.asm"
+; NexusHLK syscall data section (Stage 1 of docs/nhlk-syscall-rearchitecture.md):
+; the unconditional, const-sized syscall data symbols migrated out of
+; syscall_data.inc. Pure `section .data` (no .text); NASM -f bin aggregates it
+; into the writable .data region past _kernel_text_end regardless of position.
+section .data
+%include "build/nxh/syscall_data.asm"
 section .text
 %include "src/kernel/proc/workqueue.asm"
 

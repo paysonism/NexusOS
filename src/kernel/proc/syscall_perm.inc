@@ -4,6 +4,17 @@
 ;
 ; Extracted verbatim from syscall.asm (textual %include split, no logic change).
 ; Lines below remain in syscall_entry's local-label scope where applicable.
+;
+; Stage 2b NHLK migration note (docs/nhlk-syscall-rearchitecture.md): the
+; HMAC/cap-mask leaf cluster moved to src/kernel/nexushlk/syscall_secure.nxh.
+; The helpers in THIS file (sc_build_allow_bitmap, sc_reset_allow_bitmap,
+; sc_slot_perm_ensure/_generate/_apply_blob, kernel_apply_app_manifest) are
+; INTENTIONALLY kept in asm: their loop bounds / row strides are
+; syscall_table_count and SC_ALLOW_BYTES, which are NASM ASSEMBLE-TIME `equ`s
+; derived from the syscall table — not stable NHLK numeric literals. NHLK
+; `const`/`state`/bounds-check sizes must be literals, so a zero-asm port would
+; have to hardcode the table count, a fragility/security regression if the
+; table ever grows. Revisit once nxhc.py can bind a NASM symbol as a count.
 ; ============================================================================
 section .text
 ; ----------------------------------------------------------------------------

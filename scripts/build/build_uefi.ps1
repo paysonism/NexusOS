@@ -184,6 +184,7 @@ $KernelModules = @(
     @{ src = 'src\kernel\nexushlk\input_dispatch.nxh'; out = 'build\nxh\input_dispatch.asm' },
     @{ src = 'src\kernel\nexushlk\frame_present.nxh'; out = 'build\nxh\frame_present.asm' },
     @{ src = 'src\kernel\nexushlk\serial_diag.nxh'; out = 'build\nxh\serial_diag.asm' },
+    @{ src = 'src\kernel\nexushlk\syscall_data.nxh'; out = 'build\nxh\syscall_data.asm' },
     @{ src = 'src\kernel\nexushlk\boot_diag.nxh';   out = 'build\nxh\boot_diag.asm' },
     @{ src = 'src\kernel\nexushlk\debug_overlay.nxh'; out = 'build\nxh\debug_overlay.asm' },
     @{ src = 'src\kernel\nexushlk\cpu_acct.nxh';    out = 'build\nxh\cpu_acct.asm' },
@@ -192,7 +193,9 @@ $KernelModules = @(
     @{ src = 'src\kernel\nexushlk\real_boot_diag_core.nxh'; out = 'build\nxh\real_boot_diag_core.asm' },
     @{ src = 'src\kernel\nexushlk\real_boot_diag_fbperf.nxh'; out = 'build\nxh\real_boot_diag_fbperf.asm' },
     @{ src = 'src\kernel\nexushlk\real_boot_diag_legacy.nxh'; out = 'build\nxh\real_boot_diag_legacy.asm' },
-    @{ src = 'src\kernel\nexushlk\real_boot_diag_gfx.nxh'; out = 'build\nxh\real_boot_diag_gfx.asm' }
+    @{ src = 'src\kernel\nexushlk\real_boot_diag_gfx.nxh'; out = 'build\nxh\real_boot_diag_gfx.asm' },
+    @{ src = 'src\kernel\nexushlk\syscall_validate.nxh'; out = 'build\nxh\syscall_validate.asm' },
+    @{ src = 'src\kernel\nexushlk\syscall_secure.nxh'; out = 'build\nxh\syscall_secure.asm' }
 )
 foreach ($m in $KernelModules) {
     $mSrc = Join-Path $Root $m.src

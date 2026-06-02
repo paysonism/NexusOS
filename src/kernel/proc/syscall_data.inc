@@ -1,14 +1,25 @@
 ; ============================================================================
 ; syscall_data.inc
-; syscall .data/.bss: counters, canary, cap masks, budget/strike, trace ring/hist, per-slot permutation, postcond, manifest tables
+; syscall .data/.bss: the RESIDUAL symbols that could not migrate to NexusHLK.
 ;
-; Extracted verbatim from syscall.asm (textual %include split, no logic change).
-; Lines below remain in syscall_entry's local-label scope where applicable.
+; Stage 1 of docs/nhlk-syscall-rearchitecture.md migrated the UNCONDITIONAL,
+; const-sized data symbols (syscall_count, kernel_canary, sc_net_*_busy,
+; szHelloUser, slot_cap_mask, slot_cap_hmac, cap_audit_head/ring, slot_sc_budget,
+; slot_sc_strikes, sc_trace_ring/head/hist) to
+;   src/kernel/nexushlk/syscall_data.nxh
+; -> build/nxh/syscall_data.asm (zero-asm `data`/`global` decls), %include'd by
+; kernel_build.asm under `section .data`.
+;
+; WHAT REMAINS HERE (the NexusHLK `data` decl cannot express either property):
+;   * %ifdef-gated blocks — NHLK has no conditional-compilation construct, so
+;     every ENABLE_DEBUG_SERIAL / ENABLE_SHADOW_STACK_POC / ENABLE_SYSCALL_PERM
+;     symbol stays in asm.
+;   * slot_syscall_allow + the SC_ALLOW_BYTES equ — sized by syscall_table_count,
+;     a NASM assembly-time equ; the compiler resolves a `data` count to a literal
+;     at compile time and cannot track the live table size.
 ; ============================================================================
-; --- Data/BSS Sections moved here ---
 section .data
-global syscall_count
-syscall_count: dq 0
+
 %ifdef ENABLE_DEBUG_SERIAL
 ; DEBUG (blank-app diagnosis): caps the XCAP cap-reject serial spew so a window
 ; redraw that issues thousands of (denied) draw calls doesn't flood the log.
@@ -18,79 +29,9 @@ xcap_log_count: dd 0
 ; an app issues (XDSP) once each, instead of flooding on every redraw frame.
 xdsp_seen_bitmap: times 32 db 0
 %endif
-align 8
-global kernel_canary
-kernel_canary: dq 0
 %ifdef ENABLE_SHADOW_STACK_POC
 shadow_poc_saved_rsp: dq 0
 %endif
-sc_net_ping_busy: db 0
-sc_net_tcp_busy: db 0
-sc_net_dns_busy: db 0
-szHelloUser: db "-> Hello from RING 3 (via SYSCALL)!", 0
-
-; Per-slot effective capability mask. Default-deny (security_todo.md §4): every
-; slot boots at CAP_CORE only (print/exit/ticks/sysinfo/handles), NOT CAP_ALL —
-; so a slot that runs a syscall before its manifest is applied can only touch
-; the core surface, killing the old CAP_ALL race window. Each launch path
-; re-stamps the slot's real, possibly-wider manifest via
-; kernel_apply_app_manifest (APPLY_MANIFEST in launch.inc) right after
-; wm_create_window_ex, so every legit app still gets the caps it declares.
-; SYS_APP_DECLARE_MANIFEST narrows entries with AND; nothing widens them past
-; the manifest. The dispatcher reads slot_cap_mask[r15] on every syscall.
-;
-; NOTE: because CAP_CORE is the floor, every launched app MUST have an
-; APPLY_MANIFEST (kernel_apply_app_manifest) on its launch path or it will be
-; restricted to CAP_CORE. All current launch paths in launch.inc do; a new
-; launch path must add one or the app will lose GUI/FS/etc. access.
-align 8
-slot_cap_mask: times MAX_WINDOWS db CAP_CORE
-
-; Per-slot authenticator paralleling slot_cap_mask[] (security_todo.md §4,
-; "Time-of-check capability cache"). Each byte is
-;   low8(kernel_canary ^ slot ^ mask ^ KDOM_CAP_MASK)
-; recomputed by cap_mask_sign whenever the mask is legitimately written, and
-; verified inline by the dispatcher's cap gate before the mask is trusted. The
-; static CAP_ALL masks above can't have their HMAC assembled in (the canary key
-; is runtime-only), so slot_cap_hmac_init seeds every entry at boot once
-; kernel_canary holds its final value. The zeros here are just the pre-init
-; placeholder; the dispatcher never runs before slot_cap_hmac_init.
-align 8
-slot_cap_hmac: times MAX_WINDOWS db 0
-
-; Capability-transition audit ring (security_todo.md §4). Fixed-size,
-; kernel-only forensic trail of every cap-mask write. cap_audit_head is the
-; running event count; (head & CAP_AUDIT_IDX_MASK) is the next record index, so
-; the ring overwrites oldest-first once it fills. See cap_audit_log (the single
-; append point) and CAP_AUDIT_* layout/reason codes in syscall_caps.inc. No
-; ring-3 read syscall yet — inspected from the kernel/debugger only.
-align 8
-cap_audit_head: dd 0                         ; monotonic event counter
-align 16
-cap_audit_ring: times (CAP_AUDIT_ENTRIES * CAP_AUDIT_ENT_SIZE) db 0
-
-; Per-slot syscall rate-limiting token bucket (security_todo.md §2).
-; One word budget per slot, decremented at dispatch entry and refilled to
-; SC_BUDGET_PER_TICK by pit_handler on every timer tick. A slot that drains
-; its budget within a single tick has further syscalls denied (-1) until the
-; next refill. This caps the syscall rate to SC_BUDGET_PER_TICK * PIT rate,
-; which is far below the millions-of-calls a fuzzer or side-channel oracle
-; needs while leaving plenty of headroom for legitimate GUI apps.
-; SC_BUDGET_PER_TICK lives in constants.inc so pit_handler shares the value.
-; Exported so pit.asm's refill loop can reach it.
-global slot_sc_budget
-align 16
-slot_sc_budget: times MAX_WINDOWS dw SC_BUDGET_PER_TICK
-
-; Per-slot security-reject strike counter (security_todo.md §12, "Slot teardown
-; on suspect syscall return"). One word per slot, incremented by sc_record_strike
-; on every -1 return for a security reason (cap mismatch, validator reject, rate
-; reject). When a slot reaches SC_STRIKE_LIMIT (constants.inc) the dispatcher
-; auto-kills it (wm_close_window) and appends a CAP_AUDIT_STRIKE record to the
-; cap audit ring, then resets the counter so a recycled slot starts clean.
-; Turns previously-silent, cost-free rejections into a self-terminating probe.
-align 16
-slot_sc_strikes: times MAX_WINDOWS dw 0
 
 ; Per-slot syscall allowlist bitmap (security_todo.md §2, "Manifest declares
 ; syscall set, not just cap bits"). One bit per syscall number, SC_ALLOW_BYTES
@@ -108,25 +49,6 @@ slot_sc_strikes: times MAX_WINDOWS dw 0
 SC_ALLOW_BYTES equ ((syscall_table_count + 7) / 8)
 align 16
 slot_syscall_allow: times (MAX_WINDOWS * SC_ALLOW_BYTES) db 0xFF
-
-; --- Always-on per-syscall trace ring + per-slot histogram (security_todo.md
-; §11). Layout/sizing constants and the inline append live in
-; syscall_trace.inc. All three arrays are kernel BSS, OUTSIDE the ring-3 slot
-; arena, so an app can neither read its own forensic trail nor forge its
-; histogram to dodge the anomaly detector.
-;
-; sc_trace_ring[]  — per slot, the last SC_TRACE_RING_ENTRIES syscall records
-;                    (oldest-first). Shipped by sc_trace_dump for crash triage.
-; sc_trace_head[]  — per slot, a running u16 event counter; low bits index the
-;                    ring. BSS-zero starts each slot's ring empty.
-; sc_trace_hist[]  — per slot, SC_TRACE_HIST_SLOTS saturating u16 counters keyed
-;                    by syscall number. THE data source for sc_anomaly_scan_all.
-align 16
-sc_trace_ring:  times (MAX_WINDOWS * SC_TRACE_SLOT_BYTES) db 0
-align 16
-sc_trace_head:  times MAX_WINDOWS dw 0
-align 16
-sc_trace_hist:  times (MAX_WINDOWS * SC_TRACE_HIST_SLOTS) dw 0
 
 %ifdef ENABLE_SYSCALL_PERM
 ; --- Heterogeneous syscall numbering per slot (security_todo.md §12) ---------
@@ -180,4 +102,3 @@ sc_postcond_args:  times (MAX_WINDOWS * 6) dq 0
 align 8
 sc_postcond_valid: times MAX_WINDOWS db 0
 %endif
-
