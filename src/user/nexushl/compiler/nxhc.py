@@ -12,7 +12,7 @@ KEYWORDS = {
     "use","app","module","fn","let","if","else","while","for","return",
     "str","i8","i16","i32","i64","u8","u16","u32","u64","ptr","void","bool",
     "true","false","asm","syscall","extern","const","struct","state","break","continue",
-    "global","data","table","naked",
+    "global","data","table","naked","align",
     # Kernel-mode explicit-register ABI:
     #   preserves(...) — callee-save contract (see gen_kernel_fn)
     #   call           — register-annotated call statement `call f(al: x);`
@@ -196,13 +196,30 @@ def parse(toks,path):
             p.eat(); nm=p.eat("id").v; p.match(";")
             decls.append(node("extern",name=nm))
         elif t.v=="data":
-            # Kernel-mode data with an EXACT (unprefixed) symbol name, explicit
-            # byte size, and an optional fill value: `data slot_cap_mask: 16 = CAP_CORE;`
-            # Emits `NAME: times <size> db <init>`. Indexable like `state`
-            # (bounds-checked). Export separately with `global NAME;`. This lets
-            # kernel buffers keep the names/sizes/initializers the rest of the
-            # kernel binds to — which plain `state` (prefixed, zero-only) can't.
-            p.eat(); nm=p.eat("id").v; p.eat(":"); sz=p.eat("num").v
+            # Kernel-mode data with an EXACT (unprefixed) symbol name. Forms:
+            #   data NAME: <count> [x <width>] [= <init>];   element array
+            #   data NAME = "string";                        NUL-terminated bytes
+            # <count> is a number, const, or product of two (e.g. MAXW * TBL_count);
+            # <width> in {1,2,4,8} -> db/dw/dd/dq (default 1); <init> number/const
+            # fill (default 0). Indexable like `state` (bounds-checked, byte-addr).
+            # Export with `global NAME;`. Lets kernel buffers keep the exact
+            # names/sizes/widths/inits the rest of the kernel binds to.
+            p.eat(); nm=p.eat("id").v
+            if p.match("="):
+                # string form
+                sval=p.eat("str").v; p.match(";")
+                decls.append(node("data",name=nm,strval=sval))
+                continue
+            p.eat(":")
+            def _data_term(pp):
+                if pp.peek().k=="num": return ("num",pp.eat("num").v)
+                return ("id",pp.eat("id").v)
+            factors=[_data_term(p)]
+            if p.peek().k=="*":
+                p.eat(); factors.append(_data_term(p))
+            width=1
+            if p.peek().k=="id" and p.peek().v=="x":
+                p.eat(); width=p.eat("num").v
             init=node("int",val=0)
             if p.match("="):
                 neg=False
@@ -211,9 +228,12 @@ def parse(toks,path):
                     v=p.eat("num").v
                     init=node("int",val=(-v if neg else v))
                 else:
-                    init=node("ident",name=p.eat("id").v)  # const name, resolved later
+                    init=node("ident",name=p.eat("id").v)
             p.match(";")
-            decls.append(node("data",name=nm,size=sz,init=init))
+            decls.append(node("data",name=nm,factors=factors,width=width,init=init))
+        elif t.v=="align":
+            p.eat(); n=p.eat("num").v; p.match(";")
+            decls.append(node("align",n=n))
         elif t.v=="table":
             # Kernel-mode dispatch table: a fixed, ordered list of handler fn
             # names. Emits `NAME: dq fn0, dq fn1, ...` and registers a count so
@@ -718,20 +738,42 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None):
         elif d["k"]=="data":
             if not kernel:
                 raise SyntaxError("`data` declaration requires --target kernel")
-            sz=d["size"]
-            if sz<=0:
-                raise SyntaxError(f"data {d['name']}: size must be positive")
+            nm=d["name"]
+            cg.state_defs[nm]=nm          # exact, unprefixed name
+            if "strval" in d:
+                raw=d["strval"].encode("utf-8")
+                parts=", ".join(str(b) for b in raw)
+                cg.data.append(f"{nm}: db {parts}, 0" if raw else f"{nm}: db 0")
+                cg.state_sizes[nm]=len(raw)+1
+                continue
+            def _resolve_term(t):
+                if t[0]=="num": return t[1]
+                n=t[1]
+                if n in cg.consts: return cg.consts[n]
+                if n in cg.table_counts: return cg.table_counts[n]
+                raise SyntaxError(f"data {nm}: unknown size term {n!r}")
+            count=1
+            for f in d["factors"]:
+                count*=_resolve_term(f)
+            w=d["width"]
+            if w not in (1,2,4,8):
+                raise SyntaxError(f"data {nm}: width must be 1/2/4/8, got {w}")
+            if count<=0:
+                raise SyntaxError(f"data {nm}: size must be positive")
             iv=d["init"]
             if iv["k"]=="int":
                 initval=iv["val"]
             elif iv["k"]=="ident" and iv["name"] in cg.consts:
                 initval=cg.consts[iv["name"]]
             else:
-                raise SyntaxError(f"data {d['name']}: init must be a number or const")
-            nm=d["name"]
-            cg.state_defs[nm]=nm          # exact, unprefixed name
-            cg.state_sizes[nm]=sz
-            cg.data.append(f"{nm}: times {sz} db {initval}")
+                raise SyntaxError(f"data {nm}: init must be a number or const")
+            directive={1:"db",2:"dw",4:"dd",8:"dq"}[w]
+            cg.data.append(f"{nm}: times {count} {directive} {initval}")
+            cg.state_sizes[nm]=count*w     # byte size for bounds checks
+        elif d["k"]=="align":
+            if not kernel:
+                raise SyntaxError("`align` declaration requires --target kernel")
+            cg.data.append(f"align {d['n']}")
         elif d["k"]=="table":
             if not kernel:
                 raise SyntaxError("`table` declaration requires --target kernel")
@@ -739,6 +781,7 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None):
             if not entries:
                 raise SyntaxError(f"table {nm}: must have at least one entry")
             cg.table_counts[nm]=len(entries)
+            cg.consts[nm+"_count"]=len(entries)   # usable in `data` size exprs
             cg.data.append(f"{nm}: dq " + ", ".join(entries))
         elif d["k"]=="state":
             for nm,sz in d["fields"]:
