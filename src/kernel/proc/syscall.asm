@@ -86,6 +86,11 @@ L3_SLOT_MAGIC       equ 0x30544F4C5358414E
 
 extern debug_print
 extern scene_dirty
+; Nested-kernel monitor (nk_monitor.asm): the WX page-flip syscalls edit
+; APP_ARENA_PT_BASE PTEs, which live in the page-table region locked read-only
+; in Phase 2 — bracket those writes in a WP-off window.
+extern nk_pt_window_begin
+extern nk_pt_window_end
 extern fat16_file_count
 extern fat16_get_entry
 extern fat16_change_dir
@@ -267,6 +272,13 @@ FN_BEGIN syscall_init_this_cpu, 0, 0, FN_RET_VOID
 %include "src/kernel/proc/handle_table.inc"
 
 FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
+    ; SYSCALL enters CPL0 on the user stack. KPTI must switch to the kernel CR3
+    ; before touching kernel data, but this preamble still uses the user stack
+    ; to save state, so keep SMAP open until those saves are restored.
+    USER_ACCESS_BEGIN
+    push rax
+    KPTI_SWITCH_TO_KERNEL_CR3 rax
+    pop rax
     ; Save critical SYSCALL state into the active slot runtime before any
     ; helper calls.
     push rbx
@@ -306,6 +318,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     pop r10
     pop rdx
     pop rbx
+    USER_ACCESS_END
     ; Kernel-entry FS/GS sanitization (security_todo.md §3). Load kernel data
     ; selectors into ds/es/fs/gs so no user-controlled selector is in force
     ; while in ring 0; under -dENABLE_FSGS_MSR_SCRUB also zeroes the FS/GS base
@@ -373,6 +386,15 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     ; Inline (no CALL), a handful of instructions; clobbers only rax/rbx/rcx/
     ; rdx/r8, all reloaded from the saved PUSH_ALL frame before the handler runs.
     SC_TRACE_APPEND
+    ; SC_TRACE_APPEND leaves rax = the user RIP (its last write, for the ring's
+    ; forensic anchor). Everything below — the ENABLE_USER_DEBUG_SYSCALL 's'
+    ; trace, the bounds check (cmp rax, syscall_table_count) and the per-slot
+    ; permutation — keys off rax as the SYSCALL NUMBER, so reload it from the
+    ; saved frame now. Without this, every syscall's number is replaced by its
+    ; return RIP -> always out-of-range -> -1, and no app syscall ever dispatches
+    ; (blank windows). The macro's "reloaded before the handler" note referred to
+    ; the arg-register reloads at the dispatch tail, which are far too late.
+    mov rax, [rsp + ALL_RAX]
 
 %ifdef ENABLE_TRACE
     mov rdi, [rsp + ALL_RAX]
@@ -443,26 +465,32 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     ; syscall number (consistent with the constant-time arg-loader, §2). The
     ; lfence-before-indirect-jmp Spectre-v2 barrier downstream is untouched.
     ;
-    ; sc_slot_perm_generate lazily builds this slot's permutation on first use
-    ; (BSS-zero "not generated" sentinel); until generated the table is identity,
-    ; so a slot that has never dispatched still maps every number to itself.
-    ; OFF by default -> this whole block is absent and rax is the row directly,
-    ; so the default image is functionally identical to today's identity map.
-    push rax
+    ; The permutation is generated AND baked into the slot's blob exactly once,
+    ; by the loader (l3_copy_app_blob_to_slot -> sc_slot_perm_generate then
+    ; sc_slot_perm_apply_blob), before the app can run. The dispatcher is a pure
+    ; CONSUMER: it must never (re)generate here. A dispatch-path generate would
+    ; reseed from a fresh RDTSC and produce an inverse that no longer matches the
+    ; forward numbers already baked into the running blob -> a non-returning
+    ; syscall (SYS_APP_DONE) misroutes to a returning one and the app #UDs on its
+    ; trampoline `ud2`. We apply the inverse ONLY once the loader has COMMITTED
+    ; this slot (sc_slot_perm_committed[slot]==1, published after every immediate
+    ; is rewritten). Until then the blob holds RAW numbers, so identity (rax
+    ; unchanged) is the correct mapping -- which is also exactly the slot-0 /
+    ; never-baked case. OFF by default -> this whole block is absent.
     push rcx
     push rdx
-    push rdi
-    movzx edi, r15b
-    call sc_slot_perm_ensure            ; generate this slot's perm once
-    pop rdi
-    pop rdx
-    pop rcx
-    pop rax
+    lea rdx, [rel sc_slot_perm_committed]
+    movzx ecx, r15b
+    cmp byte [rdx + rcx], 0
+    je .sc_perm_done                    ; not committed -> raw blob -> identity
     movzx ecx, r15b
     imul ecx, ecx, syscall_table_count  ; slot's inverse-table base
     add rcx, rax                        ; + app-visible number = flat index
     lea rdx, [rel sc_slot_perm_inv]
     movzx eax, byte [rdx + rcx]         ; eax = real syscall_table row
+.sc_perm_done:
+    pop rdx
+    pop rcx
     ; Re-publish the REAL number into the saved frame so every downstream gate
     ; (cap/allowlist bitmap, rate, strike, post-condition) keys off the real row,
     ; not the app-visible one. The trace ring (appended pre-dispatch) keeps the
@@ -593,10 +621,101 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov r10, [rsp + ALL_R10]
     mov r8,  [rsp + ALL_R8]
     mov r9,  [rsp + ALL_R9]
+%ifdef ENABLE_DEBUG_SERIAL
+    ; DEBUG (blank-app diagnosis): log the *set* of syscalls each app slot (>=2)
+    ; successfully dispatches, once per number, so we can see whether a blank app
+    ; ever issues GUI draw calls at all. All arg regs preserved across the trace.
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    mov rax, [rsp + 64 + ALL_RAX]           ; syscall number (8 pushes = 64 bytes)
+    cmp rax, 256
+    jae .xdsp_done                          ; bitmap only covers 0..255
+    mov rcx, rax
+    shr rcx, 3                              ; byte index
+    lea r9, [rel xdsp_seen_bitmap]
+    movzx r8d, byte [r9 + rcx]
+    mov edx, eax
+    and edx, 7                             ; bit position
+    bt r8d, edx
+    jc .xdsp_done                          ; already logged this number
+    bts r8d, edx
+    mov [r9 + rcx], r8b
+    SER 'X'
+    SER 'D'
+    SER 'S'
+    SER 'P'
+    SER ' '
+    SER 's'
+    movzx edi, r15b
+    call ser_print_hex64                    ; slot
+    SER ' '
+    SER 'n'
+    mov rdi, [rsp + 64 + ALL_RAX]           ; syscall number
+    call ser_print_hex64
+    SER 13
+    SER 10
+.xdsp_done:
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
+%endif
     lfence                                  ; Spectre-v2 barrier: serialize speculation before the dispatcher's indirect branch
     jmp qword [r12 + SYSCALL_HANDLER_OFF]
 
 .sc_validate_reject:
+%ifdef ENABLE_DEBUG_SERIAL
+    ; DEBUG (blank-app diagnosis): an argument-validation reject also returns -1
+    ; and silently drops a draw call -> white window. Same trace shape as XCAP
+    ; (shares the 256-line cap counter): slot, syscall number, cap tag, mask.
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    mov eax, [rel xcap_log_count]
+    cmp eax, 256
+    jae .xval_skip
+    inc dword [rel xcap_log_count]
+    SER 'X'
+    SER 'V'
+    SER 'A'
+    SER 'L'
+    SER ' '
+    SER 's'
+    movzx edi, r15b
+    call ser_print_hex64                 ; slot
+    SER ' '
+    SER 'n'
+    mov rdi, [rsp + 32 + ALL_RAX]        ; syscall number (frame below our 4 pushes)
+    call ser_print_hex64
+    SER ' '
+    SER 't'
+    movzx edi, byte [r12 + SYSCALL_CAP_OFF]   ; this syscall's cap tag
+    call ser_print_hex64
+    SER ' '
+    SER 'm'
+    lea rcx, [rel slot_cap_mask]
+    movzx edx, r15b
+    movzx edi, byte [rcx + rdx]          ; slot's current cap mask
+    call ser_print_hex64
+    SER 13
+    SER 10
+.xval_skip:
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
+%endif
     call sc_record_strike                   ; §12: count this security reject; may kill the slot
 %ifdef ENABLE_TRACE
     mov rdi, [rsp + ALL_RAX]
@@ -609,6 +728,51 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jmp .done
 
 .sc_cap_reject:
+%ifdef ENABLE_DEBUG_SERIAL
+    ; DEBUG (blank-app diagnosis): a denied draw/window syscall is what paints an
+    ; app window blank/white. Log slot, syscall number, the syscall's required
+    ; cap tag, and the slot's current mask so we can see GUI calls (tag=0x02)
+    ; being rejected and why. Capped at 256 lines to avoid flooding. r12 still
+    ; points at this syscall's table row; r15 = slot. Remove once white-window
+    ; root cause is fixed.
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    mov eax, [rel xcap_log_count]
+    cmp eax, 256
+    jae .xcap_skip
+    inc dword [rel xcap_log_count]
+    SER 'X'
+    SER 'C'
+    SER 'A'
+    SER 'P'
+    SER ' '
+    SER 's'
+    movzx edi, r15b
+    call ser_print_hex64                 ; slot
+    SER ' '
+    SER 'n'
+    mov rdi, [rsp + 32 + ALL_RAX]        ; syscall number (frame below our 4 pushes)
+    call ser_print_hex64
+    SER ' '
+    SER 't'
+    movzx edi, byte [r12 + SYSCALL_CAP_OFF]   ; this syscall's required cap tag
+    call ser_print_hex64
+    SER ' '
+    SER 'm'
+    lea rcx, [rel slot_cap_mask]
+    movzx edx, r15b
+    movzx edi, byte [rcx + rdx]          ; slot's current cap mask
+    call ser_print_hex64
+    SER 13
+    SER 10
+.xcap_skip:
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
+%endif
     call sc_record_strike                   ; §12: count this security reject; may kill the slot
 %ifdef ENABLE_TRACE
     mov rdi, [rsp + ALL_RAX]
@@ -653,6 +817,50 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     jmp .done
 
 .sc_invalid:
+%ifdef ENABLE_DEBUG_SERIAL
+    ; DEBUG (blank-app diagnosis): an out-of-range syscall number returns -1 here
+    ; *before* any cap/validate trace, so a draw issued with a bad number silently
+    ; drops -> blank window. Log slot + the FULL (unmasked) number so we can see
+    ; if the app's compiled syscall numbers exceed syscall_table_count. Shares the
+    ; 256-line cap counter. rax = the offending number here; r15 = slot.
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    mov ecx, [rel xcap_log_count]
+    cmp ecx, 256
+    jae .xinv_skip
+    inc dword [rel xcap_log_count]
+    SER 'X'
+    SER 'I'
+    SER 'N'
+    SER 'V'
+    SER ' '
+    SER 's'
+    movzx edi, r15b
+    call ser_print_hex64                 ; slot (preserves rax)
+    SER ' '
+    SER 'n'
+    mov rdi, rax                         ; full unmasked syscall number
+    call ser_print_hex64
+    SER ' '
+    SER 'r'                               ; return RIP (rcx set by syscall) = site+2
+    mov rdi, [rsp + 32 + ALL_RCX]        ; user rcx in saved frame (4 pushes above)
+    call ser_print_hex64
+    SER ' '
+    SER 'b'                               ; 8 instr bytes ending just before the syscall
+    mov rsi, [rsp + 32 + ALL_RCX]
+    sub rsi, 10                          ; bytes [rip-10 .. rip-2): rax-load + syscall opcode
+    mov rdi, [rsi]
+    call ser_print_hex64
+    SER 13
+    SER 10
+.xinv_skip:
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
+%endif
     mov qword [rsp + ALL_RAX], -1
     jmp .done
 
@@ -1278,9 +1486,17 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     cmp rdi, 100
     jb  .si_legacy
     cmp rdi, 199
-    ja  .si_legacy
+    ja  .si_check_sec
     extern fbperf_get
     call fbperf_get
+    jmp .si_store
+.si_check_sec:
+    ; Selectors 200..240 reserved for the security-feature status inventory
+    ; (security_status.asm) consumed by the Settings Security tab.
+    cmp rdi, 240
+    ja  .si_legacy
+    extern security_status_query
+    call security_status_query
     jmp .si_store
 .si_legacy:
     cmp rdi, 0
@@ -2270,6 +2486,11 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     test al, 1
     jz .sc_mprotect_fail_pop
 
+    ; All validation passed — open the monitor window for the two PTE writes
+    ; below. No bail path exists between here and nk_pt_window_end, so the
+    ; window can never leak open.
+    call nk_pt_window_begin
+
     ; Neutral step: W=0, NX=1, then flush before granting the final mode.
     and rax, -3
     mov rdx, PAGE_NX
@@ -2291,6 +2512,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov [r13], rax
     invlpg [r10]
 
+    call nk_pt_window_end           ; restore WP + flush
     pop r13
     pop r12
     pop r11
@@ -2407,13 +2629,14 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     mov r14, r12
     shr r14, 12                          ; r14 = page count
 
+    call nk_pt_window_begin             ; WP-off window for the alias PTE writes
 .sc_jit_alias_loop:
     mov rdx, [rax]                       ; x PTE
     test dl, 1                           ; PRESENT?
-    jz .sc_jit_alias_fail_pop
+    jz .sc_jit_alias_fail_inwin
     mov rsi, [rcx]                       ; existing w PTE — must be present
     test sil, 1
-    jz .sc_jit_alias_fail_pop
+    jz .sc_jit_alias_fail_inwin
 
     ; Build the alias PTE: x's physical frame + flags PRESENT|RW|USER|NX,
     ; preserving the rest of x's low flags is unnecessary — we want a fresh
@@ -2433,6 +2656,7 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     dec r14
     jnz .sc_jit_alias_loop
 
+    call nk_pt_window_end               ; restore WP + flush
     pop r14
     pop r13
     pop r12
@@ -2442,6 +2666,10 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     pop rbx
     mov qword [rsp + ALL_RAX], 0
     jmp .done
+.sc_jit_alias_fail_inwin:
+    ; A per-page validation check failed mid-loop while the window was open —
+    ; close it (restore WP) before taking the shared failure path.
+    call nk_pt_window_end
 .sc_jit_alias_fail_pop:
     pop r14
     pop r13
@@ -2834,9 +3062,56 @@ FN_DECL syscall_entry, 0, 0, FN_RET_SCALAR
     imul rdx, L3_RT_SIZE
     lea rcx, [rel l3_runtime]
     add rdx, rcx
-    mov rsp, [rdx + L3_RT_USER_RSP]
+%ifdef ENABLE_DEBUG_SERIAL
+    ; DEBUG (click-freeze diagnosis): if the user RIP we are about to SYSRET into
+    ; is non-canonical, the iretq/sysret would deliver a corrupt ring-3 RIP and
+    ; #GP (exactly the observed 0x1F4E...13682C). Flag it HERE — before the bad
+    ; sysret — with the slot, the corrupt RIP, the user RSP, and the syscall's
+    ; return value (rax) so we know which call's exit path stored garbage. This
+    ; only fires on actual corruption (canonical RIPs are silent -> no flood).
+    ; rsp is still the kernel syscall stack here, so pushes are safe.
+    push rax                              ; preserve syscall return value
+    push rcx
+    push rdi
+    mov rcx, [rdx + L3_RT_USER_RIP]
+    mov rax, rcx
+    shl rax, 16
+    sar rax, 16                           ; sign-extend bit 47 (canonical form)
+    cmp rax, rcx
+    je .sysret_rip_ok
+    SER 'S'
+    SER 'R'
+    SER 'B'
+    SER 'A'
+    SER 'D'
+    SER ' '
+    SER 's'
+    mov edi, [rsp + 24]                   ; slot id ([rsp] after 3 pushes = original [rsp])
+    call ser_print_hex64
+    SER ' '
+    SER 'p'
+    mov rdi, [rdx + L3_RT_USER_RIP]
+    call ser_print_hex64
+    SER ' '
+    SER 'u'
+    mov rdi, [rdx + L3_RT_USER_RSP]
+    call ser_print_hex64
+    SER ' '
+    SER 'a'
+    mov rdi, [rsp + 16]                   ; preserved rax (syscall return value)
+    call ser_print_hex64
+    SER 13
+    SER 10
+.sysret_rip_ok:
+    pop rdi
+    pop rcx
+    pop rax
+%endif
+    mov r10, [rdx + L3_RT_USER_RSP]
     mov rcx, [rdx + L3_RT_USER_RIP]
     mov r11, [rdx + L3_RT_USER_RFLAGS]
+    KPTI_SWITCH_TO_USER_CR3 rdx
+    mov rsp, r10
     ; Encode SYSRETQ directly to avoid NASM's spurious label-orphan warning.
     db 0x48, 0x0F, 0x07
 
@@ -3855,6 +4130,34 @@ kernel_panic_canary:
     call ser_print_hex64                ; rsi = detection RIP
     SER 13
     SER 10
+%ifdef ENABLE_DEBUG_SERIAL
+    ; Extended forensics (debug builds only) for the intermittent boot canary
+    ; panic. The banner above shows rdi (observed/bad) and rsi (detection RIP or
+    ; per-caller context). These extra lines disambiguate the root cause:
+    ;   K=<kernel_canary>  the live global canary. If this is 0 the seed never
+    ;                      ran; if nonzero the *saved* copy was clobbered.
+    ;   s=<r15>            faulting slot id (valid on the syscall-return paths).
+    ;   x=<r10>            secondary context (e.g. expected baseline on the
+    ;                      code-hash path, which sets r10 before jumping here).
+    ; r10/r15 are not touched between entry and here, and ser_print_hex64 saves
+    ; rax-rdi (never r8-r15), so these reads see the values as of the panic.
+    SER 'K'
+    SER '='
+    mov rdi, [rel kernel_canary]
+    call ser_print_hex64
+    SER ' '
+    SER 's'
+    SER '='
+    movzx edi, r15b
+    call ser_print_hex64
+    SER ' '
+    SER 'x'
+    SER '='
+    mov rdi, r10
+    call ser_print_hex64
+    SER 13
+    SER 10
+%endif
 .kpc_halt:
     cli
     hlt
@@ -3939,6 +4242,15 @@ shadow_poc_trip:
 section .data
 global syscall_count
 syscall_count: dq 0
+%ifdef ENABLE_DEBUG_SERIAL
+; DEBUG (blank-app diagnosis): caps the XCAP cap-reject serial spew so a window
+; redraw that issues thousands of (denied) draw calls doesn't flood the log.
+xcap_log_count: dd 0
+; DEBUG (blank-app diagnosis): one bit per syscall number, set the first time an
+; app slot (>=2) successfully dispatches it. Lets us print the *set* of syscalls
+; an app issues (XDSP) once each, instead of flooding on every redraw frame.
+xdsp_seen_bitmap: times 32 db 0
+%endif
 align 8
 global kernel_canary
 kernel_canary: dq 0
@@ -4068,8 +4380,25 @@ sc_trace_hist:  times (MAX_WINDOWS * SC_TRACE_HIST_SLOTS) dw 0
 ; the whole default (non-ENABLE_SYSCALL_PERM) build, behave exactly as today.
 align 16
 sc_slot_perm_inv:   times (MAX_WINDOWS * syscall_table_count) db 0
+; The FORWARD permutation (real_row -> app_visible), persisted alongside the
+; inverse so the loader (l3_copy_app_blob_to_slot -> sc_slot_perm_apply_blob)
+; can rewrite each app's compiled SYS_* immediates from the raw row to this
+; slot's app-visible number. The dispatcher uses only the inverse; this row is
+; the loader's lookup. Slot 0 is identity (see sc_slot_perm_generate).
+align 16
+sc_slot_perm_fwd:   times (MAX_WINDOWS * syscall_table_count) db 0
 align 16
 sc_slot_perm_ready: times MAX_WINDOWS db 0
+; Per-slot COMMIT flag (security_todo.md §12). Set ONLY by sc_slot_perm_apply_blob
+; once every syscall-number immediate in the slot's copied blob has been rewritten
+; to this slot's forward-permuted numbers. The dispatcher applies the inverse map
+; iff committed[slot]==1; a 0 means the blob still carries RAW numbers (loader not
+; finished, or the lazy dispatch-path generate ran with no bake), for which the
+; only correct mapping is identity. Separating "tables built" (ready) from "blob
+; rewritten" (committed) removes the window where the inverse is live but the blob
+; is not yet permuted. BSS-zero default keeps the OFF build identical.
+align 16
+sc_slot_perm_committed: times MAX_WINDOWS db 0
 %endif
 
 %ifdef ENABLE_DEBUG_SERIAL
@@ -4278,6 +4607,39 @@ sc_slot_perm_generate:
     movzx r10d, dil                     ; r10 = slot (validated by caller path)
     cmp r10d, MAX_WINDOWS
     jae .spg_done
+    ; A fresh generation invalidates any prior bake: UN-commit this slot before
+    ; touching the tables so the dispatcher falls back to identity (against the
+    ; about-to-be-recopied RAW blob) until sc_slot_perm_apply_blob re-commits.
+    ; Cleared first, before fwd/inv are rewritten, so no sibling core can apply a
+    ; half-built inverse.
+    lea rax, [rel sc_slot_perm_committed]
+    mov byte [rax + r10], 0
+    ; r9 = this slot's FORWARD-permutation row in sc_slot_perm_fwd; the shuffle
+    ; runs here, then the inverse is derived into sc_slot_perm_inv. Persisting
+    ; the forward map (instead of discarding it) is what lets the loader rewrite
+    ; the app's compiled SYS_* immediates per slot.
+    mov eax, r10d
+    imul eax, eax, syscall_table_count
+    lea r9, [rel sc_slot_perm_fwd]
+    add r9, rax                          ; r9 -> fwd[] row for this slot
+    ; fwd[] identity init (also the final value for slot 0 / the identity case).
+    xor ecx, ecx
+.spg_id:
+    cmp ecx, syscall_table_count
+    jae .spg_id_done
+    mov byte [r9 + rcx], cl              ; fwd[i] = i   (count <= 256, fits a byte)
+    inc ecx
+    jmp .spg_id
+.spg_id_done:
+    ; Slot 0 stays IDENTITY (fail-safe). Slot 0 is the reserved/desktop slot and
+    ; also the slot every kernel-resident ring-3 trampoline (call_app_l3_app_done
+    ; in usermode.asm, which issues a RAW syscall number from a kernel VA outside
+    ; the per-slot arena) is attributed to by the dispatcher's RSP-based slot
+    ; derivation. Those trampolines are NOT part of the per-slot copied blob, so
+    ; their immediates are never rewritten; keeping slot 0 identity makes the
+    ; dispatcher's inverse map a no-op for them. Real apps run in slots 1..N.
+    test r10d, r10d
+    jz .spg_build_inv
     ; --- seed the keyed RNG (r11) -----------------------------------------
     ;   seed = l3_slot_key[slot] ^ kernel_canary ^ RDTSC, guarded non-zero.
     mov rax, [rel l3_slot_key + r10*8]
@@ -4290,21 +4652,6 @@ sc_slot_perm_generate:
     mov rax, 0x9E3779B97F4A7C15         ; non-zero fallback (golden ratio)
 .spg_seed_ok:
     mov r11, rax                        ; r11 = SplitMix64 state
-    ; --- fwd[] identity init: store it INTO the inverse array's row first,
-    ; shuffle in place, then convert to the inverse (in-place) at the end.
-    ; r9 = this slot's table base in sc_slot_perm_inv.
-    mov eax, r10d
-    imul eax, eax, syscall_table_count
-    lea r9, [rel sc_slot_perm_inv]
-    add r9, rax                          ; r9 -> fwd[]/inv[] row for this slot
-    xor ecx, ecx
-.spg_id:
-    cmp ecx, syscall_table_count
-    jae .spg_id_done
-    mov byte [r9 + rcx], cl              ; fwd[i] = i   (count <= 256, fits a byte)
-    inc ecx
-    jmp .spg_id
-.spg_id_done:
     ; --- Fisher-Yates over fwd[]: for i = count-1 down to 1, j = rand % (i+1),
     ;     swap fwd[i], fwd[j]. Constant work per element; the only branch is the
     ;     loop bound, not the syscall number, so no per-number timing leak.
@@ -4328,31 +4675,35 @@ sc_slot_perm_generate:
     dec ecx
     jmp .spg_shuf
 .spg_shuf_done:
-    ; --- Convert fwd[] (real_row -> app_visible) to inv[] (app_visible ->
-    ; real_row), in place, via a temp on the stack. inv[fwd[i]] = i.
-    ; syscall_table_count bytes fit easily; reserve a 256-byte scratch.
-    sub rsp, 256
+.spg_build_inv:
+    ; --- Derive inv[] (app_visible -> real_row) from fwd[] (real_row ->
+    ; app_visible): inv[fwd[i]] = i. Written directly into this slot's
+    ; sc_slot_perm_inv row (r8 = inv row base).
+    mov eax, r10d
+    imul eax, eax, syscall_table_count
+    lea r8, [rel sc_slot_perm_inv]
+    add r8, rax                          ; r8 -> inv[] row for this slot
     xor ecx, ecx
 .spg_inv:
     cmp ecx, syscall_table_count
     jae .spg_inv_done
     movzx eax, byte [r9 + rcx]           ; app_visible = fwd[real_row=ecx]
-    mov byte [rsp + rax], cl             ; tmp[app_visible] = real_row
+    mov byte [r8 + rax], cl              ; inv[app_visible] = real_row
     inc ecx
     jmp .spg_inv
 .spg_inv_done:
-    ; copy tmp[] back over the row -> now it holds the inverse
-    xor ecx, ecx
-.spg_copy:
-    cmp ecx, syscall_table_count
-    jae .spg_copy_done
-    movzx eax, byte [rsp + rcx]
-    mov [r9 + rcx], al
-    inc ecx
-    jmp .spg_copy
-.spg_copy_done:
-    add rsp, 256
-    ; mark generated
+    ; Mark the tables BUILT (sc_slot_perm_ready) so a concurrent/later
+    ; sc_slot_perm_ensure does not re-shuffle this slot with a fresh seed —
+    ; a second generation would no longer match the FORWARD numbers already
+    ; baked into the running blob. Note: "tables built" is NOT "safe to apply".
+    ; The dispatcher must not consume sc_slot_perm_inv[] until the blob has
+    ; actually been rewritten to this generation's forward numbers; that COMMIT
+    ; is published by sc_slot_perm_apply_blob (sc_slot_perm_committed), strictly
+    ; after every immediate is patched. Until then the blob still holds RAW
+    ; numbers and the only correct mapping is identity. Setting ready here but
+    ; committed there closes the window where a sibling core could dispatch with
+    ; a valid inverse against a not-yet-rewritten (raw) blob and misroute a
+    ; non-returning syscall into a returning one (#UD at the trampoline's ud2).
     lea rax, [rel sc_slot_perm_ready]
     mov byte [rax + r10], 1
 .spg_done:
@@ -4388,6 +4739,91 @@ sc_slot_perm_generate:
     shr rcx, 31
     xor rax, rcx
     pop rcx
+    ret
+
+; ----------------------------------------------------------------------------
+; sc_slot_perm_apply_blob(edi=slot, rsi=blob_base) — rewrite this slot's copy
+; of the app blob so every syscall-number immediate carries the slot's
+; FORWARD-permuted number (real_row -> app_visible). The dispatcher's inverse
+; map then recovers the real row. Called from l3_copy_app_blob_to_slot
+; (usermode.asm) right after l3_derive_slot_key, with rsi = the slot's blob
+; base (slot_base + per-slot code slide), which is where the build-time
+; app_blob_start landed in this slot.
+;
+; Walks the build-emitted fixup table [app_syscall_fixups_start,
+; app_syscall_fixups_end): each 5-byte record is {u32 blob-relative offset of
+; a `mov eax, imm32` immediate, u8 raw compiled sysno}. For each record it
+; looks up fwd[slot*count + raw_sysno] and stores it as the new 4-byte
+; immediate at blob_base + offset.
+;
+; FAIL-SAFE: ensures the slot's permutation exists (sc_slot_perm_ensure);
+; slot 0 / the identity case leaves fwd[i]=i so every immediate is rewritten to
+; itself (a no-op). A raw_sysno >= syscall_table_count is left untouched (it is
+; not a real table row; the dispatcher's bounds check rejects it either way).
+; Writes go through USER_ACCESS brackets because the slot arena is PTE.U=1.
+; Preserves all caller regs.
+;
+; Internal plain-label helper (no FN_BEGIN / not global — matches
+; sc_slot_perm_generate/_ensure, so check_coverage.py requires no FN gate).
+; ----------------------------------------------------------------------------
+sc_slot_perm_apply_blob:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    movzx r10d, dil                     ; r10 = slot
+    cmp r10d, MAX_WINDOWS
+    jae .spa_done
+    mov r9, rsi                         ; r9 = slot blob base
+    ; Make sure this slot's permutation (and thus sc_slot_perm_fwd row) exists.
+    call sc_slot_perm_ensure            ; edi=slot still valid
+    ; r8 = this slot's forward-permutation row base.
+    mov eax, r10d
+    imul eax, eax, syscall_table_count
+    lea r8, [rel sc_slot_perm_fwd]
+    add r8, rax
+    ; rbx walks the fixup records; rsi is the table end.
+    lea rbx, [rel app_syscall_fixups_start]
+    lea rsi, [rel app_syscall_fixups_end]
+.spa_loop:
+    cmp rbx, rsi
+    jae .spa_done
+    mov ecx, [rbx]                      ; u32 blob-relative offset
+    movzx edx, byte [rbx + 4]           ; u8 raw sysno
+    add rbx, 5
+    cmp edx, syscall_table_count
+    jae .spa_loop                       ; not a real row -> leave immediate as-is
+    movzx eax, byte [r8 + rdx]          ; app_visible = fwd[raw_sysno]
+    ; store the 4-byte immediate at blob_base + offset
+    lea rdi, [r9 + rcx]
+    USER_ACCESS_BEGIN
+    mov dword [rdi], eax
+    USER_ACCESS_END
+    jmp .spa_loop
+.spa_done:
+    ; COMMIT: every immediate in this slot's blob now carries this generation's
+    ; forward number, so the dispatcher's inverse map is safe to apply. Publish
+    ; the commit LAST (after all the stores above). On x86's TSO model a sibling
+    ; core that observes committed[slot]==1 is guaranteed to also observe the
+    ; rewritten immediates and the inverse table, so it can never apply a live
+    ; inverse against a still-raw blob. (Slot 0 / identity also commits here as a
+    ; no-op rewrite, so its dispatch keeps mapping every number to itself.)
+    lea rax, [rel sc_slot_perm_committed]
+    mov byte [rax + r10], 1
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
     ret
 %endif
 
@@ -4435,6 +4871,29 @@ FN_BEGIN kernel_apply_app_manifest, 2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR),
     add rsp, 8                         ; discard stashed app_id
     ; Write mask + authenticator together so the dispatcher's HMAC check trusts
     ; this (legitimate) narrowing instead of treating it as tampering.
+%ifdef ENABLE_DEBUG_SERIAL
+    ; DEBUG (blank-app diagnosis): log the mask each slot receives at launch so
+    ; we can confirm GUI-capable apps actually get CAP_GUI (0x02). rdi=slot,
+    ; rsi=mask here; both must survive for cap_mask_store below.
+    push rdi
+    push rsi
+    SER 'X'
+    SER 'M'
+    SER 'A'
+    SER 'N'
+    SER ' '
+    SER 's'
+    movzx edi, dil
+    call ser_print_hex64              ; slot
+    SER ' '
+    SER 'm'
+    movzx edi, sil
+    call ser_print_hex64              ; applied cap mask
+    SER 13
+    SER 10
+    pop rsi
+    pop rdi
+%endif
     call cap_mask_store               ; (rdi=slot, rsi=mask)
 .kam_done:
     ret
