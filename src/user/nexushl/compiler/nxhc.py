@@ -12,7 +12,7 @@ KEYWORDS = {
     "use","app","module","fn","let","if","else","while","for","return",
     "str","i8","i16","i32","i64","u8","u16","u32","u64","ptr","void","bool",
     "true","false","asm","syscall","extern","const","struct","state","break","continue",
-    "global",
+    "global","data","table",
     # Kernel-mode explicit-register ABI:
     #   preserves(...) — callee-save contract (see gen_kernel_fn)
     #   call           — register-annotated call statement `call f(al: x);`
@@ -195,6 +195,38 @@ def parse(toks,path):
         elif t.v=="extern":
             p.eat(); nm=p.eat("id").v; p.match(";")
             decls.append(node("extern",name=nm))
+        elif t.v=="data":
+            # Kernel-mode data with an EXACT (unprefixed) symbol name, explicit
+            # byte size, and an optional fill value: `data slot_cap_mask: 16 = CAP_CORE;`
+            # Emits `NAME: times <size> db <init>`. Indexable like `state`
+            # (bounds-checked). Export separately with `global NAME;`. This lets
+            # kernel buffers keep the names/sizes/initializers the rest of the
+            # kernel binds to — which plain `state` (prefixed, zero-only) can't.
+            p.eat(); nm=p.eat("id").v; p.eat(":"); sz=p.eat("num").v
+            init=node("int",val=0)
+            if p.match("="):
+                neg=False
+                if p.peek().k=="-": p.eat(); neg=True
+                if p.peek().k=="num":
+                    v=p.eat("num").v
+                    init=node("int",val=(-v if neg else v))
+                else:
+                    init=node("ident",name=p.eat("id").v)  # const name, resolved later
+            p.match(";")
+            decls.append(node("data",name=nm,size=sz,init=init))
+        elif t.v=="table":
+            # Kernel-mode dispatch table: a fixed, ordered list of handler fn
+            # names. Emits `NAME: dq fn0, dq fn1, ...` and registers a count so
+            # `call_table(NAME, idx)` can do a BOUNDS-CHECKED indirect call into
+            # only this controlled set — the safe replacement for a raw
+            # `jmp [reg+off]` through an arbitrary pointer.
+            p.eat(); nm=p.eat("id").v; p.eat("{")
+            entries=[]
+            while not p.match("}"):
+                entries.append(p.eat("id").v)
+                p.match(",")
+            p.match(";")
+            decls.append(node("table",name=nm,entries=entries))
         elif t.v=="state":
             p.eat(); p.eat("{")
             fields=[]
@@ -435,6 +467,7 @@ class CG:
         s.str_lbls={}
         s.state_defs={}
         s.state_sizes={}      # state buffer name -> byte size (for bounds checks)
+        s.table_counts={}     # dispatch table name -> entry count (for call_table)
         s.consts={}
         s.externs=set()
         s.loops=[]  # (brk_lbl, cont_lbl)
@@ -670,6 +703,31 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None):
             cg.consts[d["name"]]=d["val"]
         elif d["k"]=="extern":
             cg.externs.add(d["name"])
+        elif d["k"]=="data":
+            if not kernel:
+                raise SyntaxError("`data` declaration requires --target kernel")
+            sz=d["size"]
+            if sz<=0:
+                raise SyntaxError(f"data {d['name']}: size must be positive")
+            iv=d["init"]
+            if iv["k"]=="int":
+                initval=iv["val"]
+            elif iv["k"]=="ident" and iv["name"] in cg.consts:
+                initval=cg.consts[iv["name"]]
+            else:
+                raise SyntaxError(f"data {d['name']}: init must be a number or const")
+            nm=d["name"]
+            cg.state_defs[nm]=nm          # exact, unprefixed name
+            cg.state_sizes[nm]=sz
+            cg.data.append(f"{nm}: times {sz} db {initval}")
+        elif d["k"]=="table":
+            if not kernel:
+                raise SyntaxError("`table` declaration requires --target kernel")
+            nm=d["name"]; entries=d["entries"]
+            if not entries:
+                raise SyntaxError(f"table {nm}: must have at least one entry")
+            cg.table_counts[nm]=len(entries)
+            cg.data.append(f"{nm}: dq " + ", ".join(entries))
         elif d["k"]=="state":
             for nm,sz in d["fields"]:
                 if sz <= 0:
@@ -1371,6 +1429,26 @@ def gen_expr(st,e):
                 else: cg.emit("    mov [rax], rcx")
                 cg.emit("    xor rax, rax")
             return
+        # Builtin: bounds-checked dispatch. call_table(TBL, idx) calls the
+        # idx-th handler fn registered in `table TBL { ... }`, after checking
+        # idx < entry-count (out-of-range -> #UD). The only reachable targets
+        # are the table's fixed handler set, so this is a SAFE replacement for a
+        # raw `jmp/call [reg]` through an attacker-influenceable pointer. The
+        # handler's return value is left in rax.
+        if name=="call_table":
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("call_table() requires --target kernel")
+            if len(args)!=2: raise SyntaxError("call_table takes (table, index)")
+            tnode=args[0]
+            if tnode.get("k")!="ident" or tnode["name"] not in cg.table_counts:
+                raise SyntaxError("call_table: first arg must be a declared `table`")
+            tname=tnode["name"]; cnt=cg.table_counts[tname]
+            gen_expr(st,args[1])                 # idx -> rax
+            cg.emit(f"    cmp rax, {cnt}")
+            cg.emit(f"    jae {cg.oob()}")
+            cg.emit(f"    lea rcx, [rel {tname}]")
+            cg.emit("    call [rcx + rax*8]")
+            return
         # Builtins: privileged / raw CPU instruction intrinsics (kernel mode
         # only). They let the syscall entry/exit trampoline and other ring-0
         # code be written in structured NHLK without dropping to an `asm{}`
@@ -1384,6 +1462,22 @@ def gen_expr(st,e):
             if args: raise SyntaxError(f"{name}() takes no args")
             for ln in _NULLARY_INTRINSICS[name]:
                 cg.emit("    "+ln)
+            return
+        if name in ("cpuid_eax","cpuid_ebx","cpuid_ecx","cpuid_edx"):
+            # cpuid_<reg>(leaf) -> rax = the requested result register.
+            # Clobbers rbx/rcx/rdx (cpuid overwrites all four) — safe in the
+            # structured stack machine, which keeps live values in rbp slots.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if len(args)!=1: raise SyntaxError(f"{name} takes 1 arg (leaf)")
+            gen_expr(st,args[0])              # leaf -> rax (eax)
+            cg.emit("    mov eax, eax")
+            cg.emit("    xor ecx, ecx")
+            cg.emit("    cpuid")
+            pick={"cpuid_eax":"eax","cpuid_ebx":"ebx","cpuid_ecx":"ecx","cpuid_edx":"edx"}[name]
+            if pick!="eax":
+                cg.emit(f"    mov eax, {pick}")
+            cg.emit("    mov eax, eax")        # zero-extend result into rax
             return
         if name in ("rdmsr","write_cr3","invlpg","inb","outb","wrmsr","wrmsr_split"):
             if not getattr(cg,"kernel",False):
