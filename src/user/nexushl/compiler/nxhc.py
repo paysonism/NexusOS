@@ -385,6 +385,25 @@ def parse_primary(p):
 ARG_REGS=["rdi","rsi","rdx","r10","r8","r9"]           # syscall ABI
 CALL_REGS=["rdi","rsi","rdx","rcx","r8","r9"]          # System V AMD64 (regular calls)
 
+# Zero-argument CPU instruction intrinsics (kernel mode only). Each maps to a
+# fixed instruction sequence emitted inline — no call, no asm{} escape. Control
+# intrinsics (sysretq/iretq/hlt) do not return; value intrinsics leave their
+# result in rax (the accumulator) so they compose in expressions. See the
+# intrinsic dispatch in gen_expr for the arg-taking forms (rdmsr/wrmsr/inb/...).
+_NULLARY_INTRINSICS={
+    # control / barrier — no value
+    "cli":["cli"], "sti":["sti"], "hlt":["hlt"], "swapgs":["swapgs"],
+    "sysretq":["o64 sysret"], "iretq":["iretq"], "ud2":["ud2"],
+    "lfence":["lfence"], "mfence":["mfence"], "sfence":["sfence"],
+    "pause":["pause"], "wbinvd":["wbinvd"], "nop":["nop"],
+    "smap_open":["stac"], "smap_close":["clac"],
+    # value-producing — result in rax
+    "rdtsc":["rdtsc","shl rdx, 32","mov eax, eax","or rax, rdx"],
+    "rdrand":["rdrand rax"],          # single attempt; CF=success (loop in NHLK if needed)
+    "read_cr2":["mov rax, cr2"],
+    "read_cr3":["mov rax, cr3"],
+}
+
 def rbpoff(o):
     # Format a signed rbp displacement: negative locals -> "-N", positive
     # (stack-passed params 7+) -> "+N".  o == 0 collapses to "".
@@ -1242,6 +1261,68 @@ def gen_expr(st,e):
                 if name=="sb": cg.emit("    mov [rax], cl")
                 elif name=="sw": cg.emit("    mov [rax], ecx")
                 else: cg.emit("    mov [rax], rcx")
+                cg.emit("    xor rax, rax")
+            return
+        # Builtins: privileged / raw CPU instruction intrinsics (kernel mode
+        # only). They let the syscall entry/exit trampoline and other ring-0
+        # code be written in structured NHLK without dropping to an `asm{}`
+        # escape — each intrinsic emits exactly one (or a tiny fixed) real
+        # instruction. Author intent stays explicit (a named builtin), so the
+        # "no hidden privileged ops" security property is preserved: privileged
+        # instructions appear ONLY where the source names an intrinsic.
+        if name in _NULLARY_INTRINSICS:
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if args: raise SyntaxError(f"{name}() takes no args")
+            for ln in _NULLARY_INTRINSICS[name]:
+                cg.emit("    "+ln)
+            return
+        if name in ("rdmsr","write_cr3","invlpg","inb","outb","wrmsr","wrmsr_split"):
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if name=="rdmsr":
+                # rdmsr(msr) -> rax = (edx<<32)|eax. ecx = msr.
+                if len(args)!=1: raise SyntaxError("rdmsr takes 1 arg (msr)")
+                gen_expr(st,args[0]); cg.emit("    mov ecx, eax")
+                cg.emit("    rdmsr")
+                cg.emit("    shl rdx, 32"); cg.emit("    mov eax, eax"); cg.emit("    or rax, rdx")
+            elif name=="wrmsr":
+                # wrmsr(msr, val64): ecx=msr, edx:eax = val64.
+                if len(args)!=2: raise SyntaxError("wrmsr takes 2 args (msr, val64)")
+                gen_expr(st,args[0]); cg.emit("    push rax")          # msr
+                gen_expr(st,args[1])                                   # val64 -> rax
+                cg.emit("    mov rdx, rax"); cg.emit("    shr rdx, 32") # hi
+                cg.emit("    pop rcx")                                 # msr -> ecx (low 32 used)
+                cg.emit("    wrmsr")
+                cg.emit("    xor rax, rax")
+            elif name=="wrmsr_split":
+                # wrmsr_split(msr, lo32, hi32): ecx=msr, eax=lo, edx=hi.
+                if len(args)!=3: raise SyntaxError("wrmsr_split takes 3 args (msr, lo, hi)")
+                gen_expr(st,args[0]); cg.emit("    push rax")          # msr
+                gen_expr(st,args[1]); cg.emit("    push rax")          # lo
+                gen_expr(st,args[2]); cg.emit("    mov edx, eax")      # hi -> edx
+                cg.emit("    pop rax")                                 # lo -> eax
+                cg.emit("    pop rcx")                                 # msr -> ecx
+                cg.emit("    wrmsr")
+                cg.emit("    xor rax, rax")
+            elif name=="write_cr3":
+                if len(args)!=1: raise SyntaxError("write_cr3 takes 1 arg")
+                gen_expr(st,args[0]); cg.emit("    mov cr3, rax"); cg.emit("    xor rax, rax")
+            elif name=="invlpg":
+                if len(args)!=1: raise SyntaxError("invlpg takes 1 arg (addr)")
+                gen_expr(st,args[0]); cg.emit("    invlpg [rax]"); cg.emit("    xor rax, rax")
+            elif name=="inb":
+                # inb(port) -> rax = byte read. dx = port.
+                if len(args)!=1: raise SyntaxError("inb takes 1 arg (port)")
+                gen_expr(st,args[0]); cg.emit("    mov dx, ax")
+                cg.emit("    in al, dx"); cg.emit("    movzx rax, al")
+            elif name=="outb":
+                # outb(port, val): dx=port, al=val.
+                if len(args)!=2: raise SyntaxError("outb takes 2 args (port, val)")
+                gen_expr(st,args[0]); cg.emit("    push rax")          # port
+                gen_expr(st,args[1]); cg.emit("    mov ecx, eax")      # val -> cl
+                cg.emit("    pop rdx")                                 # port -> dx
+                cg.emit("    mov al, cl"); cg.emit("    out dx, al")
                 cg.emit("    xor rax, rax")
             return
         if name in getattr(cg,"fn_argc",{}) and len(args)!=cg.fn_argc[name]:
