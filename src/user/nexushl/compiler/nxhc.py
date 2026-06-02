@@ -214,6 +214,7 @@ def parse(toks,path):
     return decls
 
 def parse_fn(p):
+    fl=p.peek().line
     p.eat("fn"); name=p.eat("id").v
     p.eat("(")
     params=[]      # plain param names (user-mode / System-V kernel fns)
@@ -245,7 +246,7 @@ def parse_fn(p):
         preserves=plist
     body=parse_block(p)
     return node("fn",name=name,params=params,regparams=regparams,
-                preserves=preserves,body=body)
+                preserves=preserves,body=body,line=fl)
 
 def parse_block(p):
     p.eat("{")
@@ -255,6 +256,17 @@ def parse_block(p):
     return stmts
 
 def parse_stmt(p):
+    # Capture the source line of every statement so codegen can stamp each
+    # emitted instruction with `; <file>:<line>` provenance (zero runtime cost,
+    # no extra instructions — see gen_stmt). This is the backbone of NHLK's
+    # "disassembly traces straight back to source" debugging story.
+    ln=p.peek().line
+    nd=_parse_stmt_inner(p)
+    if isinstance(nd,dict) and "line" not in nd:
+        nd["line"]=ln
+    return nd
+
+def _parse_stmt_inner(p):
     t=p.peek()
     if t.v=="let":
         p.eat(); nm=p.eat("id").v; p.eat("="); e=parse_expr(p); p.match(";")
@@ -416,6 +428,8 @@ class CG:
         s.text=[]; s.rodata=[]; s.data=[]
         s.lbl=0
         s.kernel=kernel
+        s.src=None          # source basename for `; file:line` provenance
+        s.srcmap=True       # stamp provenance comments (zero runtime cost)
         s.globals=set()       # kernel-mode: symbols to emit `global` for
         s.prefix=app_prefix
         s.str_lbls={}
@@ -469,6 +483,19 @@ _PEEP_LOAD_RAX = re.compile(r"^\s*mov\s+rax,\s*(.+?)\s*$")
 _PEEP_PUSH_RAX = re.compile(r"^\s*push\s+rax\s*$")
 _PEEP_POP_REG  = re.compile(r"^\s*pop\s+([a-z][a-z0-9]+)\s*$")
 _PEEP_MOV_R_RAX = re.compile(r"^\s*mov\s+([a-z][a-z0-9]+),\s*rax\s*$")
+
+def _code(line):
+    # The instruction text of a generated line, minus any `; file:line`
+    # provenance comment. Generated .text never contains a literal ';' except
+    # as a comment (string data lives in .rodata as db bytes), so a plain split
+    # is safe. The peephole matches on this so provenance never blocks an
+    # optimization; the comment is re-attached to whichever instruction survives.
+    h = line.find(";")
+    return line if h < 0 else line[:h].rstrip()
+
+def _comment(line):
+    h = line.find(";")
+    return ("    " + line[h:]) if h >= 0 else ""
 _REG_WORD = re.compile(r"\b([a-z][a-z0-9]+)\b")
 # Operands considered safe to relocate: they read no registers other than
 # rbp/rip-relative or are pure immediates. We detect by checking the operand
@@ -502,19 +529,21 @@ def _peephole(lines):
     while i < n:
         # Detect run of (mov rax, OP ; push rax) pairs.
         ops = []
+        cmts = []
         j = i
         while j + 1 < n:
-            m1 = _PEEP_LOAD_RAX.match(lines[j])
+            m1 = _PEEP_LOAD_RAX.match(_code(lines[j]))
             if not m1: break
-            if not _PEEP_PUSH_RAX.match(lines[j+1]): break
+            if not _PEEP_PUSH_RAX.match(_code(lines[j+1])): break
             ops.append(m1.group(1))
+            cmts.append(_comment(lines[j]))   # provenance of the load survives
             j += 2
         if ops:
             # Count trailing pops (must equal len(ops), all distinct, none rax).
             pops = []
             k = j
             while k < n:
-                m2 = _PEEP_POP_REG.match(lines[k])
+                m2 = _PEEP_POP_REG.match(_code(lines[k]))
                 if not m2: break
                 pops.append(m2.group(1))
                 k += 1
@@ -551,7 +580,7 @@ def _peephole(lines):
                 if safe:
                     for m, popreg in enumerate(pops):
                         src = ops[N - 1 - m]
-                        out.append(f"    mov {popreg}, {src}")
+                        out.append(f"    mov {popreg}, {src}{cmts[N - 1 - m]}")
                     i = k
                     continue
         out.append(lines[i])
@@ -564,11 +593,11 @@ def _peephole(lines):
     n = len(lines)
     while i < n:
         if (i + 1 < n
-            and _PEEP_PUSH_RAX.match(lines[i])
-            and _PEEP_POP_REG.match(lines[i+1])):
-            reg = _PEEP_POP_REG.match(lines[i+1]).group(1)
+            and _PEEP_PUSH_RAX.match(_code(lines[i]))
+            and _PEEP_POP_REG.match(_code(lines[i+1]))):
+            reg = _PEEP_POP_REG.match(_code(lines[i+1])).group(1)
             if reg != "rax":
-                out.append(f"    mov {reg}, rax")
+                out.append(f"    mov {reg}, rax{_comment(lines[i])}")
             i += 2
             continue
         out.append(lines[i])
@@ -583,14 +612,14 @@ def _peephole(lines):
     n = len(lines)
     while i < n:
         if i + 2 < n:
-            m1 = _PEEP_LOAD_RAX.match(lines[i])
-            m2 = _PEEP_MOV_R_RAX.match(lines[i+1])
-            m3 = _PEEP_POP_REG.match(lines[i+2])
+            m1 = _PEEP_LOAD_RAX.match(_code(lines[i]))
+            m2 = _PEEP_MOV_R_RAX.match(_code(lines[i+1]))
+            m3 = _PEEP_POP_REG.match(_code(lines[i+2]))
             if m1 and m2 and m3 and m3.group(1) == "rax" and m2.group(1) != "rax":
                 op = m1.group(1)
                 tgt = m2.group(1)
                 if _operand_safe_for_target(op, tgt):
-                    out.append(f"    mov {tgt}, {op}")
+                    out.append(f"    mov {tgt}, {op}{_comment(lines[i])}")
                     out.append(lines[i+2])
                     i += 3
                     continue
@@ -598,10 +627,16 @@ def _peephole(lines):
         i += 1
     return out
 
-def compile_unit(decls,app_prefix,embed=False,kernel=False):
+def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None):
     global LAST_SIGS
     cg=CG(app_prefix,kernel=kernel)
     cg.embed=embed
+    cg.src=src
+    # Source-line provenance is kernel-only: it is pure NASM comments (zero
+    # machine-code cost), but gating it to kernel mode guarantees the ring-3
+    # app blobs + their MAC signatures stay byte-identical and keeps the
+    # traceability where it matters — ring-0 debugging.
+    cg.srcmap=kernel and (src is not None)
     app_meta={"name":app_prefix,"stack":4096}
     # collect top-level
     str_defs={}
@@ -711,6 +746,8 @@ def gen_kernel_fn(cg,fn):
     regparams=fn.get("regparams") or []
     preserves=fn.get("preserves")
     body=fn["body"]
+    if getattr(cg,"srcmap",False) and cg.src and fn.get("line"):
+        cg.emit(f"; ===== fn {name}  <{cg.src}:{fn['line']}> =====")
     all_asm = len(body)>0 and all(s.get("k")=="asm" for s in body)
     if all_asm:
         if params or regparams or preserves:
@@ -1013,6 +1050,22 @@ class FnState:
         return s.scope[name]
 
 def gen_stmt(st,s):
+    cg=st.cg; k=s["k"]
+    # Provenance: remember where this statement's emitted instructions start so
+    # we can stamp the FIRST one with `; <file>:<line>` (zero runtime cost, no
+    # added instructions). asm-escape statements already carry author text, so
+    # skip them; labels are never stamped (handled below).
+    _prov_start = len(cg.text)
+    _gen_stmt_body(st,s)
+    if (getattr(cg,"srcmap",False) and cg.src and s.get("line")
+            and k!="asm" and len(cg.text) > _prov_start):
+        ln = cg.text[_prov_start]
+        # only stamp a real instruction line (indented, not a label) with no
+        # existing comment
+        if ln.startswith("    ") and not ln.rstrip().endswith(":") and ";" not in ln:
+            cg.text[_prov_start] = ln + f"    ; {cg.src}:{s['line']}"
+
+def _gen_stmt_body(st,s):
     cg=st.cg; k=s["k"]
     if k=="let":
         off=st.new_local(s["name"])
@@ -1390,7 +1443,8 @@ def compile_file(path, lib_dir, app_prefix=None, embed=False, return_sigs=False,
     # Kernel modules are not prefixed (their labels must match existing kernel
     # symbols verbatim); the prefix is retained only for the user-mode path.
     unit_prefix = prefix if kernel else "app_hl_"+prefix
-    asm=compile_unit(expanded, unit_prefix, embed=embed, kernel=kernel)
+    asm=compile_unit(expanded, unit_prefix, embed=embed, kernel=kernel,
+                     src=os.path.basename(path))
     if return_sigs:
         return asm, LAST_SIGS
     return asm
