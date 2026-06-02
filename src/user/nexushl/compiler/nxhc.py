@@ -12,7 +12,7 @@ KEYWORDS = {
     "use","app","module","fn","let","if","else","while","for","return",
     "str","i8","i16","i32","i64","u8","u16","u32","u64","ptr","void","bool",
     "true","false","asm","syscall","extern","const","struct","state","break","continue",
-    "global","data","table",
+    "global","data","table","naked",
     # Kernel-mode explicit-register ABI:
     #   preserves(...) — callee-save contract (see gen_kernel_fn)
     #   call           — register-annotated call statement `call f(al: x);`
@@ -276,9 +276,17 @@ def parse_fn(p):
             if p.match(")"): break
             p.eat(",")
         preserves=plist
+    # `naked`: no compiler-emitted frame/prologue/epilogue/ret. The body owns
+    # the entire stack discipline via intrinsics (read_rsp/write_rsp/push_val/
+    # pop_val) and ends with its own control transfer (sysretq/iretq/...). For
+    # the SYSCALL `LSTAR` entry trampoline, which runs on the user stack with no
+    # frame and exits via sysret — unrepresentable by a normal `fn`.
+    naked=False
+    if p.peek().v=="naked":
+        p.eat(); naked=True
     body=parse_block(p)
     return node("fn",name=name,params=params,regparams=regparams,
-                preserves=preserves,body=body,line=fl)
+                preserves=preserves,body=body,line=fl,naked=naked)
 
 def parse_block(p):
     p.eat("{")
@@ -446,6 +454,9 @@ _NULLARY_INTRINSICS={
     "rdrand":["rdrand rax"],          # single attempt; CF=success (loop in NHLK if needed)
     "read_cr2":["mov rax, cr2"],
     "read_cr3":["mov rax, cr3"],
+    # naked/raw-stack primitives (for `naked` fns, e.g. the SYSCALL trampoline)
+    "read_rsp":["mov rax, rsp"],      # current stack pointer
+    "pop_val":["pop rax"],            # pop top of stack into rax
 }
 
 def rbpoff(o):
@@ -468,6 +479,7 @@ class CG:
         s.state_defs={}
         s.state_sizes={}      # state buffer name -> byte size (for bounds checks)
         s.table_counts={}     # dispatch table name -> entry count (for call_table)
+        s.fnbegin_emitted=set()  # exported kernel fns emitted via FN_BEGIN (skip top-level global)
         s.consts={}
         s.externs=set()
         s.loops=[]  # (brk_lbl, cont_lbl)
@@ -773,6 +785,8 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None):
     # they document the module's public surface.
     if kernel:
         for g in sorted(cg.globals):
+            if g in cg.fnbegin_emitted:
+                continue   # FN_BEGIN already emitted `global g` for this fn
             out.append(f"global {g}")
     if not embed:
         out.append("section .text")
@@ -790,6 +804,24 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None):
         out.extend(cg.data)
     LAST_SIGS=cg.sigs
     return "\n".join(out)+"\n"
+
+def _kfn_label(cg,name,argc):
+    # Emit the entry label for a kernel fn. Exported fns (declared `global`)
+    # go through FN_BEGIN so they register a signature (satisfies
+    # tools/check_coverage.py and the signature registry / traceability). Under
+    # the default build (no ENABLE_TRACE/ENABLE_SIG_SECTION) FN_BEGIN expands to
+    # exactly `global name` + `name:`, so this is byte-identical to a bare label.
+    # Internal (non-exported) fns keep a plain label.
+    if name in cg.globals:
+        cg.emit(f"FN_BEGIN {name}, {argc}, 0, FN_RET_SCALAR")
+        cg.fnbegin_emitted.add(name)
+    else:
+        cg.emit(f"{name}:")
+
+def _kfn_end(cg,name):
+    # Matching FN_END (only for FN_BEGIN-opened fns), emitted just before `ret`.
+    if name in cg.fnbegin_emitted:
+        cg.emit(f"    FN_END {name}")
 
 def gen_kernel_fn(cg,fn):
     # Kernel-mode function codegen.
@@ -832,6 +864,31 @@ def gen_kernel_fn(cg,fn):
         for s in body:
             for ln in s["text"].split("\\n"):
                 cg.emit("    "+ln)
+        return
+    if fn.get("naked"):
+        # Naked fn: no compiler frame/prologue/epilogue/ret. The body owns the
+        # stack via read_rsp/write_rsp/push_val/pop_val and exits via its own
+        # control intrinsic (sysretq/iretq/...). No `let` (there is no frame to
+        # hold locals — use `state`/`data` scratch buffers instead). Exported
+        # naked fns emit a bare `global`+label (NOT FN_BEGIN: the raw entry can't
+        # run the FN_BEGIN trace push/call; syscall_entry is in the coverage
+        # CONTROL_ALLOW set for exactly this reason).
+        if params or regparams or preserves is not None:
+            raise SyntaxError(f"naked fn {name!r} takes no params/preserves clause")
+        def _has_let(stmts):
+            for s in stmts:
+                if s.get("k")=="let": return True
+                if s.get("k")=="if" and (_has_let(s.get("then",[])) or _has_let(s.get("els",[]) or [])): return True
+                if s.get("k")=="while" and _has_let(s.get("body",[])): return True
+            return False
+        if _has_let(body):
+            raise SyntaxError(f"naked fn {name!r} cannot use `let` (no frame); use state/data buffers")
+        cg.emit(f"{name}:")
+        st=FnState(cg,{},[-8],0)
+        st.epilogue=f".fn_end_{cg.lbl}_{name}"
+        for stmt in body:
+            gen_stmt(st,stmt)
+        cg.emit(f"{st.epilogue}:")    # target for any `return;` (no auto ret follows)
         return
     # ------------------------------------------------------------------
     # Explicit-register-ABI structured function (kernel mode).
@@ -884,7 +941,7 @@ def gen_kernel_fn(cg,fn):
     n_locals=count_lets(body)
     local_size=8*(reg_param_count+n_locals)+64
     local_size=(local_size+15)&~15
-    cg.emit(f"{name}:")
+    _kfn_label(cg,name,len(params))
     cg.emit("    push rbp")
     cg.emit("    mov rbp, rsp")
     cg.emit(f"    sub rsp, {local_size}")
@@ -903,6 +960,7 @@ def gen_kernel_fn(cg,fn):
     cg.emit("    pop rbx")
     cg.emit("    mov rsp, rbp")
     cg.emit("    pop rbp")
+    _kfn_end(cg,name)
     cg.emit("    ret")
 
 # Deterministic full GP set for `preserves(all)`: every caller-visible
@@ -982,7 +1040,7 @@ def gen_kernel_fn_regabi(cg,fn,name,regparams,preserves,body):
     for b in bindings:
         b[3]=off; scope[b[0]]=off; off-=8
 
-    cg.emit(f"{name}:")
+    _kfn_label(cg,name,len(bindings))
     # callee-save contract first, so it brackets the whole frame.
     for c in preserved:
         cg.emit(f"    push {c}")
@@ -1031,6 +1089,7 @@ def gen_kernel_fn_regabi(cg,fn,name,regparams,preserves,body):
     cg.emit("    pop rbp")
     for c in reversed(preserved):
         cg.emit(f"    pop {c}")
+    _kfn_end(cg,name)
     cg.emit("    ret")
 
 def gen_fn(cg,fn,prefix):
@@ -1478,6 +1537,17 @@ def gen_expr(st,e):
             if pick!="eax":
                 cg.emit(f"    mov eax, {pick}")
             cg.emit("    mov eax, eax")        # zero-extend result into rax
+            return
+        if name in ("write_rsp","push_val"):
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if len(args)!=1: raise SyntaxError(f"{name} takes 1 arg")
+            gen_expr(st,args[0])
+            if name=="write_rsp":
+                cg.emit("    mov rsp, rax")
+            else:  # push_val
+                cg.emit("    push rax")
+            cg.emit("    xor rax, rax")
             return
         if name in ("rdmsr","write_cr3","invlpg","inb","outb","wrmsr","wrmsr_split"):
             if not getattr(cg,"kernel",False):
