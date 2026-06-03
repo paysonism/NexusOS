@@ -5,53 +5,29 @@
 ; boot device handle (which is the ESP partition), read its BPB, and capture
 ; the FAT32 parameters needed to walk DATA.IMG's cluster chain.
 ;
-; Status:
+; Status (all four sub-phases LANDED — see the routines below this comment):
 ;   [x] HandleProtocol(devhandle, BlockIoGuid)
 ;   [x] Allocate sector scratch
 ;   [x] Read partition LBA 0 and parse FAT32 BPB into v_fat_* fields
-;   [ ] Walk root directory cluster, find "DATA    IMG" entry          (TODO Phase 1b.2)
-;   [ ] Walk FAT32 chain, coalesce runs into extents at               (TODO Phase 1b.3)
+;   [x] Walk root directory cluster, find "DATA    IMG" entry  (was Phase 1b.2)
+;       -> fat32_find_dirent, walking \EFI \BOOT \DATA.IMG by 8.3 name
+;   [x] Walk FAT32 chain, coalesce runs into extents at        (was Phase 1b.3)
 ;       STORAGE_EXTENTS_ADDR, write VBE_STORAGE_EXT_* fields
-;   [ ] Resolve partition-relative -> absolute disk LBA via            (TODO Phase 1b.4)
-;       DevicePath HARDDRIVE node (needed when NVMe driver lands)
+;       -> fat32_emit_data_extents
+;   [~] Resolve partition-relative -> absolute disk LBA via    (was Phase 1b.4)
+;       DevicePath HARDDRIVE node. Deferred until a kernel NVMe/USB-MSC backing
+;       driver exists: VBE_STORAGE_CLASS_OFF stays 0 so ramdisk_flush is a
+;       no-op and the partition-relative extents captured here are correct for
+;       the future absolute-LBA fixup. Tracked as see #21 (and as a roadmap
+;       item in docs/nexushl-boot-conversion.md Phase 1b.4), not a stray TODO.
 ;
-; Until Phase 1b.2-1b.3 land, VBE_STORAGE_EXT_CNT_OFF stays 0 so the kernel's
-; ramdisk_flush keeps no-op behavior. The BPB capture below is non-destructive
-; and idempotent - safe to call every boot.
+; The BPB capture below is non-destructive and idempotent - safe to call every
+; boot. Non-fatal on every UEFI error: failure leaves the contract zeroed and
+; the rest of boot is unaffected.
 ;
-; Non-fatal on every UEFI error: failure leaves the contract zeroed and the
-; rest of boot is unaffected.
+; All EFI_BLOCK_IO_PROTOCOL / FAT32 layout constants are named + spec-cited in
+; src/include/uefi_abi.inc (included via uefi_loader_defs.inc).
 ; ============================================================================
-; EFI_BLOCK_IO_PROTOCOL layout
-%define BIO_MEDIA      8
-%define BIO_RESET      16
-%define BIO_READ       24
-%define BIO_WRITE      32
-%define BIO_FLUSH      40
-
-; EFI_BLOCK_IO_MEDIA layout (natural alignment, EFI 2.0)
-%define BIOM_MEDIAID   0
-%define BIOM_BLKSZ     32     ; UINT32 BlockSize after 5 BOOLEAN + pad
-%define BIOM_LASTBLK   40     ; EFI_LBA LastBlock (u64, 8-aligned)
-; Note: older EFI 1.x had BlockSize at +24; we don't support those.
-
-; FAT32 BPB offsets (from start of partition sector 0)
-%define BPB32_BYTSPSEC 11
-%define BPB32_SECPCLUS 13
-%define BPB32_RSVDSEC  14
-%define BPB32_NUMFATS  16
-%define BPB32_FATSZ32  36
-%define BPB32_ROOTCLUS 44
-%define BPB32_SIG      510    ; should be 0xAA55
-
-; FAT32 directory entry offsets
-%define DIRENT_ATTR       11
-%define DIRENT_CLUS_HI    20
-%define DIRENT_CLUS_LO    26
-%define DIRENT_FILE_SIZE  28
-%define ATTR_LONG_NAME    0x0F
-%define ATTR_DIRECTORY    0x10
-%define FAT32_EOC         0x0FFFFFF8
 
 resolve_data_img_extents:
     push rbx
@@ -107,7 +83,7 @@ resolve_data_img_extents:
     test r12, r12
     jz .rdx_fail
     mov eax, [r12 + BIOM_BLKSZ]
-    cmp eax, 512
+    cmp eax, FAT_BYTES_PER_SEC
     jne .rdx_fail              ; only 512 B blocks supported today
     mov [v_part_blksz], eax
     mov eax, [r12 + BIOM_MEDIAID]
@@ -117,7 +93,7 @@ resolve_data_img_extents:
     mov rcx, rbx
     mov edx, [v_part_mediaid]
     xor r8, r8                 ; LBA = 0
-    mov r9, 512                ; BufferSize
+    mov r9, FAT_BYTES_PER_SEC  ; BufferSize
     mov rax, [v_bpb_buf]
     mov [rsp+32], rax
     mov rax, [rbx + BIO_READ]
@@ -127,10 +103,10 @@ resolve_data_img_extents:
 
     ; --- Validate boot signature, then FAT32 BPB ---
     mov r13, [v_bpb_buf]
-    cmp word [r13 + BPB32_SIG], 0xAA55
+    cmp word [r13 + BPB32_SIG], FAT_BOOTSIG
     jne .rdx_fail
     movzx eax, word [r13 + BPB32_BYTSPSEC]
-    cmp eax, 512
+    cmp eax, FAT_BYTES_PER_SEC
     jne .rdx_fail
     movzx eax, byte [r13 + BPB32_SECPCLUS]
     test eax, eax
@@ -220,7 +196,7 @@ read_part_sector:
     mov r11, [v_blkio]
     mov rcx, r11
     mov edx, [v_part_mediaid]
-    mov r9, 512
+    mov r9, FAT_BYTES_PER_SEC
     mov [rsp+32], r10
     mov rax, [r11 + BIO_READ]
     call rax
@@ -257,7 +233,7 @@ fat32_get_next_cluster:
     and edx, 511
     mov r10, [v_bpb_buf]
     mov eax, [r10 + rdx]
-    and eax, 0x0FFFFFFF
+    and eax, FAT32_ENTRY_MASK
     clc
     add rsp, 40
     ret
@@ -302,7 +278,7 @@ fat32_find_dirent:
     mov al, [r15]
     test al, al
     jz .fde_fail                 ; 0x00 marks end of this directory
-    cmp al, 0xE5
+    cmp al, DIRENT_FREE
     je .fde_next_entry
     mov bl, [r15 + DIRENT_ATTR]
     mov al, bl
@@ -326,7 +302,7 @@ fat32_find_dirent:
     clc
     jmp .fde_done
 .fde_next_entry:
-    add r15, 32
+    add r15, DIRENT_SIZE
     dec ecx
     jnz .fde_entry
 

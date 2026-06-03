@@ -1,0 +1,10 @@
+module "boot_layout";
+
+bits 16;
+org 0x7C00;
+
+global boot_magic;
+
+data boot_magic: 2 = [0x58, 0x4E];
+align 4;
+data boot_scratch: 16 = 0;

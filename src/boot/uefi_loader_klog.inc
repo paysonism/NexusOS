@@ -12,9 +12,10 @@
 ;   +16 payload (ASCII text)
 ;
 ; Non-fatal: any UEFI error simply skips the write and continues boot.
+;
+; KLOG_FLUSH_ADDR_LO / KLOG_MAGIC_QWORD / KLOG_MAX_BYTES and the file OpenMode
+; are named + documented in src/include/uefi_abi.inc.
 ; ============================================================================
-%define KLOG_FLUSH_ADDR_LO 0x600000
-%define KLOG_MAGIC_QWORD   0x3130534E474F4C4B
 
 flush_klog_if_pending:
     push rbx
@@ -42,7 +43,7 @@ flush_klog_if_pending:
     mov r12, [abs KLOG_FLUSH_ADDR_LO + 8]   ; payload length
     test r12, r12
     jz .fk_clear                            ; empty payload, just clear magic
-    cmp r12, 0x100000                       ; sanity cap 1 MB
+    cmp r12, KLOG_MAX_BYTES                 ; sanity cap 1 MB
     ja .fk_clear
 
     ; --- Reopen root volume ---
@@ -64,8 +65,8 @@ flush_klog_if_pending:
     mov rcx, rbx
     lea rdx, [v_file]
     lea r8,  [s_klog_path]
-    ; OpenMode = CREATE(0x8000000000000000) | READ(1) | WRITE(2) = 0x8000000000000003
-    mov r9, 0x8000000000000003
+    ; OpenMode = CREATE(1<<63) | READ(1) | WRITE(2)
+    mov r9, EFI_FILE_MODE_CREATE_RW
     mov qword [rsp+32], 0                   ; Attributes = 0
     mov rax, [rbx + FP_OPEN]
     call rax

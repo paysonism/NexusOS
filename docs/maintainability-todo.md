@@ -39,6 +39,25 @@ is now either a named `equ` (in [`src/include/arch_regs.inc`](../src/include/arc
 local `equ` in the PoC) or appears only inside an explanatory comment. Each
 register/MSR/MMIO constant cites its spec section (§4.2). Promoted Good→Excellent
 2026-06-01 (build verified green).
+³ **Boot magic + TODO sweep 2026-06-03 (live UEFI loader + BIOS path).** Every
+bare ≥5-hex-digit operand literal in the *active* loader (the 12
+`uefi_loader_*.inc` files behind BOOTX64.EFI) and the BIOS path
+(`mbr/stage2/a20/gdt/vesa/paging`) was replaced with a named constant defined in
+a `src/include/` header — new `uefi_abi.inc` (PE/COFF, UEFI BootServices/GOP/SFS/
+BlockIO offsets, FAT32 layout, EFI file OpenMode, KASLR PRNG, paging flag/size
+bits) and `bios_boot.inc` (E820/SMAP/VBE2/EFER) — each value carrying a spec
+citation (UEFI 2.10 / PE-COFF / FAT32 / Intel SDM §). **Every boot artifact
+stayed byte-identical** (BOOTX64.EFI / mbr.bin / stage2.bin sha256 unchanged;
+verified by `scripts/test/boot_parity.ps1`). The residual sector count (153,
+down from 197) is now dominated by the out-of-scope `boot.asm`/`boot_uefi_*.inc`
+orphan (85) plus the §4.2 *floor* in-scope: ~13 `equ`/`%define` definition lines,
+~27 explanatory-comment occurrences, and 9 packed GDT-descriptor / GUID data
+defs (each carrying a spec comment). **Zero bare in-code operand literals remain
+in the in-scope boot files.** The 3 stray `TODO Phase 1b.*` markers in
+`uefi_loader_storage_extents.inc` are cleared: 1b.2/1b.3 were already implemented
+(checkboxes corrected), 1b.4 is a tracked issue (#21) referenced in-code. Not
+promoted: `boot.asm` (2,339) and `uefi_loader.asm` (2,214 incl. includes) remain
+oversized — boot-sensitive splits intentionally deferred.
 ² **Magic sweep (agents) 2026-06-01.** Bare `0x…` ≥5-digit literals in these two
 sectors were replaced with descriptive `equ` constants (value copied byte-for-byte;
 verified). The residual count is now ≈ the number of *distinct* named constants
@@ -63,7 +82,7 @@ not fanned out to agents.
 | `src/kernel/fs` | 1 | 1,733 | 1,733 | 0 | 15 | 🟡 Fair | split `fat16.asm` into read/dir/alloc |
 | `src/kernel/gui` | 7 | 4,877 | 1,813 | 0 | 20 | 🟡 Fair | split `window.asm` |
 | `src/user/apps` | 11 | 7,663 | 1,805 | 1 | 64² | 🟠 Watch | magic ↓ (119→64); still blocked on splitting `media_viewer.inc` |
-| `src/boot` | 8 | 5,786 | 2,339 | 3 | 197 | 🟠 Watch | **magic + TODO hotspot**; clear 3 TODOs |
+| `src/boot` | 8 | 5,786 | 2,339 | 0³ | 153³ | 🟠 Watch | live UEFI loader + BIOS path swept (§4.2 floor reached); 3 TODOs cleared; still blocked on oversized `boot.asm`/`uefi_loader.asm` split |
 | `src/diag` | 1 | 1,990 | 1,990 | 0 | 35² | 🟠 Watch | magic ↓ (46→35); still one giant probe file — modularize or gate |
 | `src/kernel/drivers` | 21 | 20,795 | 3,282 | 1 | 152 | 🔴 Heavy | largest sector; split top 3 drivers |
 | `src/kernel/proc` | 6 | 9,051 | 4,942 | 0 | 39 | 🔴 Heavy | **decompose `syscall.asm`** |
@@ -76,7 +95,25 @@ not fanned out to agents.
 ### 3a. Oversized files (>700-line flag) — split candidates, worst first
 
 - [ ] [`src/kernel/core/main.asm`](../src/kernel/core/main.asm) — **3,614** lines (was 4,970; -1,356 over 2 batches). Top structural outlier. **Decomposition via NexusHLK** (kernel emit mode of `nxhc.py`), 2026-06-01. Five modules now live under [`src/kernel/nexushlk/`](../src/kernel/nexushlk/): `serial_diag` (svg_dump leaves), `boot_diag` (diag_emit_*/svg_dump_serial/serial_forward_input), `debug_overlay` (usb_debug_overlay/ovl_*/usb_dbg_pci_scan), `cpu_acct` (cpu_acct_*), `serial_console` (serial_dispatch_control). Each compiled to `build/nxh/*.asm`, `%include`d after main.asm (order preserved, inside `[_start,_kernel_text_end)`). Build green + serial-diff behavior-verified (deterministic `-NoMemRandom -NoKaslr`); user-app outputs byte-identical.
-  - ⚠️ **Maintainability caveat**: ports so far are *file-level only* — the bodies are still verbatim `asm{}` shims, because these routines use hand-rolled non-System-V register ABIs that nxhc's structured `fn` (System-V) can't express without rewriting (off-limits) callers. **True statement-level maintainability is blocked on a compiler feature**: explicit-register parameter binding in nxhc kernel mode (e.g. `fn f(rdi cursor, edx val) preserves(all)`). Until then, decomposition reduces file size + isolates subsystems but does not improve in-function readability.
+  - ✅ **Compiler blocker resolved (2026-06-03)**: nxhc kernel mode now supports
+    explicit-register parameter binding + `preserves(...)` (e.g. `fn f(rdi cursor,
+    rdx val) preserves(rax, rcx)`) **and** privileged-instruction intrinsics
+    (`rdtsc`/`rdmsr`/`cpuid_*`), so the hand-rolled non-System-V leaves can be
+    written structurally instead of as `asm{}` shims. Statement-level conversion
+    status of the five modules:
+    - `cpu_acct` — ✅ **fully zero-asm** (2026-06-03). All five routines rewritten
+      as structured NexusHLK; compiles under `--forbid-asm`, declares its authority
+      explicitly (`unsafe kernel_priv; unsafe raw_mem;`) so `--deny-unsafe` rejects
+      it. The old `cpu_acct_publish_mhz` r8/r10 caller-ABI hand-off is gone — the
+      two internal helpers now take ordinary System-V args (legal: only
+      init/idle_end/work_end are reached from kernel_lifecycle). Behavior-parity
+      port (full kernel build green; effects on bsp_util / smp_core_states /
+      acct_* accumulators unchanged for the in-range counter values).
+    - `boot_diag` — partial: `diag_puth64` is structured (explicit-register form);
+      `diag_emit_hexbytes`/`diag_emit_line`/`svg_dump_serial`/`serial_forward_input`
+      remain `asm{}` shims.
+    - `debug_overlay`, `serial_diag`, `serial_console` — still verbatim `asm{}`
+      shims (the large render/PCI-scan bodies; next conversion candidates).
   - `real_boot_diag_dump` (~1,584 lines) intentionally NOT ported — `%ifdef`-gated dead-code with 200+ inline externs; a verbatim string port would be pointless.
 - [x] [`src/kernel/proc/syscall.asm`](../src/kernel/proc/syscall.asm) — ~~**4,942** lines. Dispatcher + hardening in one file.~~ Split 2026-06-02 into a 284-line orchestrator + 10 `syscall_*.inc` modules (largest `syscall_security.inc` at 641). Pure textual `%include` split — `KERNEL.BIN` byte-identical pre/post (sha256 verified). Handler slices stay in `syscall_entry`'s local-label scope.
 - [ ] [`src/kernel/drivers/rtl8156.asm`](../src/kernel/drivers/rtl8156.asm) — 3,282
@@ -104,7 +141,7 @@ not fanned out to agents.
 > prose, the `IRQ_STUB`/`isr_common_stub` identifiers, and the literal string
 > `"todo.txt"` all match. The **genuine** stray-debt markers are only these:
 >
-> - [ ] [`src/boot/uefi_loader.asm`](../src/boot/uefi_loader.asm) — 3 (`TODO Phase 1b.2/1b.3/1b.4`)
+> - [x] [`src/boot/uefi_loader.asm`](../src/boot/uefi_loader.asm) — ~~3 (`TODO Phase 1b.2/1b.3/1b.4`)~~ cleared 2026-06-03. 1b.2 (root-dir DATA.IMG walk) and 1b.3 (FAT32 chain→extent coalesce) were already implemented in `uefi_loader_storage_extents.inc` (`fat32_find_dirent` / `fat32_emit_data_extents`); the stale `[ ]` checkboxes were corrected to `[x]`. 1b.4 (partition-relative→absolute LBA, needs a kernel NVMe/USB-MSC backing driver) is a tracked issue (#21), referenced in-code via `see #21`.
 > - [ ] [`src/kernel/drivers/ramdisk.asm`](../src/kernel/drivers/ramdisk.asm) — 1 (`TODO(Phase 4)`)
 > - [ ] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — 1 (`No scrolling (TODO)`)
 >   - 2026-06-01 NexusHL-side assessment: not fixed in this pass because the XML line walk and draw origin live in the media viewer renderer split (`media_viewer_vector.inc` in the current working tree). Exact low-risk interface for the renderer worker: append a slot-local `mp_text_scroll_line: 4` field after `mp_dragging` in `src/user/nexushl/apps/media.nxh`; have the NexusHL key handler adjust it for text media; have the XML renderer read `app_hl_media_mp_text_scroll_line - app_blob_start`, skip that many LF-delimited lines before the first draw, and clamp at EOF. Mouse-wheel scrolling is not just a media app change: the current `window_t` ABI exposes draw/key/click callbacks only, with no wheel delta or scroll callback, so wheel support needs a WM callback/signature extension first.
@@ -116,17 +153,21 @@ not fanned out to agents.
 > issues (per §4.3) rather than deleted, since they encode real unfinished phases.
 
 
-- [ ] [`src/boot/uefi_loader.asm`](../src/boot/uefi_loader.asm) — 3
+- [x] [`src/boot/uefi_loader.asm`](../src/boot/uefi_loader.asm) — ~~3~~ cleared 2026-06-03 (1b.2/1b.3 already implemented; 1b.4 → issue #21, `see #21` in-code)
 - [x] [`src/user/poc/poc_standalone_prelude.inc`](../src/user/poc/poc_standalone_prelude.inc) — ~~1~~ resolved (was a doc x-ref, reworded to `spec ref: security_todo.md §13`)
 - [ ] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — 1
 - [ ] [`src/kernel/drivers/ramdisk.asm`](../src/kernel/drivers/ramdisk.asm) — 1
-- [ ] [`src/kernel/core/measured_boot.asm`](../src/kernel/core/measured_boot.asm) — 1
+- [x] Measured boot - SHA-256/HMAC owner is `src/kernel/nexushlk/crypto.nxh`; old hand-written assembly implementation removed.
 - [ ] [`src/kernel/core/kernel_lockdown.asm`](../src/kernel/core/kernel_lockdown.asm) — 1
 - [ ] [`src/include/kpti.inc`](../src/include/kpti.inc) — 1
 
 ### 3c. Magic-constant hotspots — name in headers
 
-- [ ] `src/boot` — 197 literals
+- [x] `src/boot` — ~~197~~ → 153 (2026-06-03 sweep of the live UEFI loader + BIOS
+  path; named via `src/include/uefi_abi.inc` + `bios_boot.inc`, byte-identical).
+  Residual = out-of-scope `boot.asm` orphan (85) + §4.2 floor (equ defs +
+  comments + packed descriptor/GUID data defs). Zero bare in-code operand
+  literals remain in the in-scope files.
 - [ ] `src/kernel/drivers` — 152
 - [x] `src/user/apps` — ~~119~~ → 64 (agent sweep 2026-06-01; residual ≈ distinct `equ` defs)
 - [ ] `src/include` — 115 (headers should *define* names, not contain raw literals)

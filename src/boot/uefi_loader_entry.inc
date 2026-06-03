@@ -107,7 +107,7 @@ _start:
     ; Fix EFER: set LME and NXE. NXE is required before any PTE uses
     ; PAGE_NX (bit 63); per-slot W^X enforcement (l3_apply_wx_policy)
     ; relies on this. BIOS path mirrors this in stage2.asm.
-    mov ecx, 0xC0000080
+    mov ecx, IA32_EFER_MSR
     rdmsr
     bts eax, 8          ; LME on
     bts eax, 11         ; NXE on (enable NX bit in page tables)
@@ -181,7 +181,7 @@ _start:
     mov rsi, [v_kernel_addr]
 
     mov rax, [rsi]
-    mov rbx, 0x3052_4C53_414B_584E   ; "NXKASLR0" little-endian
+    mov rbx, KASLR_MAGIC_QWORD        ; "NXKASLR0" little-endian
     cmp rax, rbx
     jne .kaslr_bad_magic
 
@@ -201,7 +201,7 @@ _start:
     mov [v_payload_src], rax
 
 %ifdef ENABLE_KASLR
-    mov rax, 0xAC0000
+    mov rax, KASLR_SLIDE_CEILING
     sub rax, [v_payload_size]
     jbe .slide_zero                  ; payload too large for window
     shr rax, 12                      ; max_pages (exclusive upper bound)
@@ -229,11 +229,11 @@ _start:
     or  rax, rdx
     pop rcx
     xor rax, rcx
-    mov rcx, 0x9E3779B97F4A7C15
+    mov rcx, KASLR_MIX_GOLDEN
     xor rax, rcx
-    mov rcx, 0x5851F42D4C957F2D
+    mov rcx, KASLR_MIX_LCG_MUL
     mul rcx                          ; LCG multiply (rax = low 64 bits)
-    mov rcx, 0x14057B7EF767814F
+    mov rcx, KASLR_MIX_LCG_INC
     add rax, rcx
 .slide_have_rand:
     xor edx, edx

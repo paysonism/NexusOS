@@ -6,48 +6,22 @@ bits 64
 default rel
 
 %include "src/include/boot_memory.inc"
+; UEFI / PE-COFF / FAT32 ABI constants (offsets, PE header magics, GOP/SFS/file
+; member offsets, FAT32 layout, KASLR PRNG) — named + spec-cited in the header,
+; referenced throughout the loader (maintainability-todo.md §4.2).
+%include "src/include/uefi_abi.inc"
 
-; --- PE image layout ---
-%define HDR_SZ       0x200
-%define TEXT_RAW     0x10000
-%define TEXT_VA      0x1000
+; --- PE image layout (loader-specific geometry; the ABI magics live in
+;     uefi_abi.inc). These sizes are derived from the FileAlignment-padded
+;     section sizes of this exact two-section image, not from the spec. ---
+%define HDR_SZ       0x200             ; raw header size (one 512 B block)
+%define TEXT_RAW     0x10000           ; .text raw/virtual size (64 KiB)
+%define TEXT_VA      0x1000            ; .text RVA (one 4 KiB page in)
 %define RELOC_FOFF   (HDR_SZ + TEXT_RAW)
 %define RELOC_FSZ    0x200
-%define RELOC_VA     0x11000
+%define RELOC_VA     0x11000           ; .reloc RVA (TEXT_VA + TEXT_RAW)
 %define RELOC_VSZ    0x0C
-%define IMAGE_SZ     0x12000
-
-; --- UEFI System Table offsets ---
-%define ST_BOOTSVC   96
-
-; --- Boot Services offsets ---
-%define BS_ALLOCPG   40
-%define BS_GETMMAP   56
-%define BS_ALLOCPL   64
-%define BS_HNDLPROT  152
-%define BS_OPENPROT  280
-%define BS_LOCHNDL   312
-%define BS_LOCATE    320
-%define BS_EXITBOOT  232
-%define BS_WATCHDOG  256
-
-; --- GOP offsets ---
-%define GOP_QUERY    0
-%define GOP_SET      8
-%define GOP_MODE     24
-%define GOPM_MAX     0
-%define GOPM_CUR     4
-%define GOPM_FBBASE  24
-%define GOPI_HRES    4
-%define GOPI_VRES    8
-%define GOPI_PPSL    32
-
-; --- Simple Filesystem / File offsets ---
-%define SFS_OPENVOL  8
-%define FP_OPEN      8
-%define FP_CLOSE     16
-%define FP_READ      32
-%define FP_WRITE     40
+%define IMAGE_SZ     0x12000           ; SizeOfImage (RELOC_VA + one page)
 
 ; --- Physical memory aliases ---
 %define VBE_INFO     VBE_INFO_ADDR

@@ -13,7 +13,7 @@ setup_vesa:
     mov ax, 0x4F00
     mov di, VBE_BLOCK_ADDR
     ; Set signature to "VBE2" to request VBE 2.0+ info
-    mov dword [di], 0x32454256  ; 'VBE2'
+    mov dword [di], VBE2_SIGNATURE  ; 'VBE2'
     int 0x10
     cmp ax, 0x004F
     jne vesa_fail_global

@@ -74,7 +74,7 @@ gop_init:
     mov rax, [rbx + GOP_MODE]
     mov r12d, [rax + GOPM_MAX]
     xor r13d, r13d                  ; current mode index
-    mov r14d, 0xFFFFFFFF            ; best mode (none)
+    mov r14d, GOP_MODE_NONE        ; best mode (none)
     xor r15, r15                    ; best pixel count (rdx:rax fits in 32b for our sizes)
 
 .mode_loop:
@@ -118,7 +118,7 @@ gop_init:
     jmp .mode_loop
 
 .select:
-    cmp r14d, 0xFFFFFFFF
+    cmp r14d, GOP_MODE_NONE
     je .fail
 
     mov rcx, rbx

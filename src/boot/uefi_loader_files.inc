@@ -73,14 +73,14 @@ load_kernel:
     mov rax, [rcx + BS_ALLOCPG]
     xor ecx, ecx                    ; AllocateAnyPages
     mov edx, 2                      ; EfiLoaderData
-    mov r8,  0x2000                 ; 8192 pages = 32 MB
+    mov r8,  KERNEL_LOAD_MAX_PAGES  ; 8192 pages = 32 MB
     lea r9,  [v_kernel_addr]
     call rax
     test rax, rax
     jnz .fail
 
     ; --- Step 7: Read kernel into allocated buffer ---
-    mov qword [rsp+64], 0x2000000   ; max read size (in/out)
+    mov qword [rsp+64], KERNEL_LOAD_MAX_BYTES  ; max read size (in/out)
     mov rbx, [v_file]
     mov rcx, rbx
     lea rdx, [rsp+64]               ; &ByteCount
