@@ -1,0 +1,21 @@
+module "boot_byte_regs";
+
+bits 16;
+org 0x7C00;
+unsafe boot_int;
+
+global boot_entry;
+
+# Byte-register boot call whose targets occupy rbx, rcx and rdx. The fix must
+# pick a *legacy* byte scratch (al, via rax) for the `mov reg8, scratch8` moves;
+# the pre-fix code fell through to rsi and emitted `mov bl, sil`, which NASM
+# rejects in bits 16 (sil needs a REX prefix). This fixture only assembles if a
+# legacy byte scratch is chosen.
+fn disk_like(bl sectors, cl sector, dl drive) {
+    intn(0x13);
+}
+
+fn boot_entry() {
+    call disk_like(bl: 0x01, cl: 0x02, dl: 0x80);
+    hlt();
+}

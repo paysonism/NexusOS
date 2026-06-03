@@ -62,6 +62,23 @@ if (Test-Path $Nasm) {
         throw 'structured boot function fixture failed to assemble with NASM'
     }
 
+    # Regression (PR #22 review, P2): byte-register boot calls must pick a legacy
+    # byte scratch (al/bl/cl/dl), never sil/dil/bpl (REX-only, unassemblable in
+    # bits 16/32). This fixture's targets occupy rbx/rcx/rdx, forcing scratch to
+    # rax; the pre-fix code emitted `mov bl, sil` and failed to assemble here.
+    Write-Host '[nxhc-security] byte-register boot call uses an encodable legacy scratch' -ForegroundColor Yellow
+    python $Compiler `
+        (Join-Path $Root 'tests\nxh_boot\boot_byte_regs.nxh') `
+        -o (Join-Path $OutDir 'boot_byte_regs.asm') `
+        -L $LibDir --target boot --embed
+    if ($LASTEXITCODE -ne 0) {
+        throw 'byte-register boot call fixture failed to compile'
+    }
+    & $Nasm -f bin -o (Join-Path $OutDir 'boot_byte_regs.bin') (Join-Path $OutDir 'boot_byte_regs.asm')
+    if ($LASTEXITCODE -ne 0) {
+        throw 'byte-register boot call fixture failed to assemble with NASM (non-encodable scratch register)'
+    }
+
     Write-Host '[nxhc-security] compile and assemble exact boot sector fixture' -ForegroundColor Yellow
     python $Compiler `
         (Join-Path $Root 'tests\nxh_boot\boot_sector.nxh') `

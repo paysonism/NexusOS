@@ -1194,6 +1194,8 @@ def gen_boot_stmt(st,s):
             seen.add(spell)
             if wb not in (1,wordw):
                 raise SyntaxError(f"boot call {s['target']}: {spell} width unsupported in {cg.boot_bits}-bit boot calls")
+            if wb==1 and cg.boot_bits!=64 and spell not in ("al","bl","cl","dl","ah","bh","ch","dh"):
+                raise SyntaxError(f"boot call {s['target']}: byte register {spell} is not encodable in {cg.boot_bits}-bit mode (needs a REX prefix)")
             targets.append((spell,canon,wb))
         # Reject ambiguous overlap (e.g. ax + al share rax); a high+low byte pair
         # such as ah + al is fine because the two bytes are written independently.
@@ -1207,12 +1209,21 @@ def gen_boot_stmt(st,s):
         for _spell,expr in regargs:
             gen_boot_expr(st,expr)
             cg.emit(f"    push {accfull}")
-        # 2) A scratch register (no target's canonical reg, not rsp) for sub-word
-        #    moves -- only required when a target isn't a direct word-width pop.
+        # 2) Pick a scratch register for sub-word target moves. A byte (8-bit)
+        #    move must source from a legacy low byte (al/bl/cl/dl): sil/dil/bpl
+        #    need a REX prefix (invalid in bits 16/32, and illegal mixed with a
+        #    high-byte target), so byte scratch is restricted to rax..rdx. Wider
+        #    sub-word moves (e.g. a 16-bit target in 32-bit mode) can use any reg.
         used={canon for _,canon,_ in targets}
-        scratch=next((c for c in ("rcx","rdx","rbx","rsi","rdi","rbp","rax") if c not in used), None)
-        if any(wb!=wordw for _,_,wb in targets) and scratch is None:
-            raise SyntaxError(f"boot call {s['target']}: too many register args (no free scratch register)")
+        needs_scratch=any(wb!=wordw for _,_,wb in targets)
+        needs_byte=any(wb==1 for _,_,wb in targets)
+        scratch=None
+        if needs_scratch:
+            pool=("rcx","rdx","rbx","rax") if needs_byte else ("rcx","rdx","rbx","rsi","rdi","rbp","rax")
+            scratch=next((c for c in pool if c not in used), None)
+            if scratch is None:
+                kind="byte " if needs_byte else ""
+                raise SyntaxError(f"boot call {s['target']}: no free encodable {kind}scratch register for the argument registers used")
         # 3) Pop in reverse source order into the target registers.
         for spell,canon,wb in reversed(targets):
             if wb==wordw:
