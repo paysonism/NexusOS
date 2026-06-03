@@ -1176,12 +1176,50 @@ def gen_boot_stmt(st,s):
         if not cg.loops: raise SyntaxError("continue outside loop")
         cg.emit(f"    jmp {cg.loops[-1][1]}")
     elif k=="regcall":
-        for spell,expr in s["regargs"]:
+        # Register-annotated boot call (e.g. a BIOS ABI: ah=function, al/bl/...).
+        # Every argument is evaluated and pushed FIRST, then popped into the
+        # target registers in reverse source order. Writing no target until all
+        # args are evaluated means one arg's evaluation (which flows through the
+        # accumulator/tmp regs) can never clobber a register another arg already
+        # prepared -- the bug when each target was written inline.
+        regargs=s["regargs"]
+        rr=_boot_regs(cg.boot_bits); accfull=rr["acc"]; wordw=rr["width"]
+        targets=[]; seen=set()
+        for spell,_expr in regargs:
             if spell not in REG_TABLE:
                 raise SyntaxError(f"boot call {s['target']}: {spell} is not a register")
+            canon,wbits=REG_TABLE[spell]; wb=max(1,wbits//8)
+            if spell in seen:
+                raise SyntaxError(f"boot call {s['target']}: register {spell} set twice")
+            seen.add(spell)
+            if wb not in (1,wordw):
+                raise SyntaxError(f"boot call {s['target']}: {spell} width unsupported in {cg.boot_bits}-bit boot calls")
+            targets.append((spell,canon,wb))
+        # Reject ambiguous overlap (e.g. ax + al share rax); a high+low byte pair
+        # such as ah + al is fine because the two bytes are written independently.
+        bycanon={}
+        for spell,canon,wb in targets:
+            bycanon.setdefault(canon,[]).append(wb)
+        for canon,ws in bycanon.items():
+            if len(ws)>1 and any(w!=1 for w in ws):
+                raise SyntaxError(f"boot call {s['target']}: overlapping target registers on {canon}")
+        # 1) Evaluate + stage every argument (source order).
+        for _spell,expr in regargs:
             gen_boot_expr(st,expr)
-            _canon,width_bits=REG_TABLE[spell]
-            cg.emit(f"    mov {spell}, {_boot_reg_width(cg.boot_bits,max(1,width_bits//8))}")
+            cg.emit(f"    push {accfull}")
+        # 2) A scratch register (no target's canonical reg, not rsp) for sub-word
+        #    moves -- only required when a target isn't a direct word-width pop.
+        used={canon for _,canon,_ in targets}
+        scratch=next((c for c in ("rcx","rdx","rbx","rsi","rdi","rbp","rax") if c not in used), None)
+        if any(wb!=wordw for _,_,wb in targets) and scratch is None:
+            raise SyntaxError(f"boot call {s['target']}: too many register args (no free scratch register)")
+        # 3) Pop in reverse source order into the target registers.
+        for spell,canon,wb in reversed(targets):
+            if wb==wordw:
+                cg.emit(f"    pop {_reg_at_width(canon,cg.boot_bits)}")
+            else:
+                cg.emit(f"    pop {_reg_at_width(scratch,cg.boot_bits)}")
+                cg.emit(f"    mov {spell}, {_reg_at_width(scratch,wb*8)}")
         cg.emit(f"    call {s['target']}")
     else:
         raise SyntaxError(f"boot stmt not supported yet: {k}")

@@ -39,6 +39,18 @@ if ($LASTEXITCODE -ne 0) {
     throw 'structured boot function fixture failed to compile'
 }
 
+# Regression (PR #22 review): a multi-register boot call (ah/al/bx ...) must
+# stage every argument before writing any target register, so a register set
+# early (ah) can't be clobbered by a later arg's accumulator load. After the
+# fix the targets are popped in reverse, so ah is written on the line directly
+# before the BIOS call. If the inline-write bug returns, a `mov ax, <imm>` for a
+# later arg lands between the ah write and the call and this match fails.
+Write-Host '[nxhc-security] boot regcall stages args without clobber (ah preserved)' -ForegroundColor Yellow
+$bootFnAsm = Get-Content -Path (Join-Path $OutDir 'boot_fn.asm') -Raw
+if ($bootFnAsm -notmatch '(?m)^\s*mov ah, \w+\s*\r?\n\s*call bios_teletype\b') {
+    throw 'boot regcall regression: AH is not set immediately before the BIOS call (argument staging clobber)'
+}
+
 $Nasm = 'C:\Tools\nasm-2.16.03\nasm.exe'
 if (-not (Test-Path $Nasm)) {
     $cmd = Get-Command nasm -ErrorAction SilentlyContinue
