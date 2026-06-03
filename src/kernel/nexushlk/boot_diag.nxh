@@ -3,7 +3,7 @@
 #
 # Ported out of the former src/kernel/core/main.asm into this NexusHL kernel module
 # (nxhc.py --target kernel, %include'd from kernel_build.asm immediately after
-# the old monolithic core owner, before measured_boot.asm). The kernel is ONE
+# the old monolithic core owner, before crypto.nxh). The kernel is ONE
 # NASM translation unit (-f bin), so callers in other NexusHLK modules
 # serial_dispatch_control, serial_poll_command, process_keyboard) bind to these
 # labels with no extern wiring, and these routines bind to the data they read
@@ -29,6 +29,8 @@
 # ============================================================================
 
 module "boot_diag";
+
+unsafe raw_mem;          # sb into the diag output cursor (diag_puth64)
 
 global diag_emit_hexbytes;
 global diag_emit_line;

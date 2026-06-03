@@ -18,13 +18,14 @@ For new SDK-authored apps, start from:
 
 - `C:\Users\user\Documents\new\src\user\nexushl\lib\core.nxh`
 - `C:\Users\user\Documents\new\src\user\nexushl\apps\hello.nxh`
+- `C:\Users\user\Documents\new\src\user\templates\hello_callback.nxh`
 - `C:\Users\user\Documents\new\scripts\build\build_nxh.ps1`
 
 `scripts/build/build_nxh.ps1` compiles all `.nxh` apps and generates
 `C:\Users\user\Documents\new\build\nxh\generated_apps.inc`, which is included
 by `src/user/apps.asm`.
 
-For raw assembly app work, start from:
+For legacy raw assembly app work, start from:
 
 - `C:\Users\user\Documents\new\src\user\lib\nexus_app.inc`
 - `C:\Users\user\Documents\new\src\user\lib\nexus_fs.inc`

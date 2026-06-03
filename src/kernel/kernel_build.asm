@@ -42,7 +42,7 @@ section .text
 section .text
 %include "build/nxh/frame_present.asm"
 ; NexusHLK: former main-loop and diagnostic modules. Keep these directly after
-; core_runtime_state.asm and before measured_boot.asm so the moved code stays in
+; core_runtime_state.asm and before crypto.nxh so the moved code stays in
 ; the early kernel text span [_start, _kernel_text_end).
 section .text
 %include "build/nxh/serial_diag.asm"
@@ -68,7 +68,7 @@ section .text
 section .text
 %include "build/nxh/real_boot_diag_gfx.asm"
 section .text
-%include "src/kernel/core/measured_boot.asm"
+%include "build/nxh/crypto.asm"
 section .text
 %include "src/kernel/core/nk_monitor.asm"
 section .text
@@ -272,7 +272,7 @@ strlen equ fn_strlen
 ; therefore sits at the top of the kernel code+helper region: [_start ..
 ; _kernel_text_end) is exactly the executable kernel image (no writable .data).
 ; Consumers:
-;   - measured_boot.asm hashes this range as "the kernel code" stage.
+;   - crypto.nxh hashes this range as the measured kernel-code stage.
 ;   - kernel_lockdown.asm marks this range read-only at PT level after init
 ;     (security_todo.md §9 "read-only kernel after init"). Writable .data lives
 ;     past this label, so locking [_start, _kernel_text_end) cannot fault a

@@ -72,7 +72,7 @@ FN_BEGIN l3_randomize_code_slide, 0, 0, FN_RET_VOID
 ; Each slot gets a kernel-only secret key derived at slot init from
 ;     slot_key = FNV-1a( kernel_canary || slot_id || boot_nonce )
 ; using the SAME FNV-1a family already relied on across the tree
-; (measured_boot.asm, the code-range hash above). The key is a per-install
+; (crypto.nxh, the code-range hash above). The key is a per-install
 ; secret an app can later prove knowledge of via a HMAC-this-data syscall
 ; (explicit FOLLOW-UP ??? not landed here). The key NEVER touches the slot's
 ; ring-3 memory: it lives only in kernel BSS (l3_slot_key[]), outside the
@@ -85,7 +85,7 @@ FN_BEGIN l3_randomize_code_slide, 0, 0, FN_RET_VOID
 ; useless against the next one.
 ;
 ; Storage uses the same non-cryptographic FNV stopgap documented in
-; measured_boot.asm: collision-resistant enough to act as a per-slot secret
+; crypto.nxh: collision-resistant enough to act as a per-slot secret
 ; identifier, swap-able for a real KDF later without touching the call sites.
 ; ============================================================================
 L3_SLOT_KEY_FNV_OFFSET equ 0xCBF29CE484222325

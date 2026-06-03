@@ -46,6 +46,9 @@
 
 module "syscall_secure";
 
+unsafe raw_mem;          # lb/lw/lq/sb/sw/sq over CPI signing/HMAC state
+unsafe implicit_extern;  # &fn / &data resolved as same-unit kernel labels (-f bin)
+
 global cpi_sign_callback;
 global cpi_verify_callback;
 global cap_mask_sign;

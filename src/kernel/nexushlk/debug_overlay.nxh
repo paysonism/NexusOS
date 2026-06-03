@@ -3,7 +3,7 @@
 #
 # Ported out of the former src/kernel/core/main.asm into this NexusHL kernel module
 # (nxhc.py --target kernel, %include'd from kernel_build.asm right after
-# boot_diag.asm, before measured_boot.asm). Single NASM translation unit
+# boot_diag.asm, before crypto.nxh). Single NASM translation unit
 # (-f bin), so the still-in-main caller (render_frame, via usb_debug_overlay)
 # and the shared data this code reads/writes (ovl_buf, the s_o_* label strings,
 # usb_dbg_* / xhci_dbg_* counters, ovl_ci/ovl_li/ovl_rec scratch, the OVL_X/Y/

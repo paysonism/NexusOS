@@ -156,7 +156,7 @@ targets UEFI-GOP / broadly-compatible hardware (see MEMORY.md: per-vendor
 MMIO bring-up is discontinued). We do **not** assume a Secure Enclave, a TPM,
 TEE/SEV memory encryption, fused per-device keys, or any hardware-anchored
 PCR. The trust anchor is purely software: the kernel image as loaded into RAM,
-self-measured into a kernel-owned chain (`measured_boot.asm` → `mb_digest`),
+self-measured into a kernel-owned digest (`crypto.nxh` -> `mb_digest`),
 plus secrets the kernel derives and holds in kernel-only BSS/.rodata
 (`kernel_canary`, `l3_slot_key[]`, the build-time blob-signing key). These
 secrets never enter ring-3 memory, and after `kernel_lockdown_ro` the .text
@@ -207,18 +207,12 @@ who controls the medium*:
     preferred over a public-key signature (Ed25519). The key lives in the
     kernel and the verifier is the kernel; there is no third party to convince
     and no offline-forgery requirement that a symmetric key fails to meet.
-  - The non-cryptographic **FNV-1a family** already used across the tree
-    (`measured_boot.asm`, `l3_slot_key`, the CPI/cap-mask tags) is an
-    acceptable documented stopgap for the *integrity-fingerprint* role. It
-    detects accidental/casual tampering; it is NOT preimage- or
-    collision-resistant against a determined adversary, and is labelled as
-    such at every use. Swapping in SHA-256/real HMAC later is a primitive
-    substitution behind the same call sites — the structure does not change.
+  - SHA-256 / HMAC-SHA256 is the active primitive for measured boot and the user-blob MAC. Remaining FNV-1a uses (`l3_slot_key`, code-range hashing, CPI/cap-mask tags) are narrower integrity fingerprints or short authenticators and remain labelled at their call sites.
 
 Concretely, §9 "Sign the user blob" is satisfied by a **kernel-verified keyed
 MAC** over `[app_blob_start, app_blob_end)` with a build-time key compiled
 into the kernel, refusing to launch (fail closed) on mismatch — see
-`measured_boot.asm` (`app_blob_verify_signature`) and TODO note in
+`src/kernel/nexushlk/crypto.nxh` (`app_blob_verify_signature`) and TODO note in
 `docs/security_todo.md` §9. Reaching for Ed25519 here would buy nothing the
 threat model requires while adding a hard-to-audit NASM bignum.
 

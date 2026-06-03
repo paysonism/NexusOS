@@ -9,7 +9,7 @@
 #
 # and %include the generated serial_diag.asm into kernel_build.asm under
 # `section .text`, at the position the original code occupied in the old
-# monolithic core owner (before measured_boot.asm).
+# monolithic core owner (before crypto.nxh).
 #
 # Because the kernel is assembled as ONE NASM translation unit (-f bin), the
 # labels below are mutually visible with the rest of the kernel translation unit;

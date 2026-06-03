@@ -3,7 +3,7 @@
 #
 # Ported out of the former src/kernel/core/main.asm into this NexusHL kernel module
 # (nxhc.py --target kernel, %include'd from kernel_build.asm right after
-# cpu_acct.asm, before measured_boot.asm). serial_dispatch_control decodes the
+# cpu_acct.asm, before crypto.nxh). serial_dispatch_control decodes the
 # byte that follows the 0x01 "arm" prefix on the COM1 automation channel and
 # routes it: '2'..'9' launch an app by id; o/q/p/m/s/v/=/t/g/b/n/N/i/x/X drive
 # desktop, perfdiag, the real_boot_diag_dump, trace dump, SVG render probe,

@@ -60,7 +60,8 @@ NexusHL SDK sources: compiler, standard library, and `.nxh` apps compiled into
 `build/nxh/generated_apps.inc` before kernel assembly.
 
 `src/user/templates`
-Small assembly templates for new user callbacks and app experiments.
+Small NexusHL templates for new user callbacks and app experiments. Legacy raw
+assembly templates may remain only for ABI/debug work that cannot use NexusHL.
 
 `src/user/poc`
 Security regression probes and PoCs that should stay isolated from normal app

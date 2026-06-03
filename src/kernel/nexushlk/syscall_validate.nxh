@@ -44,6 +44,10 @@
 
 module "syscall_validate";
 
+unsafe raw_mem;          # lb/lw/lq/sb/sw/sq over slot-bounds / validator state
+unsafe kernel_priv;      # smap_open/smap_close (stac/clac) bracket user-arg reads
+unsafe implicit_extern;  # &fn / &data resolved as same-unit kernel labels (-f bin)
+
 global sc_get_slot_bounds;
 global sc_range_in_bounds;
 global sc_validate_user_range;

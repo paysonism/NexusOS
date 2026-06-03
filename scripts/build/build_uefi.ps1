@@ -194,6 +194,7 @@ $KernelModules = @(
     @{ src = 'src\kernel\nexushlk\real_boot_diag_fbperf.nxh'; out = 'build\nxh\real_boot_diag_fbperf.asm' },
     @{ src = 'src\kernel\nexushlk\real_boot_diag_legacy.nxh'; out = 'build\nxh\real_boot_diag_legacy.asm' },
     @{ src = 'src\kernel\nexushlk\real_boot_diag_gfx.nxh'; out = 'build\nxh\real_boot_diag_gfx.asm' },
+    @{ src = 'src\kernel\nexushlk\crypto.nxh'; out = 'build\nxh\crypto.asm' },
     @{ src = 'src\kernel\nexushlk\syscall_validate.nxh'; out = 'build\nxh\syscall_validate.asm' },
     @{ src = 'src\kernel\nexushlk\syscall_secure.nxh'; out = 'build\nxh\syscall_secure.asm' },
     @{ src = 'src\kernel\nexushlk\wm_helpers.nxh'; out = 'build\nxh\wm_helpers.asm' },

@@ -1,8 +1,8 @@
 ; ============================================================================
 ; NexusOS - User-blob signature (security_todo.md §9 "Sign the user blob")
 ; ----------------------------------------------------------------------------
-; Shared constants for the kernel-verified MAC over the built-in user blob
-; [app_blob_start, app_blob_end). See measured_boot.asm
+; Shared constants for the kernel-verified HMAC-SHA256 over the built-in user
+; blob [app_blob_start, app_blob_end). See src/kernel/nexushlk/crypto.nxh
 ; (app_blob_verify_signature) for the runtime check and
 ; tools/build/patch_blob_sig.py for the build-time MAC computation.
 ;
@@ -38,20 +38,12 @@
 ; would corrupt a relocation and is out of scope for casual/accidental tamper
 ; detection (and would be caught downstream by a fault).
 ;
-; HASH PRIMITIVE — DOCUMENTED STOPGAP: a 64-bit FNV-1a fold under an
-; HMAC-style key envelope (key-prefix || covered-blob || key-suffix), the same
-; non-cryptographic family already relied on across the tree (measured_boot.asm,
-; l3_slot_key, the CPI/cap-mask tags). It DETECTS accidental/casual tampering or
-; a truncated/corrupted blob; it is NOT preimage- or collision-resistant against
-; a determined adversary. Swapping in real HMAC-SHA256 later is a primitive
-; substitution behind the same call sites — the verify structure stays put.
+; HASH PRIMITIVE: HMAC-SHA256 over the canonicalized blob. The runtime verifier
+; and build-time patcher share the same key bytes and the same KASLR exclusion
+; table, so the image fails closed if any covered byte differs.
 ; ============================================================================
 %ifndef APP_BLOB_SIG_INC
 %define APP_BLOB_SIG_INC
-
-; FNV-1a 64-bit constants (match measured_boot.asm / l3_slot_key).
-APP_BLOB_SIG_FNV_OFFSET equ 0xCBF29CE484222325
-APP_BLOB_SIG_FNV_PRIME  equ 0x00000100000001B3
 
 ; Fixed build-time/runtime MAC key. Compiled into the kernel; patch_blob_sig.py
 ; hard-codes the identical value. Changing it requires changing BOTH places.
@@ -64,9 +56,9 @@ APP_BLOB_SIG_MAX_FIXUPS equ 128
 
 ; 16-byte locator the build tool scans for in KERNEL.A.RAW to find the MAC +
 ; exclusion table. Immediately after the marker:
-;     +0x00  qword  expected MAC          (mb_blob_sig_expected)
-;     +0x08  dword  sliding-offset count  (mb_blob_sig_fixup_count)
-;     +0x0C  dword[APP_BLOB_SIG_MAX_FIXUPS]  blob-relative offsets, LE
+;     +0x00  byte[32] expected HMAC-SHA256 (mb_blob_sig_expected)
+;     +0x20  dword    sliding-offset count (mb_blob_sig_fixup_count)
+;     +0x24  dword[APP_BLOB_SIG_MAX_FIXUPS] blob-relative offsets, LE
 ; Same marker-scan idiom used by the app-blob sentinels (apps.asm).
 %macro APP_BLOB_SIG_MARKER 0
     db 0x4E, 0x58, 0x42, 0x4C, 0x4F, 0x42, 0x53, 0x49   ; "NXBLOBSI"
