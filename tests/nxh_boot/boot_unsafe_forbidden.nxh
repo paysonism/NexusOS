@@ -1,0 +1,10 @@
+module "boot_unsafe_forbidden";
+
+bits 16;
+org 0x7C00;
+
+global boot_start;
+
+fn boot_start() {
+    intn(0x10);
+}

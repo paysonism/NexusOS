@@ -1,0 +1,204 @@
+# Legacy assembly/include quarantine inventory (structured)
+#
+# This file FREEZES the set of legacy NASM `.asm`/`.inc` files the active tree is
+# permitted to contain. It is the migration manifest referenced by
+# docs/nhl-beyond-zero-trust-todo.md (P0: Repository Enforcement) and
+# docs/track1-repo-enforcement-todo.md.
+#
+# Format (pipe-delimited, one record per line):
+#   path | subsystem | risk | status | replacement
+#     path        - repo-relative, forward-slash
+#     subsystem   - owning area
+#     risk        - high | medium | low  (security criticality of migrating it)
+#     status      - legacy (migration pending) | migrating | <unused>
+#     replacement - target NHL/NexusHLK module, or TBD
+#
+# Enforcement (tools/security/check_no_asm.ps1 -InventoryGuard):
+#   - Any active .asm/.inc NOT listed here (matched on the path column) is a hard
+#     failure: new first-class work must be NHL/NexusHLK.
+#   - A listed file that no longer exists is a stale entry: prune the line. The
+#     inventory only shrinks as migration deletes legacy modules.
+#   - A non-comment line without the pipe-delimited columns is malformed.
+#
+# Excluded by scope (never listed): deprecated/, build/, dist/.
+#
+# Inventory frozen: 2026-06-04
+src/boot/a20.asm | boot | high | legacy | TBD
+src/boot/boot.asm | boot | high | legacy | TBD
+src/boot/boot_uefi_cursor.inc | boot | high | legacy | TBD
+src/boot/boot_uefi_data.inc | boot | high | legacy | TBD
+src/boot/boot_uefi_defs.inc | boot | high | legacy | TBD
+src/boot/boot_uefi_desktop.inc | boot | high | legacy | TBD
+src/boot/boot_uefi_font.inc | boot | high | legacy | TBD
+src/boot/boot_uefi_image_tail.inc | boot | high | legacy | TBD
+src/boot/boot_uefi_pe_entry.inc | boot | high | legacy | TBD
+src/boot/boot_uefi_protocols.inc | boot | high | legacy | TBD
+src/boot/boot_uefi_render.inc | boot | high | legacy | TBD
+src/boot/boot_uefi_shell.inc | boot | high | legacy | TBD
+src/boot/gdt.asm | boot | high | legacy | TBD
+src/boot/mbr.asm | boot | high | legacy | TBD
+src/boot/paging.asm | boot | high | legacy | TBD
+src/boot/stage2.asm | boot | high | legacy | TBD
+src/boot/uefi_loader.asm | boot | high | legacy | TBD
+src/boot/uefi_loader_data.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_defs.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_entry.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_files.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_graphics.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_image_tail.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_klog.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_memory.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_paging_exit.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_pe.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_storage_extents.inc | boot | high | legacy | TBD
+src/boot/uefi_loader_trampoline.inc | boot | high | legacy | TBD
+src/boot/vesa.asm | boot | high | legacy | TBD
+src/diag/uefi_mouse_probe.asm | diag | medium | legacy | TBD
+src/include/amdgpu_psp.inc | include | high | legacy | TBD
+src/include/app_blob_sig.inc | include | high | legacy | TBD
+src/include/app_sysno.inc | include | high | legacy | TBD
+src/include/arch_regs.inc | include | high | legacy | TBD
+src/include/bios_boot.inc | include | high | legacy | TBD
+src/include/boot_memory.inc | include | high | legacy | TBD
+src/include/cet.inc | include | high | legacy | TBD
+src/include/constants.inc | include | high | legacy | TBD
+src/include/debug_events.inc | include | high | legacy | TBD
+src/include/kdomain_hmac.inc | include | high | legacy | TBD
+src/include/kpti.inc | include | high | legacy | TBD
+src/include/l3_runtime.inc | include | high | legacy | TBD
+src/include/macros.inc | include | high | legacy | TBD
+src/include/mmio_bounds.inc | include | high | legacy | TBD
+src/include/net_driver.inc | include | high | legacy | TBD
+src/include/net_slot_policy.inc | include | high | legacy | TBD
+src/include/shadow_stack.inc | include | high | legacy | TBD
+src/include/smap.inc | include | high | legacy | TBD
+src/include/structs.inc | include | high | legacy | TBD
+src/include/syscall_caps.inc | include | high | legacy | TBD
+src/include/syscall_trace.inc | include | high | legacy | TBD
+src/include/syscall_user.inc | include | high | legacy | TBD
+src/include/trace.inc | include | high | legacy | TBD
+src/include/uefi_abi.inc | include | high | legacy | TBD
+src/include/window_layout.inc | include | high | legacy | TBD
+src/kernel/arch/acpi.asm | kernel-arch | high | legacy | TBD
+src/kernel/arch/aml_parser.asm | kernel-arch | high | legacy | TBD
+src/kernel/arch/apic.asm | kernel-arch | high | legacy | TBD
+src/kernel/arch/ioapic.asm | kernel-arch | high | legacy | TBD
+src/kernel/arch/madt.asm | kernel-arch | high | legacy | TBD
+src/kernel/arch/rsdp.asm | kernel-arch | high | legacy | TBD
+src/kernel/core/core_runtime_state.asm | kernel-core | high | legacy | TBD
+src/kernel/core/debug_events.asm | kernel-core | high | legacy | TBD
+src/kernel/core/entry.asm | kernel-core | high | legacy | TBD
+src/kernel/core/idt.asm | kernel-core | high | legacy | TBD
+src/kernel/core/isr.asm | kernel-core | high | legacy | TBD
+src/kernel/core/kernel_lockdown.asm | kernel-core | high | legacy | TBD
+src/kernel/core/klog.asm | kernel-core | high | legacy | TBD
+src/kernel/core/memory.asm | kernel-core | high | legacy | TBD
+src/kernel/core/nk_monitor.asm | kernel-core | high | legacy | TBD
+src/kernel/core/perfdiag.asm | kernel-core | high | legacy | TBD
+src/kernel/core/pic.asm | kernel-core | high | legacy | TBD
+src/kernel/core/pit.asm | kernel-core | high | legacy | TBD
+src/kernel/core/security_status.asm | kernel-core | high | legacy | TBD
+src/kernel/core/trace.asm | kernel-core | high | legacy | TBD
+src/kernel/core/tss.asm | kernel-core | high | legacy | TBD
+src/kernel/drivers/acpi_ec.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/acpi_pci.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/amd_display.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/ata.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/battery.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/display.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/driver_debug.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/fbperf.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/hid_parser.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/i2c_hid.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/keyboard.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/mouse.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/pci.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/ramdisk.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/rtl8139.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/rtl8156.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/spi.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/spi_hid.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/usb.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/drivers/usb_hid.asm | kernel-drivers | medium | migrating | src/kernel/nexushlk/usb_hid_helpers.nxh
+src/kernel/drivers/xhci.asm | kernel-drivers | medium | legacy | TBD
+src/kernel/fs/fat16.asm | kernel-fs | medium | legacy | TBD
+src/kernel/gui/cursor.asm | kernel-gui | medium | legacy | TBD
+src/kernel/gui/desktop.asm | kernel-gui | medium | legacy | TBD
+src/kernel/gui/render.asm | kernel-gui | medium | legacy | TBD
+src/kernel/gui/resources.asm | kernel-gui | medium | legacy | TBD
+src/kernel/gui/taskbar.asm | kernel-gui | medium | legacy | TBD
+src/kernel/gui/window.asm | kernel-gui | medium | migrating | src/kernel/nexushlk/wm_helpers.nxh
+src/kernel/kernel_build.asm | kernel-build | high | legacy | TBD
+src/kernel/lib/font.asm | kernel-lib | medium | legacy | TBD
+src/kernel/lib/math.asm | kernel-lib | medium | legacy | TBD
+src/kernel/lib/string.asm | kernel-lib | medium | legacy | TBD
+src/kernel/lib/xml.asm | kernel-lib | medium | legacy | TBD
+src/kernel/lib/xml_selftest.inc | kernel-lib | medium | legacy | TBD
+src/kernel/net/arp.asm | kernel-net | medium | legacy | TBD
+src/kernel/net/dhcp.asm | kernel-net | medium | legacy | TBD
+src/kernel/net/dns.asm | kernel-net | medium | legacy | TBD
+src/kernel/net/eth.asm | kernel-net | medium | legacy | TBD
+src/kernel/net/icmp.asm | kernel-net | medium | legacy | TBD
+src/kernel/net/ip.asm | kernel-net | medium | legacy | TBD
+src/kernel/net/nic.asm | kernel-net | medium | legacy | TBD
+src/kernel/net/tcp.asm | kernel-net | medium | legacy | TBD
+src/kernel/net/udp.asm | kernel-net | medium | legacy | TBD
+src/kernel/proc/handle_table.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/process.asm | kernel-proc | high | legacy | TBD
+src/kernel/proc/syscall.asm | kernel-proc | high | legacy | TBD
+src/kernel/proc/syscall_data.inc | kernel-proc | high | migrating | src/kernel/nexushlk/syscall_data.nxh
+src/kernel/proc/syscall_dispatch_core.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/syscall_epilogue.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/syscall_handlers_gui_wm.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/syscall_handlers_sys_fs.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/syscall_handlers_wx_net.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/syscall_handlers_xml_draw.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/syscall_perm.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/syscall_security.inc | kernel-proc | high | migrating | src/kernel/nexushlk/syscall_secure.nxh
+src/kernel/proc/syscall_support.inc | kernel-proc | high | migrating | src/kernel/nexushlk/syscall_validate.nxh
+src/kernel/proc/syscall_validation.inc | kernel-proc | high | migrating | src/kernel/nexushlk/syscall_validate.nxh
+src/kernel/proc/usermode.asm | kernel-proc | high | legacy | TBD
+src/kernel/proc/usermode_callbacks.inc | kernel-proc | high | migrating | src/kernel/nexushlk/usermode_callbacks.nxh
+src/kernel/proc/usermode_decls.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/usermode_entry.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/usermode_integrity.inc | kernel-proc | high | migrating | src/kernel/nexushlk/usermode_callbacks.nxh
+src/kernel/proc/usermode_paging.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/usermode_slot_install.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/usermode_slot_state.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/usermode_storage.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/usermode_translate.inc | kernel-proc | high | legacy | TBD
+src/kernel/proc/workqueue.asm | kernel-proc | high | legacy | TBD
+src/resources/design-system/font_16x32.inc | resources | low | legacy | TBD
+src/resources/design-system/font_24x48.inc | resources | low | legacy | TBD
+src/resources/design-system/font_8x16.inc | resources | low | legacy | TBD
+src/resources/design-system/palette_dark.inc | resources | low | legacy | TBD
+src/resources/design-system/palette_light.inc | resources | low | legacy | TBD
+src/resources/design-system/parser_example.asm | resources | low | legacy | TBD
+src/user/apps.asm | user-apps | medium | legacy | TBD
+src/user/apps/about.inc | user-apps | medium | migrating | src/user/nexushl/apps/about.nxh
+src/user/apps/common.inc | user-apps | medium | legacy | TBD
+src/user/apps/launch.inc | user-apps | medium | legacy | TBD
+src/user/apps/media_viewer.inc | user-apps | medium | legacy | TBD
+src/user/apps/media_viewer_controls.inc | user-apps | medium | legacy | TBD
+src/user/apps/media_viewer_core.inc | user-apps | medium | legacy | TBD
+src/user/apps/media_viewer_images.inc | user-apps | medium | legacy | TBD
+src/user/apps/media_viewer_scaler.inc | user-apps | medium | legacy | TBD
+src/user/apps/media_viewer_vector.inc | user-apps | medium | legacy | TBD
+src/user/apps/media_viewer_video.inc | user-apps | medium | legacy | TBD
+src/user/apps/security_probe.inc | user-apps | medium | legacy | TBD
+src/user/apps/settings.inc | user-apps | medium | migrating | src/user/nexushl/apps/settings.nxh
+src/user/apps/shell.inc | user-apps | medium | migrating | src/user/nexushl/apps/explorer.nxh
+src/user/apps/state.inc | user-apps | medium | legacy | TBD
+src/user/lib/nexus_app.inc | user-lib | medium | legacy | TBD
+src/user/lib/nexus_fs.inc | user-lib | medium | legacy | TBD
+src/user/lib/nexus_window.inc | user-lib | medium | legacy | TBD
+src/user/poc/exploit_poc_syscall9.asm | user-poc | low | legacy | TBD
+src/user/poc/poc_standalone_prelude.inc | user-poc | low | legacy | TBD
+src/user/poc/shadow_stack_poc.asm | user-poc | low | legacy | TBD
+src/user/poc/stack_overflow_poc.asm | user-poc | low | legacy | TBD
+src/user/poc/wx_jit_alias_fuzz.asm | user-poc | low | legacy | TBD
+src/user/poc/wx_jit_alias_pos.asm | user-poc | low | legacy | TBD
+src/user/poc/wx_poc_exec_w.asm | user-poc | low | legacy | TBD
+src/user/poc/wx_poc_pos.asm | user-poc | low | legacy | TBD
+src/user/poc/wx_poc_write_x.asm | user-poc | low | legacy | TBD
+src/user/templates/hello_callback.asm | user-templates | low | legacy | TBD

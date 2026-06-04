@@ -1,0 +1,7 @@
+invariant=INV-SCHED-NO-MEMORY
+title=Compromised scheduler cannot grant memory
+statement=The scheduler domain never holds AUTH_MEMORY_GRANT.
+compromised=scheduler domain
+denied_authority=AUTH_MEMORY_GRANT
+predicate=inv_scheduler_no_memory_grant
+status=modeled

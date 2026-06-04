@@ -12,7 +12,7 @@ KEYWORDS = {
     "use","app","module","fn","let","if","else","while","for","return",
     "str","i8","i16","i32","i64","u8","u16","u32","u64","ptr","void","bool",
     "true","false","asm","syscall","extern","const","struct","state","break","continue",
-    "global",
+    "global","data","table","naked","align","unsafe",
     # Kernel-mode explicit-register ABI:
     #   preserves(...) — callee-save contract (see gen_kernel_fn)
     #   call           — register-annotated call statement `call f(al: x);`
@@ -49,6 +49,10 @@ def _build_reg_table():
     ]
     for q,d,w,b in rows:
         t[q]=(q,64); t[d]=(q,32); t[w]=(q,16); t[b]=(q,8)
+    # Legacy high-byte registers are needed for BIOS ABIs (AH=function,
+    # CH/CL=cylinder/sector, DH=head). They alias the same canonical 64-bit
+    # register as their low-byte partner; codegen moves them explicitly.
+    t["ah"]=("rax",8); t["bh"]=("rbx",8); t["ch"]=("rcx",8); t["dh"]=("rdx",8)
     for n in range(8,16):
         q=f"r{n}"; t[q]=(q,64); t[f"r{n}d"]=(q,32); t[f"r{n}w"]=(q,16); t[f"r{n}b"]=(q,8)
     return t
@@ -172,12 +176,21 @@ def parse(toks,path):
             decls.append(node("strdef",name=nm,val=val))
         elif t.v=="const":
             p.eat(); nm=p.eat("id").v; p.eat("=")
-            neg=False
-            if p.peek().k=="-": p.eat(); neg=True
-            v=p.eat("num").v
-            if neg: v = -v
-            p.match(";")
-            decls.append(node("const",name=nm,val=v))
+            if p.peek().v=="extern":
+                # `const NAME = extern;` — symbolic passthrough: NAME is an
+                # assembly-time constant (an `equ` defined in a kernel include).
+                # Codegen emits the bare symbol and NASM resolves it, so the
+                # value is never duplicated into NHLK (maintainability: the header
+                # stays the single source of the name). Not const-foldable.
+                p.eat(); p.match(";")
+                decls.append(node("const",name=nm,symbolic=True))
+            else:
+                neg=False
+                if p.peek().k=="-": p.eat(); neg=True
+                v=p.eat("num").v
+                if neg: v = -v
+                p.match(";")
+                decls.append(node("const",name=nm,val=v))
         elif t.v=="module":
             # Kernel-mode unit marker: `module "name";`. Names the translation
             # unit for the generated-file banner. Presence does NOT itself switch
@@ -195,6 +208,95 @@ def parse(toks,path):
         elif t.v=="extern":
             p.eat(); nm=p.eat("id").v; p.match(";")
             decls.append(node("extern",name=nm))
+        elif t.v=="unsafe":
+            p.eat(); cap=p.eat("id").v; p.match(";")
+            decls.append(node("unsafe",cap=cap,line=t.line))
+        elif t.v=="data":
+            # Kernel-mode data with an EXACT (unprefixed) symbol name. Forms:
+            #   data NAME: <count> [x <width>] [= <init>];   element array
+            #   data NAME = "string";                        NUL-terminated bytes
+            # <count> is a number, const, or product of two (e.g. MAXW * TBL_count);
+            # <width> in {1,2,4,8} -> db/dw/dd/dq (default 1); <init> number/const
+            # fill (default 0). Indexable like `state` (bounds-checked, byte-addr).
+            # Export with `global NAME;`. Lets kernel buffers keep the exact
+            # names/sizes/widths/inits the rest of the kernel binds to.
+            p.eat(); nm=p.eat("id").v
+            if p.match("="):
+                # string form
+                sval=p.eat("str").v; p.match(";")
+                decls.append(node("data",name=nm,strval=sval))
+                continue
+            p.eat(":")
+            def _data_term(pp):
+                if pp.peek().k=="num": return ("num",pp.eat("num").v)
+                return ("id",pp.eat("id").v)
+            factors=[_data_term(p)]
+            if p.peek().k=="*":
+                p.eat(); factors.append(_data_term(p))
+            width=1
+            if p.peek().k=="id" and p.peek().v=="x":
+                p.eat(); width=p.eat("num").v
+            init=node("int",val=0)
+            if p.match("="):
+                if p.match("["):
+                    vals=[]
+                    while not p.match("]"):
+                        neg=False
+                        if p.peek().k=="-": p.eat(); neg=True
+                        if p.peek().k=="num":
+                            v=p.eat("num").v
+                            vals.append(-v if neg else v)
+                        else:
+                            vals.append(("id", p.eat("id").v, neg))
+                        p.match(",")
+                    init=node("list",vals=vals)
+                else:
+                    neg=False
+                    if p.peek().k=="-": p.eat(); neg=True
+                    if p.peek().k=="num":
+                        v=p.eat("num").v
+                        init=node("int",val=(-v if neg else v))
+                    else:
+                        init=node("ident",name=p.eat("id").v)
+            p.match(";")
+            decls.append(node("data",name=nm,factors=factors,width=width,init=init))
+        elif t.v=="align":
+            p.eat(); n=p.eat("num").v; p.match(";")
+            decls.append(node("align",n=n))
+        elif t.v=="bits":
+            p.eat(); n=p.eat("num").v; p.match(";")
+            decls.append(node("bits",n=n))
+        elif t.v=="org":
+            p.eat()
+            neg=False
+            if p.peek().k=="-": p.eat(); neg=True
+            v=p.eat("num").v
+            if neg: v = -v
+            p.match(";")
+            decls.append(node("org",val=v))
+        elif t.v=="pad_to":
+            p.eat(); n=p.eat("num").v
+            fill=0
+            if p.match("="):
+                fill=p.eat("num").v
+            p.match(";")
+            decls.append(node("pad_to",n=n,fill=fill))
+        elif t.v=="boot_signature":
+            p.eat(); p.match(";")
+            decls.append(node("boot_signature"))
+        elif t.v=="table":
+            # Kernel-mode dispatch table: a fixed, ordered list of handler fn
+            # names. Emits `NAME: dq fn0, dq fn1, ...` and registers a count so
+            # `call_table(NAME, idx)` can do a BOUNDS-CHECKED indirect call into
+            # only this controlled set — the safe replacement for a raw
+            # `jmp [reg+off]` through an arbitrary pointer.
+            p.eat(); nm=p.eat("id").v; p.eat("{")
+            entries=[]
+            while not p.match("}"):
+                entries.append(p.eat("id").v)
+                p.match(",")
+            p.match(";")
+            decls.append(node("table",name=nm,entries=entries))
         elif t.v=="state":
             p.eat(); p.eat("{")
             fields=[]
@@ -214,6 +316,7 @@ def parse(toks,path):
     return decls
 
 def parse_fn(p):
+    fl=p.peek().line
     p.eat("fn"); name=p.eat("id").v
     p.eat("(")
     params=[]      # plain param names (user-mode / System-V kernel fns)
@@ -243,9 +346,17 @@ def parse_fn(p):
             if p.match(")"): break
             p.eat(",")
         preserves=plist
+    # `naked`: no compiler-emitted frame/prologue/epilogue/ret. The body owns
+    # the entire stack discipline via intrinsics (read_rsp/write_rsp/push_val/
+    # pop_val) and ends with its own control transfer (sysretq/iretq/...). For
+    # the SYSCALL `LSTAR` entry trampoline, which runs on the user stack with no
+    # frame and exits via sysret — unrepresentable by a normal `fn`.
+    naked=False
+    if p.peek().v=="naked":
+        p.eat(); naked=True
     body=parse_block(p)
     return node("fn",name=name,params=params,regparams=regparams,
-                preserves=preserves,body=body)
+                preserves=preserves,body=body,line=fl,naked=naked)
 
 def parse_block(p):
     p.eat("{")
@@ -255,6 +366,17 @@ def parse_block(p):
     return stmts
 
 def parse_stmt(p):
+    # Capture the source line of every statement so codegen can stamp each
+    # emitted instruction with `; <file>:<line>` provenance (zero runtime cost,
+    # no extra instructions — see gen_stmt). This is the backbone of NHLK's
+    # "disassembly traces straight back to source" debugging story.
+    ln=p.peek().line
+    nd=_parse_stmt_inner(p)
+    if isinstance(nd,dict) and "line" not in nd:
+        nd["line"]=ln
+    return nd
+
+def _parse_stmt_inner(p):
     t=p.peek()
     if t.v=="let":
         p.eat(); nm=p.eat("id").v; p.eat("="); e=parse_expr(p); p.match(";")
@@ -277,6 +399,22 @@ def parse_stmt(p):
     if t.v=="while":
         p.eat(); cond=parse_expr(p); body=parse_block(p)
         return node("while",cond=cond,body=body)
+    if t.v=="cfg":
+        # Build-time conditional compilation: `cfg "NAME" { ... }` wraps the
+        # block in `%ifdef NAME ... %endif`; `cfg !"NAME" { ... }` uses %ifndef;
+        # an optional `else { ... }` emits the %else arm. The only way structured
+        # NHLK can express the kernel's per-build-config (ENABLE_CET, NEXUS_SMP,
+        # FBPERF_NO_WC, ...) code paths without dropping to an asm escape.
+        p.eat()
+        neg=False
+        if p.peek().k=="!":
+            p.eat(); neg=True
+        name=p.eat("str").v
+        body=parse_block(p)
+        els=None
+        if p.match("else"):
+            els=parse_block(p)
+        return node("cfg",name=name,neg=neg,body=body,els=els)
     if t.v=="break":
         p.eat(); p.match(";"); return node("break")
     if t.v=="continue":
@@ -385,6 +523,35 @@ def parse_primary(p):
 ARG_REGS=["rdi","rsi","rdx","r10","r8","r9"]           # syscall ABI
 CALL_REGS=["rdi","rsi","rdx","rcx","r8","r9"]          # System V AMD64 (regular calls)
 
+# Zero-argument CPU instruction intrinsics (kernel mode only). Each maps to a
+# fixed instruction sequence emitted inline — no call, no asm{} escape. Control
+# intrinsics (sysretq/iretq/hlt) do not return; value intrinsics leave their
+# result in rax (the accumulator) so they compose in expressions. See the
+# intrinsic dispatch in gen_expr for the arg-taking forms (rdmsr/wrmsr/inb/...).
+_NULLARY_INTRINSICS={
+    # control / barrier — no value
+    "cli":["cli"], "sti":["sti"], "hlt":["hlt"], "swapgs":["swapgs"],
+    "sysretq":["o64 sysret"], "iretq":["iretq"], "ud2":["ud2"],
+    "ret_naked":["ret"],              # explicit near return for `naked` fns
+                                      # (naked has no auto epilogue/ret)
+    "lfence":["lfence"], "mfence":["mfence"], "sfence":["sfence"],
+    "pause":["pause"], "wbinvd":["wbinvd"], "nop":["nop"],
+    "smap_open":["stac"], "smap_close":["clac"],
+    # value-producing — result in rax
+    "rdtsc":["rdtsc","shl rdx, 32","mov eax, eax","or rax, rdx"],
+    "rdrand":["rdrand rax"],          # single attempt; CF=success (loop in NHLK if needed)
+    "read_cr0":["mov rax, cr0"],
+    "read_cr2":["mov rax, cr2"],
+    "read_cr3":["mov rax, cr3"],
+    "read_cr4":["mov rax, cr4"],
+    # naked/raw-stack primitives (for `naked` fns, e.g. the SYSCALL trampoline)
+    "read_rsp":["mov rax, rsp"],      # current stack pointer
+    "pop_val":["pop rax"],            # pop top of stack into rax
+    # EFLAGS read (value, naked/iret paths). pushfq/pop is the only architectural
+    # way to materialize RFLAGS into a GPR. Pairs with write_flags(v).
+    "read_flags":["pushfq","pop rax"],
+}
+
 def rbpoff(o):
     # Format a signed rbp displacement: negative locals -> "-N", positive
     # (stack-passed params 7+) -> "+N".  o == 0 collapses to "".
@@ -397,16 +564,34 @@ class CG:
         s.text=[]; s.rodata=[]; s.data=[]
         s.lbl=0
         s.kernel=kernel
+        s.target="kernel" if kernel else "user"
+        s.boot_bits=64
+        s.src=None          # source basename for `; file:line` provenance
+        s.srcmap=True       # stamp provenance comments (zero runtime cost)
         s.globals=set()       # kernel-mode: symbols to emit `global` for
         s.prefix=app_prefix
         s.str_lbls={}
         s.state_defs={}
+        s.state_sizes={}      # state buffer name -> byte size (for bounds checks)
+        s.state_widths={}     # state/data name -> element width in bytes
+        s.table_counts={}     # dispatch table name -> entry count (for call_table)
+        s.fnbegin_emitted=set()  # exported kernel fns emitted via FN_BEGIN (skip top-level global)
         s.consts={}
+        s.symconsts=set()   # `const X = extern;` — emit bare symbol, NASM resolves
         s.externs=set()
+        s.unsafe_caps=set()
+        s.deny_unsafe=False
         s.loops=[]  # (brk_lbl, cont_lbl)
         s.sigs=[]
+        s.need_oob=False      # an out-of-bounds trap stub is referenced
     def L(s,base="L"):
         s.lbl+=1; return f".{base}{s.lbl}"
+    def oob(s):
+        # Shared per-unit out-of-bounds trap target. Referencing it marks the
+        # stub for emission at unit end. The stub is `ud2` — an unforgeable #UD
+        # fault — so a bounds violation can never silently corrupt memory.
+        s.need_oob=True
+        return f"{s.prefix}_nhlk_oob"
     def emit(s,line): s.text.append(line)
     def str_label(s,val):
         if val in s.str_lbls: return s.str_lbls[val]
@@ -450,6 +635,19 @@ _PEEP_LOAD_RAX = re.compile(r"^\s*mov\s+rax,\s*(.+?)\s*$")
 _PEEP_PUSH_RAX = re.compile(r"^\s*push\s+rax\s*$")
 _PEEP_POP_REG  = re.compile(r"^\s*pop\s+([a-z][a-z0-9]+)\s*$")
 _PEEP_MOV_R_RAX = re.compile(r"^\s*mov\s+([a-z][a-z0-9]+),\s*rax\s*$")
+
+def _code(line):
+    # The instruction text of a generated line, minus any `; file:line`
+    # provenance comment. Generated .text never contains a literal ';' except
+    # as a comment (string data lives in .rodata as db bytes), so a plain split
+    # is safe. The peephole matches on this so provenance never blocks an
+    # optimization; the comment is re-attached to whichever instruction survives.
+    h = line.find(";")
+    return line if h < 0 else line[:h].rstrip()
+
+def _comment(line):
+    h = line.find(";")
+    return ("    " + line[h:]) if h >= 0 else ""
 _REG_WORD = re.compile(r"\b([a-z][a-z0-9]+)\b")
 # Operands considered safe to relocate: they read no registers other than
 # rbp/rip-relative or are pure immediates. We detect by checking the operand
@@ -483,19 +681,21 @@ def _peephole(lines):
     while i < n:
         # Detect run of (mov rax, OP ; push rax) pairs.
         ops = []
+        cmts = []
         j = i
         while j + 1 < n:
-            m1 = _PEEP_LOAD_RAX.match(lines[j])
+            m1 = _PEEP_LOAD_RAX.match(_code(lines[j]))
             if not m1: break
-            if not _PEEP_PUSH_RAX.match(lines[j+1]): break
+            if not _PEEP_PUSH_RAX.match(_code(lines[j+1])): break
             ops.append(m1.group(1))
+            cmts.append(_comment(lines[j]))   # provenance of the load survives
             j += 2
         if ops:
             # Count trailing pops (must equal len(ops), all distinct, none rax).
             pops = []
             k = j
             while k < n:
-                m2 = _PEEP_POP_REG.match(lines[k])
+                m2 = _PEEP_POP_REG.match(_code(lines[k]))
                 if not m2: break
                 pops.append(m2.group(1))
                 k += 1
@@ -532,7 +732,7 @@ def _peephole(lines):
                 if safe:
                     for m, popreg in enumerate(pops):
                         src = ops[N - 1 - m]
-                        out.append(f"    mov {popreg}, {src}")
+                        out.append(f"    mov {popreg}, {src}{cmts[N - 1 - m]}")
                     i = k
                     continue
         out.append(lines[i])
@@ -545,11 +745,11 @@ def _peephole(lines):
     n = len(lines)
     while i < n:
         if (i + 1 < n
-            and _PEEP_PUSH_RAX.match(lines[i])
-            and _PEEP_POP_REG.match(lines[i+1])):
-            reg = _PEEP_POP_REG.match(lines[i+1]).group(1)
+            and _PEEP_PUSH_RAX.match(_code(lines[i]))
+            and _PEEP_POP_REG.match(_code(lines[i+1]))):
+            reg = _PEEP_POP_REG.match(_code(lines[i+1])).group(1)
             if reg != "rax":
-                out.append(f"    mov {reg}, rax")
+                out.append(f"    mov {reg}, rax{_comment(lines[i])}")
             i += 2
             continue
         out.append(lines[i])
@@ -564,14 +764,14 @@ def _peephole(lines):
     n = len(lines)
     while i < n:
         if i + 2 < n:
-            m1 = _PEEP_LOAD_RAX.match(lines[i])
-            m2 = _PEEP_MOV_R_RAX.match(lines[i+1])
-            m3 = _PEEP_POP_REG.match(lines[i+2])
+            m1 = _PEEP_LOAD_RAX.match(_code(lines[i]))
+            m2 = _PEEP_MOV_R_RAX.match(_code(lines[i+1]))
+            m3 = _PEEP_POP_REG.match(_code(lines[i+2]))
             if m1 and m2 and m3 and m3.group(1) == "rax" and m2.group(1) != "rax":
                 op = m1.group(1)
                 tgt = m2.group(1)
                 if _operand_safe_for_target(op, tgt):
-                    out.append(f"    mov {tgt}, {op}")
+                    out.append(f"    mov {tgt}, {op}{_comment(lines[i])}")
                     out.append(lines[i+2])
                     i += 3
                     continue
@@ -579,25 +779,89 @@ def _peephole(lines):
         i += 1
     return out
 
-def compile_unit(decls,app_prefix,embed=False,kernel=False):
+def _contains_asm_stmt(stmts):
+    for st in stmts:
+        if st.get("k")=="asm":
+            return True
+        if st.get("k")=="if":
+            if _contains_asm_stmt(st.get("then") or []):
+                return True
+            if _contains_asm_stmt(st.get("els") or []):
+                return True
+        elif st.get("k")=="while":
+            if _contains_asm_stmt(st.get("body") or []):
+                return True
+    return False
+
+def _enforce_no_asm(decls, why):
+    offenders=[]
+    for d in decls:
+        if d.get("k")=="fn" and _contains_asm_stmt(d.get("body") or []):
+            offenders.append(f"{d.get('name','<fn>')}:{d.get('line','?')}")
+    if offenders:
+        names=", ".join(offenders[:8])
+        more="" if len(offenders)<=8 else f" (+{len(offenders)-8} more)"
+        raise SyntaxError(f"{why}: inline asm is forbidden in {names}{more}")
+
+_VALID_UNSAFE_CAPS={
+    "raw_mem",
+    "implicit_extern",
+    "boot_call",
+    "boot_int",
+    "boot_io",
+    "boot_lgdt",
+    "kernel_priv",
+    "kernel_io",
+    "kernel_int",
+}
+
+def _require_cap(cg, cap, what):
+    if cap not in getattr(cg,"unsafe_caps",set()):
+        raise SyntaxError(f"{what} requires `unsafe {cap};`")
+
+def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None,target="user",forbid_asm=False,deny_unsafe=False):
     global LAST_SIGS
+    if forbid_asm:
+        _enforce_no_asm(decls, "--forbid-asm")
+    if target=="boot":
+        _enforce_no_asm(decls, "--target boot")
+    declared_caps=[d for d in decls if d.get("k")=="unsafe"]
+    for d in declared_caps:
+        if d["cap"] not in _VALID_UNSAFE_CAPS:
+            raise SyntaxError(f"unsafe {d['cap']}: unknown capability")
+    if deny_unsafe and declared_caps:
+        caps=", ".join(d["cap"] for d in declared_caps[:8])
+        raise SyntaxError(f"--deny-unsafe rejects unsafe capability declarations: {caps}")
     cg=CG(app_prefix,kernel=kernel)
+    cg.deny_unsafe=deny_unsafe
+    cg.unsafe_caps={d["cap"] for d in declared_caps}
     cg.embed=embed
+    cg.src=src
+    cg.target=target
+    # Source-line provenance is kernel-only: it is pure NASM comments (zero
+    # machine-code cost), but gating it to kernel mode guarantees the ring-3
+    # app blobs + their MAC signatures stay byte-identical and keeps the
+    # traceability where it matters — ring-0 debugging.
+    cg.srcmap=kernel and (src is not None)
     app_meta={"name":app_prefix,"stack":4096}
+    boot_bits=None
+    boot_org=None
     # collect top-level
     str_defs={}
     for d in decls:
+        if d["k"]=="unsafe":
+            continue
         if d["k"]=="app":
             if kernel:
                 raise SyntaxError("`app` declaration is not allowed in a kernel module (--target kernel); use `module`")
             app_meta["name"]=d["name"]; app_meta["stack"]=d["stack"]
         elif d["k"]=="module":
             if not kernel:
-                raise SyntaxError("`module` declaration requires --target kernel")
+                raise SyntaxError("`module` declaration requires --target kernel or --target boot")
             app_meta["name"]=d["name"]
         elif d["k"]=="global":
             if not kernel:
-                raise SyntaxError("`global` declaration requires --target kernel")
+                raise SyntaxError("`global` declaration requires --target kernel or --target boot")
             cg.globals.add(d["name"])
         elif d["k"]=="strdef":
             lbl=f"{app_prefix}_{d['name']}"
@@ -605,35 +869,156 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False):
             cg.rodata.append(f"{lbl}: " + _emit_db_bytes(d["val"]))
             str_defs[d["name"]]=lbl
         elif d["k"]=="const":
-            cg.consts[d["name"]]=d["val"]
+            if d.get("symbolic"):
+                cg.symconsts.add(d["name"])
+            else:
+                cg.consts[d["name"]]=d["val"]
         elif d["k"]=="extern":
             cg.externs.add(d["name"])
+        elif d["k"]=="data":
+            if not kernel:
+                raise SyntaxError("`data` declaration requires --target kernel or --target boot")
+            nm=d["name"]
+            cg.state_defs[nm]=nm          # exact, unprefixed name
+            if "strval" in d:
+                raw=d["strval"].encode("utf-8")
+                parts=", ".join(str(b) for b in raw)
+                cg.data.append(f"{nm}: db {parts}, 0" if raw else f"{nm}: db 0")
+                cg.state_sizes[nm]=len(raw)+1
+                cg.state_widths[nm]=1
+                continue
+            def _resolve_term(t):
+                if t[0]=="num": return t[1]
+                n=t[1]
+                if n in cg.consts: return cg.consts[n]
+                if n in cg.table_counts: return cg.table_counts[n]
+                raise SyntaxError(f"data {nm}: unknown size term {n!r}")
+            count=1
+            for f in d["factors"]:
+                count*=_resolve_term(f)
+            w=d["width"]
+            if w not in (1,2,4,8):
+                raise SyntaxError(f"data {nm}: width must be 1/2/4/8, got {w}")
+            if count<=0:
+                raise SyntaxError(f"data {nm}: size must be positive")
+            iv=d["init"]
+            if iv["k"]=="int":
+                initval=iv["val"]
+            elif iv["k"]=="ident" and iv["name"] in cg.consts:
+                initval=cg.consts[iv["name"]]
+            elif iv["k"]=="list":
+                vals=[]
+                for item in iv["vals"]:
+                    if isinstance(item, tuple):
+                        _tag, cn, neg = item
+                        if cn not in cg.consts:
+                            raise SyntaxError(f"data {nm}: unknown const {cn!r} in initializer")
+                        cv = cg.consts[cn]
+                        if not isinstance(cv, int):
+                            raise SyntaxError(f"data {nm}: non-integer const {cn!r} in initializer")
+                        vals.append(-cv if neg else cv)
+                    else:
+                        vals.append(item)
+                if len(vals) > count:
+                    raise SyntaxError(f"data {nm}: initializer has {len(vals)} values for {count} slots")
+                directive={1:"db",2:"dw",4:"dd",8:"dq"}[w]
+                if vals:
+                    cg.data.append(f"{nm}: {directive} " + ", ".join(str(v) for v in vals))
+                else:
+                    cg.data.append(f"{nm}:")
+                if len(vals) < count:
+                    cg.data.append(f"    times {count - len(vals)} {directive} 0")
+                cg.state_sizes[nm]=count*w
+                cg.state_widths[nm]=w
+                continue
+            else:
+                raise SyntaxError(f"data {nm}: init must be a number or const")
+            directive={1:"db",2:"dw",4:"dd",8:"dq"}[w]
+            cg.data.append(f"{nm}: times {count} {directive} {initval}")
+            cg.state_sizes[nm]=count*w     # byte size for bounds checks
+            cg.state_widths[nm]=w
+        elif d["k"]=="align":
+            if not kernel:
+                raise SyntaxError("`align` declaration requires --target kernel or --target boot")
+            cg.data.append(f"align {d['n']}")
+        elif d["k"]=="pad_to":
+            if target!="boot":
+                raise SyntaxError("`pad_to` declaration requires --target boot")
+            if d["n"] <= 0:
+                raise SyntaxError("pad_to target must be positive")
+            if d["fill"] < 0 or d["fill"] > 255:
+                raise SyntaxError("pad_to fill byte must be 0..255")
+            cg.data.append(f"times 0x{d['n']:X} - ($ - $$) db 0x{d['fill']:02X}")
+        elif d["k"]=="boot_signature":
+            if target!="boot":
+                raise SyntaxError("`boot_signature` declaration requires --target boot")
+            cg.data.append("dw 0xAA55")
+        elif d["k"]=="bits":
+            if target!="boot":
+                raise SyntaxError("`bits` declaration requires --target boot")
+            if d["n"] not in (16,32,64):
+                raise SyntaxError(f"bits must be 16, 32, or 64, got {d['n']}")
+            boot_bits=d["n"]
+        elif d["k"]=="org":
+            if target!="boot":
+                raise SyntaxError("`org` declaration requires --target boot")
+            if boot_org is not None:
+                raise SyntaxError("only one `org` declaration is allowed")
+            boot_org=d["val"]
+        elif d["k"]=="table":
+            if not kernel:
+                raise SyntaxError("`table` declaration requires --target kernel or --target boot")
+            nm=d["name"]; entries=d["entries"]
+            if not entries:
+                raise SyntaxError(f"table {nm}: must have at least one entry")
+            cg.table_counts[nm]=len(entries)
+            cg.consts[nm+"_count"]=len(entries)   # usable in `data` size exprs
+            cg.data.append(f"{nm}: dq " + ", ".join(entries))
         elif d["k"]=="state":
             for nm,sz in d["fields"]:
                 if sz <= 0:
                     raise SyntaxError(f"state {nm}: size must be positive")
                 lbl=f"{app_prefix}_{nm}"
                 cg.state_defs[nm]=lbl
+                cg.state_sizes[nm]=sz
+                cg.state_widths[nm]=1
                 cg.data.append(f"{lbl}: times {sz} db 0")
     cg.str_defs=str_defs
     # collect local fn names (so calls resolve to prefixed symbols)
     cg.local_fns={d["name"] for d in decls if d["k"]=="fn"}
     cg.fn_argc={d["name"]:len(d["params"]) for d in decls if d["k"]=="fn"}
+    if target=="boot":
+        cg.boot_bits=boot_bits or 64
     # functions
     for d in decls:
         if d["k"]=="fn":
-            if kernel:
+            if target=="boot":
+                gen_boot_fn(cg,d)
+            elif kernel:
                 gen_kernel_fn(cg,d)
             else:
                 gen_fn(cg,d,app_prefix)
+    # Out-of-bounds trap stub (emitted once, only if referenced by a checked
+    # index). `ud2` raises #UD — an unforgeable, non-resumable fault — so a
+    # state-buffer bounds violation halts at the faulting site instead of
+    # writing past the buffer into adjacent memory.
+    if cg.need_oob:
+        cg.emit(f"{cg.prefix}_nhlk_oob:")
+        cg.emit("    ud2")
     # assemble output
     out=[]
     out.append(f"; NexusHL generated — do not edit by hand")
     if kernel:
-        out.append(f'; module="{app_meta["name"]}" target=kernel')
+        out.append(f'; module="{app_meta["name"]}" target={target}')
     else:
         out.append(f'; app="{app_meta["name"]}" stack={app_meta["stack"]}')
-    if not embed and not kernel:
+    if target=="boot":
+        out.append(f"bits {boot_bits or 64}")
+        if boot_org is not None:
+            out.append(f"org 0x{boot_org:X}")
+        if boot_bits in (None,64):
+            out.append("default rel")
+    elif not embed and not kernel:
         out.append("bits 64")
         out.append("default rel")
         out.append('%include "trace.inc"')
@@ -645,6 +1030,8 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False):
     # they document the module's public surface.
     if kernel:
         for g in sorted(cg.globals):
+            if g in cg.fnbegin_emitted:
+                continue   # FN_BEGIN already emitted `global g` for this fn
             out.append(f"global {g}")
     if not embed:
         out.append("section .text")
@@ -657,11 +1044,373 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False):
             out.append("section .rodata")
         out.extend(cg.rodata)
     if cg.data:
-        if not embed:
+        if target!="boot" and (not embed or kernel):
             out.append("section .data")
         out.extend(cg.data)
     LAST_SIGS=cg.sigs
     return "\n".join(out)+"\n"
+
+def _boot_regs(bits):
+    if bits==16:
+        return {
+            "acc":"ax", "acc32":"eax", "acc64":"rax", "tmp":"cx", "tmp2":"dx",
+            "addr":"bx", "sp":"sp", "bp":"bp", "word":"word", "ptr":"word",
+            "width":2, "bits":16,
+        }
+    if bits==32:
+        return {
+            "acc":"eax", "acc32":"eax", "acc64":"rax", "tmp":"ecx", "tmp2":"edx",
+            "addr":"ebx", "sp":"esp", "bp":"ebp", "word":"dword", "ptr":"dword",
+            "width":4, "bits":32,
+        }
+    return {
+        "acc":"rax", "acc32":"eax", "acc64":"rax", "tmp":"rcx", "tmp2":"rdx",
+        "addr":"rbx", "sp":"rsp", "bp":"rbp", "word":"qword", "ptr":"qword",
+        "width":8, "bits":64,
+    }
+
+def _boot_reg_width(bits, width_bytes):
+    if bits==16:
+        return {1:"al",2:"ax",4:"eax",8:"rax"}[width_bytes]
+    if bits==32:
+        return {1:"al",2:"ax",4:"eax",8:"rax"}[width_bytes]
+    return {1:"al",2:"ax",4:"eax",8:"rax"}[width_bytes]
+
+def _boot_mem_directive(width_bytes):
+    return {1:"byte",2:"word",4:"dword",8:"qword"}[width_bytes]
+
+def _boot_zero_extend(cg, width_bytes):
+    bits=cg.boot_bits
+    acc=_boot_regs(bits)["acc"]
+    if width_bytes==1:
+        cg.emit(f"    movzx {acc}, al")
+    elif width_bytes==2 and bits!=16:
+        cg.emit(f"    movzx {acc}, ax")
+    elif width_bytes==4 and bits==64:
+        cg.emit("    mov eax, eax")
+
+class BootState:
+    def __init__(s,cg,scope):
+        s.cg=cg
+        s.scope=scope              # local name -> (label, width_bytes)
+        s.regparams={}             # local name -> (reg spelling, width bytes)
+        s.epilogue=""
+
+def _boot_count_lets(stmts):
+    n=[]
+    def walk(xs):
+        for st in xs:
+            if st.get("k")=="let":
+                n.append(st["name"])
+            elif st.get("k")=="if":
+                walk(st.get("then") or [])
+                walk(st.get("els") or [])
+            elif st.get("k")=="while":
+                walk(st.get("body") or [])
+    walk(stmts)
+    return n
+
+def gen_boot_fn(cg,fn):
+    name=fn["name"]
+    bits=cg.boot_bits
+    if bits not in (16,32,64):
+        raise SyntaxError(f"boot fn {name}: unsupported bits {bits}")
+    if fn.get("params"):
+        raise SyntaxError(f"boot fn {name}: use explicit register params, e.g. `fn f(dl drive)`")
+    if fn.get("preserves") is not None:
+        raise SyntaxError(f"boot fn {name}: preserves(...) is not supported in boot mode yet")
+    if fn.get("naked"):
+        raise SyntaxError(f"boot fn {name}: boot functions are already bare; `naked` is redundant")
+
+    scope={}
+    for local in _boot_count_lets(fn["body"]):
+        lbl=f"__{name}_{local}"
+        if local not in scope:
+            scope[local]=(lbl,_boot_regs(bits)["width"])
+            directive={1:"db",2:"dw",4:"dd",8:"dq"}[_boot_regs(bits)["width"]]
+            cg.data.append(f"{lbl}: times 1 {directive} 0")
+
+    st=BootState(cg,scope)
+    for spell,pn in fn.get("regparams") or []:
+        if spell not in REG_TABLE:
+            raise SyntaxError(f"boot fn {name}: {spell} is not a register")
+        _canon,width_bits=REG_TABLE[spell]
+        width_bytes=max(1,width_bits//8)
+        st.regparams[pn]=(spell,width_bytes)
+
+    cg.emit(f"{name}:")
+    st.epilogue=f".boot_fn_end_{cg.lbl}_{name}"
+    for stmt in fn["body"]:
+        gen_boot_stmt(st,stmt)
+    cg.emit(f"{st.epilogue}:")
+    cg.emit("    ret")
+
+def gen_boot_stmt(st,s):
+    cg=st.cg; k=s["k"]
+    if k=="asm":
+        raise SyntaxError("--target boot forbids inline asm")
+    if k=="let":
+        if s["name"] not in st.scope:
+            raise SyntaxError(f"boot let {s['name']}: internal local allocation error")
+        lbl,w=st.scope[s["name"]]
+        gen_boot_expr(st,s["expr"])
+        cg.emit(f"    mov [{lbl}], {_boot_reg_width(cg.boot_bits,w)}")
+    elif k=="assign":
+        lhs=s["lhs"]
+        if lhs["k"]!="ident":
+            raise SyntaxError("boot assignment supports identifiers only")
+        gen_boot_expr(st,s["rhs"])
+        n=lhs["name"]
+        if n in st.scope:
+            lbl,w=st.scope[n]
+            cg.emit(f"    mov [{lbl}], {_boot_reg_width(cg.boot_bits,w)}")
+        elif n in st.regparams:
+            reg,w=st.regparams[n]
+            src=_boot_reg_width(cg.boot_bits,w)
+            cg.emit(f"    mov {reg}, {src}")
+        elif n in cg.state_defs:
+            lbl=cg.state_defs[n]; w=cg.state_widths.get(n,1)
+            cg.emit(f"    mov [{lbl}], {_boot_reg_width(cg.boot_bits,w)}")
+        else:
+            raise SyntaxError(f"boot assignment: unknown target {n}")
+    elif k=="exprstmt":
+        gen_boot_expr(st,s["expr"])
+    elif k=="return":
+        if s.get("expr"):
+            gen_boot_expr(st,s["expr"])
+        cg.emit(f"    jmp {st.epilogue}")
+    elif k=="if":
+        lelse=cg.L("boot_else"); lend=cg.L("boot_endif")
+        gen_boot_expr(st,s["cond"])
+        cg.emit(f"    test {_boot_regs(cg.boot_bits)['acc']}, {_boot_regs(cg.boot_bits)['acc']}")
+        cg.emit(f"    jz {lelse}")
+        for stmt in s["then"]:
+            gen_boot_stmt(st,stmt)
+        cg.emit(f"    jmp {lend}")
+        cg.emit(f"{lelse}:")
+        for stmt in s.get("els") or []:
+            gen_boot_stmt(st,stmt)
+        cg.emit(f"{lend}:")
+    elif k=="while":
+        lstart=cg.L("boot_wst"); lend=cg.L("boot_wend")
+        cg.loops.append((lend,lstart))
+        cg.emit(f"{lstart}:")
+        gen_boot_expr(st,s["cond"])
+        cg.emit(f"    test {_boot_regs(cg.boot_bits)['acc']}, {_boot_regs(cg.boot_bits)['acc']}")
+        cg.emit(f"    jz {lend}")
+        for stmt in s["body"]:
+            gen_boot_stmt(st,stmt)
+        cg.emit(f"    jmp {lstart}")
+        cg.emit(f"{lend}:")
+        cg.loops.pop()
+    elif k=="break":
+        if not cg.loops: raise SyntaxError("break outside loop")
+        cg.emit(f"    jmp {cg.loops[-1][0]}")
+    elif k=="continue":
+        if not cg.loops: raise SyntaxError("continue outside loop")
+        cg.emit(f"    jmp {cg.loops[-1][1]}")
+    elif k=="regcall":
+        # Register-annotated boot call (e.g. a BIOS ABI: ah=function, al/bl/...).
+        # Every argument is evaluated and pushed FIRST, then popped into the
+        # target registers in reverse source order. Writing no target until all
+        # args are evaluated means one arg's evaluation (which flows through the
+        # accumulator/tmp regs) can never clobber a register another arg already
+        # prepared -- the bug when each target was written inline.
+        regargs=s["regargs"]
+        rr=_boot_regs(cg.boot_bits); accfull=rr["acc"]; wordw=rr["width"]
+        targets=[]; seen=set()
+        for spell,_expr in regargs:
+            if spell not in REG_TABLE:
+                raise SyntaxError(f"boot call {s['target']}: {spell} is not a register")
+            canon,wbits=REG_TABLE[spell]; wb=max(1,wbits//8)
+            if spell in seen:
+                raise SyntaxError(f"boot call {s['target']}: register {spell} set twice")
+            seen.add(spell)
+            if wb not in (1,wordw):
+                raise SyntaxError(f"boot call {s['target']}: {spell} width unsupported in {cg.boot_bits}-bit boot calls")
+            if wb==1 and cg.boot_bits!=64 and spell not in ("al","bl","cl","dl","ah","bh","ch","dh"):
+                raise SyntaxError(f"boot call {s['target']}: byte register {spell} is not encodable in {cg.boot_bits}-bit mode (needs a REX prefix)")
+            targets.append((spell,canon,wb))
+        # Reject ambiguous overlap (e.g. ax + al share rax); a high+low byte pair
+        # such as ah + al is fine because the two bytes are written independently.
+        bycanon={}
+        for spell,canon,wb in targets:
+            bycanon.setdefault(canon,[]).append(wb)
+        for canon,ws in bycanon.items():
+            if len(ws)>1 and any(w!=1 for w in ws):
+                raise SyntaxError(f"boot call {s['target']}: overlapping target registers on {canon}")
+        # 1) Evaluate + stage every argument (source order).
+        for _spell,expr in regargs:
+            gen_boot_expr(st,expr)
+            cg.emit(f"    push {accfull}")
+        # 2) Pick a scratch register for sub-word target moves. A byte (8-bit)
+        #    move must source from a legacy low byte (al/bl/cl/dl): sil/dil/bpl
+        #    need a REX prefix (invalid in bits 16/32, and illegal mixed with a
+        #    high-byte target), so byte scratch is restricted to rax..rdx. Wider
+        #    sub-word moves (e.g. a 16-bit target in 32-bit mode) can use any reg.
+        used={canon for _,canon,_ in targets}
+        needs_scratch=any(wb!=wordw for _,_,wb in targets)
+        needs_byte=any(wb==1 for _,_,wb in targets)
+        scratch=None
+        if needs_scratch:
+            pool=("rcx","rdx","rbx","rax") if needs_byte else ("rcx","rdx","rbx","rsi","rdi","rbp","rax")
+            scratch=next((c for c in pool if c not in used), None)
+            if scratch is None:
+                kind="byte " if needs_byte else ""
+                raise SyntaxError(f"boot call {s['target']}: no free encodable {kind}scratch register for the argument registers used")
+        # 3) Pop in reverse source order into the target registers.
+        for spell,canon,wb in reversed(targets):
+            if wb==wordw:
+                cg.emit(f"    pop {_reg_at_width(canon,cg.boot_bits)}")
+            else:
+                cg.emit(f"    pop {_reg_at_width(scratch,cg.boot_bits)}")
+                cg.emit(f"    mov {spell}, {_reg_at_width(scratch,wb*8)}")
+        cg.emit(f"    call {s['target']}")
+    else:
+        raise SyntaxError(f"boot stmt not supported yet: {k}")
+
+def gen_boot_expr(st,e):
+    cg=st.cg; bits=cg.boot_bits; r=_boot_regs(bits); acc=r["acc"]; tmp=r["tmp"]
+    k=e["k"]
+    if k=="int":
+        cg.emit(f"    mov {acc}, {e['val']}")
+    elif k=="ident":
+        n=e["name"]
+        if n in st.scope:
+            lbl,w=st.scope[n]
+            cg.emit(f"    mov {_boot_reg_width(bits,w)}, [{lbl}]")
+            _boot_zero_extend(cg,w)
+        elif n in st.regparams:
+            reg,w=st.regparams[n]
+            dst=_boot_reg_width(bits,w)
+            if dst!=reg:
+                cg.emit(f"    mov {dst}, {reg}")
+            _boot_zero_extend(cg,w)
+        elif n in cg.consts:
+            cg.emit(f"    mov {acc}, {cg.consts[n]}")
+        elif n in cg.state_defs:
+            lbl=cg.state_defs[n]; w=cg.state_widths.get(n,1)
+            cg.emit(f"    mov {_boot_reg_width(bits,w)}, [{lbl}]")
+            _boot_zero_extend(cg,w)
+        else:
+            raise SyntaxError(f"boot expr: unknown identifier {n}")
+    elif k=="addr":
+        n=e["name"]
+        if n in st.scope:
+            cg.emit(f"    mov {acc}, {st.scope[n][0]}")
+        elif n in cg.state_defs:
+            cg.emit(f"    mov {acc}, {cg.state_defs[n]}")
+        elif n in cg.str_defs:
+            cg.emit(f"    mov {acc}, {cg.str_defs[n]}")
+        else:
+            cg.emit(f"    mov {acc}, {n}")
+    elif k=="neg":
+        gen_boot_expr(st,e["expr"]); cg.emit(f"    neg {acc}")
+    elif k=="not":
+        gen_boot_expr(st,e["expr"])
+        cg.emit(f"    test {acc}, {acc}")
+        cg.emit("    sete al")
+        _boot_zero_extend(cg,1)
+    elif k=="bin":
+        op=e["op"]
+        gen_boot_expr(st,e["rhs"])
+        cg.emit(f"    push {acc}")
+        gen_boot_expr(st,e["lhs"])
+        cg.emit(f"    pop {tmp}")
+        if op=="+": cg.emit(f"    add {acc}, {tmp}")
+        elif op=="-": cg.emit(f"    sub {acc}, {tmp}")
+        elif op=="&": cg.emit(f"    and {acc}, {tmp}")
+        elif op=="|": cg.emit(f"    or {acc}, {tmp}")
+        elif op=="^": cg.emit(f"    xor {acc}, {tmp}")
+        elif op=="<<": cg.emit(f"    shl {acc}, cl")
+        elif op==">>": cg.emit(f"    shr {acc}, cl")
+        elif op in ("==","!=","<",">","<=",">="):
+            cg.emit(f"    cmp {acc}, {tmp}")
+            setop={"==":"sete","!=":"setne","<":"setl",">":"setg","<=":"setle",">=":"setge"}[op]
+            cg.emit(f"    {setop} al")
+            _boot_zero_extend(cg,1)
+        else:
+            raise SyntaxError(f"boot binary op not supported yet: {op}")
+    elif k=="call":
+        name=e["name"]; args=e["args"]
+        if name in ("cli","sti","hlt","nop","ud2"):
+            if args: raise SyntaxError(f"{name} takes no args")
+            op={"cli":"cli","sti":"sti","hlt":"hlt","nop":"nop","ud2":"ud2"}[name]
+            cg.emit(f"    {op}")
+            if name not in ("hlt","ud2"):
+                cg.emit(f"    xor {acc}, {acc}")
+        elif name=="intn":
+            _require_cap(cg,"boot_int","boot intn()")
+            if len(args)!=1: raise SyntaxError("intn takes 1 arg")
+            vec=const_fold_int(cg,args[0])
+            if vec is None or vec<0 or vec>255:
+                raise SyntaxError("intn vector must be constant 0..255")
+            cg.emit(f"    int 0x{vec:02X}")
+            cg.emit(f"    xor {acc}, {acc}")
+        elif name=="inb":
+            _require_cap(cg,"boot_io","boot inb()")
+            if len(args)!=1: raise SyntaxError("inb takes 1 arg")
+            gen_boot_expr(st,args[0])
+            cg.emit("    mov dx, ax")
+            cg.emit("    in al, dx")
+            _boot_zero_extend(cg,1)
+        elif name=="outb":
+            _require_cap(cg,"boot_io","boot outb()")
+            if len(args)!=2: raise SyntaxError("outb takes 2 args")
+            gen_boot_expr(st,args[0])
+            cg.emit(f"    push {acc}")
+            gen_boot_expr(st,args[1])
+            cg.emit(f"    mov {tmp}, {acc}")
+            cg.emit(f"    pop {r['tmp2']}")
+            cg.emit("    mov al, cl")
+            cg.emit("    out dx, al")
+            cg.emit(f"    xor {acc}, {acc}")
+        elif name in ("load_ds","load_es","load_fs","load_gs","load_ss"):
+            if len(args)!=1: raise SyntaxError(f"{name} takes 1 arg")
+            gen_boot_expr(st,args[0])
+            cg.emit(f"    mov {name[-2:]}, ax")
+            cg.emit(f"    xor {acc}, {acc}")
+        elif name=="lgdt":
+            _require_cap(cg,"boot_lgdt","boot lgdt()")
+            if len(args)!=1: raise SyntaxError("lgdt takes 1 arg")
+            gen_boot_expr(st,args[0])
+            cg.emit(f"    mov {r['addr']}, {acc}")
+            cg.emit(f"    lgdt [{r['addr']}]")
+            cg.emit(f"    xor {acc}, {acc}")
+        elif name=="farjmp":
+            if len(args)!=2: raise SyntaxError("farjmp(selector, offset) takes 2 args")
+            sel=const_fold_int(cg,args[0]); off=const_fold_int(cg,args[1])
+            if sel is None or off is None:
+                raise SyntaxError("farjmp selector and offset must be constants")
+            cg.emit(f"    jmp 0x{sel:X}:0x{off:X}")
+        elif name=="call":
+            raise SyntaxError("use plain function syntax, e.g. f()")
+        else:
+            if args:
+                raise SyntaxError("boot direct calls do not support System-V args; use explicit-register call syntax")
+            if name not in cg.local_fns:
+                _require_cap(cg,"boot_call",f"boot direct call to undeclared label {name}")
+            cg.emit(f"    call {name}")
+    else:
+        raise SyntaxError(f"boot expr not supported yet: {k}")
+
+def _kfn_label(cg,name,argc):
+    # Emit the entry label for a kernel fn. Exported fns (declared `global`)
+    # go through FN_BEGIN so they register a signature (satisfies
+    # tools/check_coverage.py and the signature registry / traceability). Under
+    # the default build (no ENABLE_TRACE/ENABLE_SIG_SECTION) FN_BEGIN expands to
+    # exactly `global name` + `name:`, so this is byte-identical to a bare label.
+    # Internal (non-exported) fns keep a plain label.
+    if name in cg.globals:
+        cg.emit(f"FN_BEGIN {name}, {argc}, 0, FN_RET_SCALAR")
+        cg.fnbegin_emitted.add(name)
+    else:
+        cg.emit(f"{name}:")
+
+def _kfn_end(cg,name):
+    # Matching FN_END (only for FN_BEGIN-opened fns), emitted just before `ret`.
+    if name in cg.fnbegin_emitted:
+        cg.emit(f"    FN_END {name}")
 
 def gen_kernel_fn(cg,fn):
     # Kernel-mode function codegen.
@@ -692,6 +1441,8 @@ def gen_kernel_fn(cg,fn):
     regparams=fn.get("regparams") or []
     preserves=fn.get("preserves")
     body=fn["body"]
+    if getattr(cg,"srcmap",False) and cg.src and fn.get("line"):
+        cg.emit(f"; ===== fn {name}  <{cg.src}:{fn['line']}> =====")
     all_asm = len(body)>0 and all(s.get("k")=="asm" for s in body)
     if all_asm:
         if params or regparams or preserves:
@@ -702,6 +1453,31 @@ def gen_kernel_fn(cg,fn):
         for s in body:
             for ln in s["text"].split("\\n"):
                 cg.emit("    "+ln)
+        return
+    if fn.get("naked"):
+        # Naked fn: no compiler frame/prologue/epilogue/ret. The body owns the
+        # stack via read_rsp/write_rsp/push_val/pop_val and exits via its own
+        # control intrinsic (sysretq/iretq/...). No `let` (there is no frame to
+        # hold locals — use `state`/`data` scratch buffers instead). Exported
+        # naked fns emit a bare `global`+label (NOT FN_BEGIN: the raw entry can't
+        # run the FN_BEGIN trace push/call; syscall_entry is in the coverage
+        # CONTROL_ALLOW set for exactly this reason).
+        if params or regparams or preserves is not None:
+            raise SyntaxError(f"naked fn {name!r} takes no params/preserves clause")
+        def _has_let(stmts):
+            for s in stmts:
+                if s.get("k")=="let": return True
+                if s.get("k")=="if" and (_has_let(s.get("then",[])) or _has_let(s.get("els",[]) or [])): return True
+                if s.get("k")=="while" and _has_let(s.get("body",[])): return True
+            return False
+        if _has_let(body):
+            raise SyntaxError(f"naked fn {name!r} cannot use `let` (no frame); use state/data buffers")
+        cg.emit(f"{name}:")
+        st=FnState(cg,{},[-8],0)
+        st.epilogue=f".fn_end_{cg.lbl}_{name}"
+        for stmt in body:
+            gen_stmt(st,stmt)
+        cg.emit(f"{st.epilogue}:")    # target for any `return;` (no auto ret follows)
         return
     # ------------------------------------------------------------------
     # Explicit-register-ABI structured function (kernel mode).
@@ -749,30 +1525,34 @@ def gen_kernel_fn(cg,fn):
                 n+=count_lets(s.get("els",[]) or [])
             if k=="while":
                 n+=count_lets(s.get("body",[]))
+            if k=="cfg":
+                n+=count_lets(s.get("body",[]))
+                n+=count_lets(s.get("els",[]) or [])
         return n
     reg_param_count=min(len(params),len(CALL_REGS))
     n_locals=count_lets(body)
     local_size=8*(reg_param_count+n_locals)+64
     local_size=(local_size+15)&~15
-    cg.emit(f"{name}:")
+    _kfn_label(cg,name,len(params))
     cg.emit("    push rbp")
     cg.emit("    mov rbp, rsp")
+    cg.emit("    push rbx")
+    cg.emit("    push r12")
     cg.emit(f"    sub rsp, {local_size}")
     for i,pn in enumerate(params):
         if i<len(CALL_REGS):
             cg.emit(f"    mov [rbp{rbpoff(scope[pn])}], {CALL_REGS[i]}")
-    cg.emit("    push rbx")
-    cg.emit("    push r12")
     next_off=[-8*(reg_param_count+1)]
     st=FnState(cg,scope,next_off,local_size)
     st.epilogue=f".fn_end_{cg.lbl}_{name}"
     for stmt in body:
         gen_stmt(st,stmt)
     cg.emit(f"{st.epilogue}:")
+    cg.emit("    lea rsp, [rbp-16]")
     cg.emit("    pop r12")
     cg.emit("    pop rbx")
-    cg.emit("    mov rsp, rbp")
     cg.emit("    pop rbp")
+    _kfn_end(cg,name)
     cg.emit("    ret")
 
 # Deterministic full GP set for `preserves(all)`: every caller-visible
@@ -841,6 +1621,9 @@ def gen_kernel_fn_regabi(cg,fn,name,regparams,preserves,body):
                 n+=count_lets(s.get("els",[]) or [])
             if k=="while":
                 n+=count_lets(s.get("body",[]))
+            if k=="cfg":
+                n+=count_lets(s.get("body",[]))
+                n+=count_lets(s.get("els",[]) or [])
         return n
     n_locals=count_lets(body)
     nregp=len(bindings)
@@ -852,7 +1635,7 @@ def gen_kernel_fn_regabi(cg,fn,name,regparams,preserves,body):
     for b in bindings:
         b[3]=off; scope[b[0]]=off; off-=8
 
-    cg.emit(f"{name}:")
+    _kfn_label(cg,name,len(bindings))
     # callee-save contract first, so it brackets the whole frame.
     for c in preserved:
         cg.emit(f"    push {c}")
@@ -901,6 +1684,7 @@ def gen_kernel_fn_regabi(cg,fn,name,regparams,preserves,body):
     cg.emit("    pop rbp")
     for c in reversed(preserved):
         cg.emit(f"    pop {c}")
+    _kfn_end(cg,name)
     cg.emit("    ret")
 
 def gen_fn(cg,fn,prefix):
@@ -950,6 +1734,9 @@ def gen_fn(cg,fn,prefix):
                 n+=count_lets(s.get("els",[]) or [])
             if k=="while":
                 n+=count_lets(s.get("body",[]))
+            if k=="cfg":
+                n+=count_lets(s.get("body",[]))
+                n+=count_lets(s.get("els",[]) or [])
         return n
     reg_param_count=min(len(params),len(CALL_REGS))
     n_locals=count_lets(fn["body"])
@@ -995,14 +1782,36 @@ class FnState:
 
 def gen_stmt(st,s):
     cg=st.cg; k=s["k"]
+    # Provenance: remember where this statement's emitted instructions start so
+    # we can stamp the FIRST one with `; <file>:<line>` (zero runtime cost, no
+    # added instructions). asm-escape statements already carry author text, so
+    # skip them; labels are never stamped (handled below).
+    _prov_start = len(cg.text)
+    _gen_stmt_body(st,s)
+    if (getattr(cg,"srcmap",False) and cg.src and s.get("line")
+            and k!="asm" and len(cg.text) > _prov_start):
+        ln = cg.text[_prov_start]
+        # only stamp a real instruction line (indented, not a label) with no
+        # existing comment
+        if ln.startswith("    ") and not ln.rstrip().endswith(":") and ";" not in ln:
+            cg.text[_prov_start] = ln + f"    ; {cg.src}:{s['line']}"
+
+def _gen_stmt_body(st,s):
+    cg=st.cg; k=s["k"]
     if k=="let":
         off=st.new_local(s["name"])
         gen_expr(st,s["expr"])  # into rax
         cg.emit(f"    mov [rbp{rbpoff(off)}], rax")
     elif k=="assign":
         lhs=s["lhs"]
+        if lhs["k"]=="index":
+            # Bounds-checked store into a state buffer: buf[idx] = val.
+            # Guarantees the write lands inside buf — out-of-range traps (#UD)
+            # before touching memory, so this path cannot corrupt neighbours.
+            _gen_state_index_store(st,lhs,s["rhs"])
+            return
         if lhs["k"]!="ident":
-            raise SyntaxError("only simple variable assignment supported")
+            raise SyntaxError("only simple variable / state-buffer-index assignment supported")
         if lhs["name"] not in st.scope:
             raise SyntaxError(f"unknown var {lhs['name']}")
         gen_expr(st,s["rhs"])
@@ -1052,6 +1861,18 @@ def gen_stmt(st,s):
     elif k=="continue":
         if not cg.loops: raise SyntaxError("continue outside loop")
         cg.emit(f"    jmp {cg.loops[-1][1]}")
+    elif k=="cfg":
+        # Wrap the generated block in a NASM build-config conditional. The block
+        # is self-contained (fresh labels), so NASM including/excluding it does
+        # not affect the surrounding code's labels. `cfg "X" {..}` -> %ifdef X,
+        # `cfg !"X" {..}` -> %ifndef X, optional `else {..}` -> %else.
+        directive = "%ifndef" if s.get("neg") else "%ifdef"
+        cg.emit(f"{directive} {s['name']}")
+        for stmt in s["body"]: gen_stmt(st,stmt)
+        if s.get("els"):
+            cg.emit("%else")
+            for stmt in s["els"]: gen_stmt(st,stmt)
+        cg.emit("%endif")
     elif k=="asm":
         for ln in s["text"].split("\\n"):
             cg.emit("    "+ln)
@@ -1094,6 +1915,25 @@ def const_fold_int(cg, e):
             return cg.consts[n]
     return None
 
+def _gen_state_index_store(st,lhs,rhs):
+    # buf[idx] = val, with a compile-time-sized bounds check. The store address
+    # is computed only after the index is proven in-range (else #UD), so this
+    # is the safe, non-corrupting way to write a state buffer.
+    cg=st.cg
+    tgt=lhs["target"]
+    if tgt.get("k")!="ident" or tgt["name"] not in cg.state_sizes:
+        raise SyntaxError("[] store target must be a `state` buffer (bounds-checked)")
+    nm=tgt["name"]; sz=cg.state_sizes[nm]; base=cg.state_defs[nm]
+    gen_expr(st,rhs); cg.emit("    push rax")     # value
+    gen_expr(st,lhs["idx"])                        # idx -> rax
+    cg.emit(f"    cmp rax, {sz}")
+    cg.emit(f"    jae {cg.oob()}")
+    cg.emit(f"    lea rcx, [rel {base}]")
+    cg.emit("    add rcx, rax")
+    cg.emit("    pop rax")                          # value
+    cg.emit("    mov [rcx], al")
+    cg.emit("    xor rax, rax")
+
 def gen_expr(st,e):
     cg=st.cg; k=e["k"]
     if k=="int":
@@ -1119,12 +1959,29 @@ def gen_expr(st,e):
                 cg.emit(f"    mov rax, [rbp{rbpoff(st.scope[n])}]")
         elif n in cg.consts:
             cg.emit(f"    mov rax, {cg.consts[n]}")
+        elif n in getattr(cg,"symconsts",set()):
+            # symbolic passthrough const: NASM resolves the equ at assemble time.
+            cg.emit(f"    mov rax, {n}")
         elif n in cg.str_defs:
             cg.emit(f"    lea rax, [rel {cg.str_defs[n]}]")
         elif n in cg.state_defs:
             cg.emit(f"    lea rax, [rel {cg.state_defs[n]}]")
         else:
             raise SyntaxError(f"unknown identifier {n}")
+    elif k=="index":
+        # Bounds-checked load: buf[idx] -> rax (zero-extended byte). idx is
+        # compared against the buffer's compile-time size; out-of-range jumps
+        # to the unit's #UD trap. There is no way to express an unchecked
+        # state-buffer access, so NHLK code cannot read past a buffer.
+        tgt=e["target"]
+        if tgt.get("k")!="ident" or tgt["name"] not in cg.state_sizes:
+            raise SyntaxError("[] indexing is only supported on a `state` buffer (bounds-checked)")
+        nm=tgt["name"]; sz=cg.state_sizes[nm]; base=cg.state_defs[nm]
+        gen_expr(st,e["idx"])
+        cg.emit(f"    cmp rax, {sz}")
+        cg.emit(f"    jae {cg.oob()}")
+        cg.emit(f"    lea rcx, [rel {base}]")
+        cg.emit("    movzx rax, byte [rcx+rax]")
     elif k=="addr":
         n=e["name"]
         if n in st.scope:
@@ -1137,6 +1994,8 @@ def gen_expr(st,e):
             cg.emit(f"    lea rax, [rel {n}]")
         else:
             # implicit extern: allow &any_symbol — register it so NASM resolves it
+            if getattr(cg,"target","user")!="user":
+                _require_cap(cg,"implicit_extern",f"address of undeclared symbol {n}")
             cg.externs.add(n)
             cg.emit(f"    lea rax, [rel {n}]")
     elif k=="neg":
@@ -1228,6 +2087,8 @@ def gen_expr(st,e):
         name=e["name"]
         # Builtins: memory load/store — compile inline, no actual call.
         if name in ("lb","lw","lq","sb","sw","sq"):
+            if getattr(cg,"target","user")!="user":
+                _require_cap(cg,"raw_mem",f"{cg.target} raw memory builtin {name}()")
             if name in ("lb","lw","lq") and len(args)!=1: raise SyntaxError(f"{name} takes 1 arg")
             if name in ("sb","sw","sq") and len(args)!=2: raise SyntaxError(f"{name} takes 2 args")
             if name=="lb":
@@ -1242,6 +2103,310 @@ def gen_expr(st,e):
                 if name=="sb": cg.emit("    mov [rax], cl")
                 elif name=="sw": cg.emit("    mov [rax], ecx")
                 else: cg.emit("    mov [rax], rcx")
+                cg.emit("    xor rax, rax")
+            return
+        if name in ("ror32","rol32"):
+            if len(args)!=2: raise SyntaxError(f"{name} takes 2 args")
+            gen_expr(st,args[0]); cg.emit("    push rax")
+            gen_expr(st,args[1]); cg.emit("    mov rcx, rax"); cg.emit("    pop rax")
+            if name=="ror32":
+                cg.emit("    ror eax, cl")
+            else:
+                cg.emit("    rol eax, cl")
+            cg.emit("    mov eax, eax")
+            return
+        # Builtin: bounds-checked dispatch. call_table(TBL, idx) calls the
+        # idx-th handler fn registered in `table TBL { ... }`, after checking
+        # idx < entry-count (out-of-range -> #UD). The only reachable targets
+        # are the table's fixed handler set, so this is a SAFE replacement for a
+        # raw `jmp/call [reg]` through an attacker-influenceable pointer. The
+        # handler's return value is left in rax.
+        if name=="call_table":
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("call_table() requires --target kernel")
+            if len(args)!=2: raise SyntaxError("call_table takes (table, index)")
+            tnode=args[0]
+            if tnode.get("k")!="ident" or tnode["name"] not in cg.table_counts:
+                raise SyntaxError("call_table: first arg must be a declared `table`")
+            tname=tnode["name"]; cnt=cg.table_counts[tname]
+            gen_expr(st,args[1])                 # idx -> rax
+            cg.emit(f"    cmp rax, {cnt}")
+            cg.emit(f"    jae {cg.oob()}")
+            cg.emit(f"    lea rcx, [rel {tname}]")
+            cg.emit("    call [rcx + rax*8]")
+            return
+        # Builtins: privileged / raw CPU instruction intrinsics (kernel mode
+        # only). They let the syscall entry/exit trampoline and other ring-0
+        # code be written in structured NHLK without dropping to an `asm{}`
+        # escape — each intrinsic emits exactly one (or a tiny fixed) real
+        # instruction. Author intent stays explicit (a named builtin), so the
+        # "no hidden privileged ops" security property is preserved: privileged
+        # instructions appear ONLY where the source names an intrinsic.
+        if name in _NULLARY_INTRINSICS:
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if name not in ("nop","ud2") and getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv",f"kernel intrinsic {name}()")
+            if args: raise SyntaxError(f"{name}() takes no args")
+            for ln in _NULLARY_INTRINSICS[name]:
+                cg.emit("    "+ln)
+            return
+        if name in ("cpuid_eax","cpuid_ebx","cpuid_ecx","cpuid_edx"):
+            # cpuid_<reg>(leaf) -> rax = the requested result register.
+            # Clobbers rbx/rcx/rdx (cpuid overwrites all four) — safe in the
+            # structured stack machine, which keeps live values in rbp slots.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if len(args)!=1: raise SyntaxError(f"{name} takes 1 arg (leaf)")
+            gen_expr(st,args[0])              # leaf -> rax (eax)
+            cg.emit("    mov eax, eax")
+            cg.emit("    xor ecx, ecx")
+            cg.emit("    cpuid")
+            pick={"cpuid_eax":"eax","cpuid_ebx":"ebx","cpuid_ecx":"ecx","cpuid_edx":"edx"}[name]
+            if pick!="eax":
+                cg.emit(f"    mov eax, {pick}")
+            cg.emit("    mov eax, eax")        # zero-extend result into rax
+            return
+        if name in ("write_rsp","push_val"):
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if len(args)!=1: raise SyntaxError(f"{name} takes 1 arg")
+            gen_expr(st,args[0])
+            if name=="write_rsp":
+                cg.emit("    mov rsp, rax")
+            else:  # push_val
+                cg.emit("    push rax")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="pop_to_mem":
+            # pop_to_mem(addr): pop the top stack qword into *addr. addr is
+            # evaluated FIRST into rax (stack-balanced), then `pop qword [rax]`
+            # consumes the caller-left top-of-stack value. Used by the naked
+            # resume trampoline to capture the slot id POP_ALL left at [rsp]
+            # without the addr-then-value ordering hazard of sq(addr, pop_val()).
+            # kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("pop_to_mem() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic pop_to_mem()")
+            if len(args)!=1: raise SyntaxError("pop_to_mem takes 1 arg (dest address)")
+            gen_expr(st,args[0])                  # addr -> rax (stack-balanced)
+            cg.emit("    pop qword [rax]")
+            cg.emit("    xor rax, rax")
+            return
+        if name in ("save_rsp","save_flags"):
+            # save_rsp(addr) / save_flags(addr): store the CURRENT rsp / RFLAGS to
+            # *addr, where addr is evaluated FIRST into rax (its internal codegen
+            # is stack-balanced, so rsp is back at the true frame level by the
+            # store). This is the correct way to record the kernel resume frame in
+            # a naked trampoline: writing rsp through the normal sq(addr, read_rsp)
+            # path would capture rsp while the sq destination address is still
+            # pushed, recording a value 8 bytes low. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv",f"kernel intrinsic {name}()")
+            if len(args)!=1: raise SyntaxError(f"{name} takes 1 arg (dest address)")
+            gen_expr(st,args[0])                  # addr -> rax (stack-balanced)
+            if name=="save_rsp":
+                cg.emit("    mov [rax], rsp")
+            else:
+                cg.emit("    pushfq")
+                cg.emit("    pop qword [rax]")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="write_flags":
+            # write_flags(v): restore RFLAGS from v (push v ; popfq). Pairs with
+            # read_flags(); used on the kernel-resume side of the ring-3 callback
+            # round-trip to reinstate the saved kernel RFLAGS. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("write_flags() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic write_flags()")
+            if len(args)!=1: raise SyntaxError("write_flags takes 1 arg (flags value)")
+            gen_expr(st,args[0])
+            cg.emit("    push rax")
+            cg.emit("    popfq")
+            cg.emit("    xor rax, rax")
+            return
+        if name in ("push_reg","pop_reg"):
+            # push_reg(REG) / pop_reg(REG): push/pop a NAMED general-purpose
+            # register verbatim. The argument MUST be a bare register identifier
+            # (not an expression) so the callee-save/restore discipline of a naked
+            # ring-3-trampoline frame is expressed explicitly, one register per
+            # statement, with no hidden scratch use. Author intent stays exact:
+            # the saved set and its order are visible in the source. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv",f"kernel intrinsic {name}()")
+            if len(args)!=1 or args[0].get("k")!="ident":
+                raise SyntaxError(f"{name} takes one bare register name (e.g. {name}(rbx))")
+            reg=args[0]["name"]
+            if reg not in REG_TABLE or REG_TABLE[reg][1]!=64:
+                raise SyntaxError(f"{name}: {reg} is not a 64-bit general register")
+            canon=REG_TABLE[reg][0]
+            cg.emit(f"    push {canon}" if name=="push_reg" else f"    pop {canon}")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="set_reg":
+            # set_reg(REG, v): load a NAMED general-purpose register with v
+            # (eval v -> rax ; mov REG, rax). For naked ring-3-trampoline frames
+            # that must place exact values in the System-V arg registers
+            # (rdi/rsi/rdx) right before an iretq/sysretq, where the structured
+            # stack machine cannot keep them live. The register MUST be a bare
+            # identifier and is the author's explicit responsibility: any later
+            # codegen that uses REG/rax as scratch would clobber it, so set_reg is
+            # only correct as the LAST writes before the control-transfer
+            # intrinsic. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("set_reg() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic set_reg()")
+            if len(args)!=2 or args[0].get("k")!="ident":
+                raise SyntaxError("set_reg takes (REG, value) with REG a bare register name")
+            reg=args[0]["name"]
+            if reg not in REG_TABLE or REG_TABLE[reg][1]!=64:
+                raise SyntaxError(f"set_reg: {reg} is not a 64-bit general register")
+            canon=REG_TABLE[reg][0]
+            gen_expr(st,args[1])
+            cg.emit(f"    mov {canon}, rax")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="rep_movsq":
+            # rep_movsq(dst, src, qcount): copy qcount qwords src->dst (cld; rep
+            # movsq), the structured form of the shadow-window block copy. Loads
+            # rdi=dst, rsi=src, rcx=qcount, clears DF, then rep movsq. The caller
+            # is responsible for any SMAP bracket (smap_open/smap_close) around it
+            # when either side is user (PTE.U) memory. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("rep_movsq() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic rep_movsq()")
+            if len(args)!=3: raise SyntaxError("rep_movsq takes 3 args (dst, src, qcount)")
+            gen_expr(st,args[0]); cg.emit("    push rax")    # dst
+            gen_expr(st,args[1]); cg.emit("    push rax")    # src
+            gen_expr(st,args[2]); cg.emit("    mov rcx, rax")# qcount
+            cg.emit("    pop rsi")                            # src
+            cg.emit("    pop rdi")                            # dst
+            cg.emit("    cld")
+            cg.emit("    rep movsq")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="syscall_raw":
+            # syscall_raw(num): issue a syscall with a RAW immediate number — NO
+            # APP_SYSNO fixup record. For kernel-resident code that runs in ring 3
+            # at a kernel VA OUTSIDE the per-slot copied app blob (the app-done
+            # trampoline, the L3 test blob): the dispatcher attributes such a
+            # syscall to slot 0 (identity permutation), so the raw number is the
+            # real table row. Emitting APP_SYSNO here would push a bogus .scfix
+            # record at a kernel-relative offset the loader must never rewrite.
+            # The number must be a compile-time constant. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("syscall_raw() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic syscall_raw()")
+            if len(args)!=1: raise SyntaxError("syscall_raw takes 1 arg (constant number)")
+            numc=const_fold_int(cg,args[0])
+            if numc is None or numc<0 or numc>255:
+                raise SyntaxError("syscall_raw number must be a constant in 0..255")
+            cg.emit(f"    mov eax, {numc}")
+            cg.emit("    syscall")
+            cg.emit("    xor rax, rax")
+            return
+        if name in ("rdmsr","write_cr0","write_cr3","write_cr4","invlpg",
+                    "inb","outb","ind","outd","wrmsr","wrmsr_split","lgdt","lidt","ltr",
+                    "intn","load_ds","load_es","load_fs","load_gs","load_ss"):
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                if name in ("inb","outb","ind","outd"):
+                    _require_cap(cg,"kernel_io",f"kernel intrinsic {name}()")
+                elif name=="intn":
+                    _require_cap(cg,"kernel_int","kernel intn()")
+                else:
+                    _require_cap(cg,"kernel_priv",f"kernel intrinsic {name}()")
+            if name=="rdmsr":
+                # rdmsr(msr) -> rax = (edx<<32)|eax. ecx = msr.
+                if len(args)!=1: raise SyntaxError("rdmsr takes 1 arg (msr)")
+                gen_expr(st,args[0]); cg.emit("    mov ecx, eax")
+                cg.emit("    rdmsr")
+                cg.emit("    shl rdx, 32"); cg.emit("    mov eax, eax"); cg.emit("    or rax, rdx")
+            elif name=="wrmsr":
+                # wrmsr(msr, val64): ecx=msr, edx:eax = val64.
+                if len(args)!=2: raise SyntaxError("wrmsr takes 2 args (msr, val64)")
+                gen_expr(st,args[0]); cg.emit("    push rax")          # msr
+                gen_expr(st,args[1])                                   # val64 -> rax
+                cg.emit("    mov rdx, rax"); cg.emit("    shr rdx, 32") # hi
+                cg.emit("    pop rcx")                                 # msr -> ecx (low 32 used)
+                cg.emit("    wrmsr")
+                cg.emit("    xor rax, rax")
+            elif name=="wrmsr_split":
+                # wrmsr_split(msr, lo32, hi32): ecx=msr, eax=lo, edx=hi.
+                if len(args)!=3: raise SyntaxError("wrmsr_split takes 3 args (msr, lo, hi)")
+                gen_expr(st,args[0]); cg.emit("    push rax")          # msr
+                gen_expr(st,args[1]); cg.emit("    push rax")          # lo
+                gen_expr(st,args[2]); cg.emit("    mov edx, eax")      # hi -> edx
+                cg.emit("    pop rax")                                 # lo -> eax
+                cg.emit("    pop rcx")                                 # msr -> ecx
+                cg.emit("    wrmsr")
+                cg.emit("    xor rax, rax")
+            elif name=="write_cr3":
+                if len(args)!=1: raise SyntaxError("write_cr3 takes 1 arg")
+                gen_expr(st,args[0]); cg.emit("    mov cr3, rax"); cg.emit("    xor rax, rax")
+            elif name=="write_cr0":
+                if len(args)!=1: raise SyntaxError("write_cr0 takes 1 arg")
+                gen_expr(st,args[0]); cg.emit("    mov cr0, rax"); cg.emit("    xor rax, rax")
+            elif name=="write_cr4":
+                if len(args)!=1: raise SyntaxError("write_cr4 takes 1 arg")
+                gen_expr(st,args[0]); cg.emit("    mov cr4, rax"); cg.emit("    xor rax, rax")
+            elif name=="invlpg":
+                if len(args)!=1: raise SyntaxError("invlpg takes 1 arg (addr)")
+                gen_expr(st,args[0]); cg.emit("    invlpg [rax]"); cg.emit("    xor rax, rax")
+            elif name=="lgdt":
+                if len(args)!=1: raise SyntaxError("lgdt takes 1 arg (descriptor pointer)")
+                gen_expr(st,args[0]); cg.emit("    lgdt [rax]"); cg.emit("    xor rax, rax")
+            elif name=="lidt":
+                if len(args)!=1: raise SyntaxError("lidt takes 1 arg (descriptor pointer)")
+                gen_expr(st,args[0]); cg.emit("    lidt [rax]"); cg.emit("    xor rax, rax")
+            elif name=="ltr":
+                if len(args)!=1: raise SyntaxError("ltr takes 1 arg (selector)")
+                gen_expr(st,args[0]); cg.emit("    ltr ax"); cg.emit("    xor rax, rax")
+            elif name.startswith("load_"):
+                if len(args)!=1: raise SyntaxError(f"{name} takes 1 arg (selector)")
+                seg=name[-2:]
+                gen_expr(st,args[0]); cg.emit(f"    mov {seg}, ax"); cg.emit("    xor rax, rax")
+            elif name=="intn":
+                if len(args)!=1: raise SyntaxError("intn takes 1 arg (constant vector)")
+                vec=const_fold_int(cg,args[0])
+                if vec is None or vec < 0 or vec > 255:
+                    raise SyntaxError("intn vector must be a constant in 0..255")
+                cg.emit(f"    int 0x{vec:02X}"); cg.emit("    xor rax, rax")
+            elif name=="inb":
+                # inb(port) -> rax = byte read. dx = port.
+                if len(args)!=1: raise SyntaxError("inb takes 1 arg (port)")
+                gen_expr(st,args[0]); cg.emit("    mov dx, ax")
+                cg.emit("    in al, dx"); cg.emit("    movzx rax, al")
+            elif name=="outb":
+                # outb(port, val): dx=port, al=val.
+                if len(args)!=2: raise SyntaxError("outb takes 2 args (port, val)")
+                gen_expr(st,args[0]); cg.emit("    push rax")          # port
+                gen_expr(st,args[1]); cg.emit("    mov ecx, eax")      # val -> cl
+                cg.emit("    pop rdx")                                 # port -> dx
+                cg.emit("    mov al, cl"); cg.emit("    out dx, al")
+                cg.emit("    xor rax, rax")
+            elif name=="ind":
+                # ind(port) -> rax = dword read. dx = port. Zero-extended into rax.
+                if len(args)!=1: raise SyntaxError("ind takes 1 arg (port)")
+                gen_expr(st,args[0]); cg.emit("    mov dx, ax")
+                cg.emit("    in eax, dx"); cg.emit("    mov eax, eax")
+            elif name=="outd":
+                # outd(port, val): dx=port, eax=val (32-bit OUT).
+                if len(args)!=2: raise SyntaxError("outd takes 2 args (port, val)")
+                gen_expr(st,args[0]); cg.emit("    push rax")          # port
+                gen_expr(st,args[1]); cg.emit("    mov ecx, eax")      # val -> ecx
+                cg.emit("    pop rdx")                                 # port -> dx
+                cg.emit("    mov eax, ecx"); cg.emit("    out dx, eax")
                 cg.emit("    xor rax, rax")
             return
         if name in getattr(cg,"fn_argc",{}) and len(args)!=cg.fn_argc[name]:
@@ -1279,7 +2444,8 @@ def resolve_use(name, lib_dir):
         raise FileNotFoundError(f"use {name}: {path} not found")
     return path
 
-def compile_file(path, lib_dir, app_prefix=None, embed=False, return_sigs=False, kernel=False):
+def compile_file(path, lib_dir, app_prefix=None, embed=False, return_sigs=False,
+                 kernel=False, target="user", forbid_asm=False, deny_unsafe=False):
     with open(path,"r",encoding="utf-8") as f: src=f.read()
     toks=lex(src,path); decls=parse(toks,path)
     # expand uses: prepend decls from lib files
@@ -1306,10 +2472,12 @@ def compile_file(path, lib_dir, app_prefix=None, embed=False, return_sigs=False,
         if d["k"]!="use":
             expanded.append(d)
     prefix=app_prefix or os.path.splitext(os.path.basename(path))[0]
-    # Kernel modules are not prefixed (their labels must match existing kernel
+    # Kernel/boot modules are not prefixed (their labels must match existing
     # symbols verbatim); the prefix is retained only for the user-mode path.
     unit_prefix = prefix if kernel else "app_hl_"+prefix
-    asm=compile_unit(expanded, unit_prefix, embed=embed, kernel=kernel)
+    asm=compile_unit(expanded, unit_prefix, embed=embed, kernel=kernel,
+                     src=os.path.basename(path), target=target,
+                     forbid_asm=forbid_asm, deny_unsafe=deny_unsafe)
     if return_sigs:
         return asm, LAST_SIGS
     return asm
@@ -1325,16 +2493,26 @@ def main():
                     help="emit for %%include into a larger NASM unit: no bits/default/section/extern directives, strings inline in .text")
     ap.add_argument("--emit-sigs",action="store_true",
                     help="write a .sig.json sidecar next to the generated assembly")
-    ap.add_argument("--target",choices=["user","kernel"],default="user",
+    ap.add_argument("--target",choices=["user","kernel","boot"],default="user",
                     help="user (default): emit a ring-3 app blob with syscall wrappers. "
                          "kernel: emit plain NASM for %%include into kernel_build.asm — "
-                         "bare labels, direct in-unit calls, no app framing, no syscall wrappers.")
+                         "bare labels, direct in-unit calls, no app framing, no syscall wrappers. "
+                         "boot: emit guarded boot-layout NASM with bits/org support and no inline asm.")
+    ap.add_argument("--forbid-asm",action="store_true",
+                    help="reject any inline asm block. Use for new code and migration gates.")
+    ap.add_argument("--deny-unsafe",action="store_true",
+                    help="reject unsafe capability declarations and unsafe-only operations.")
     args=ap.parse_args()
-    kernel=(args.target=="kernel")
+    kernel=(args.target in ("kernel","boot"))
     if args.emit_sigs:
-        asm,sigs=compile_file(args.input, os.path.abspath(args.lib), args.prefix, embed=args.embed, return_sigs=True, kernel=kernel)
+        asm,sigs=compile_file(args.input, os.path.abspath(args.lib), args.prefix,
+                              embed=args.embed, return_sigs=True, kernel=kernel,
+                              target=args.target, forbid_asm=args.forbid_asm,
+                              deny_unsafe=args.deny_unsafe)
     else:
-        asm=compile_file(args.input, os.path.abspath(args.lib), args.prefix, embed=args.embed, kernel=kernel)
+        asm=compile_file(args.input, os.path.abspath(args.lib), args.prefix,
+                         embed=args.embed, kernel=kernel, target=args.target,
+                         forbid_asm=args.forbid_asm, deny_unsafe=args.deny_unsafe)
         sigs=[]
     with open(args.output,"w",encoding="utf-8",newline="\n") as f: f.write(asm)
     if args.emit_sigs:

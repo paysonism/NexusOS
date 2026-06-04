@@ -42,7 +42,7 @@ section .text
 section .text
 %include "build/nxh/frame_present.asm"
 ; NexusHLK: former main-loop and diagnostic modules. Keep these directly after
-; core_runtime_state.asm and before measured_boot.asm so the moved code stays in
+; core_runtime_state.asm and before crypto.nxh so the moved code stays in
 ; the early kernel text span [_start, _kernel_text_end).
 section .text
 %include "build/nxh/serial_diag.asm"
@@ -51,24 +51,16 @@ section .text
 ; by nxhc.py --target kernel.
 section .text
 %include "build/nxh/boot_diag.asm"
+%ifndef RELEASE_BUILD
 section .text
 %include "build/nxh/debug_overlay.asm"
+%endif
 section .text
 %include "build/nxh/cpu_acct.asm"
 section .text
 %include "build/nxh/serial_console.asm"
 section .text
-%include "build/nxh/real_boot_diag.asm"
-section .text
-%include "build/nxh/real_boot_diag_core.asm"
-section .text
-%include "build/nxh/real_boot_diag_fbperf.asm"
-section .text
-%include "build/nxh/real_boot_diag_legacy.asm"
-section .text
-%include "build/nxh/real_boot_diag_gfx.asm"
-section .text
-%include "src/kernel/core/measured_boot.asm"
+%include "build/nxh/crypto.asm"
 section .text
 %include "src/kernel/core/nk_monitor.asm"
 section .text
@@ -77,6 +69,8 @@ section .text
 %include "src/kernel/core/security_status.asm"
 section .text
 %include "src/kernel/core/klog.asm"
+section .text
+%include "src/kernel/core/debug_events.asm"
 section .text
 %include "src/kernel/core/idt.asm"
 section .text
@@ -100,9 +94,37 @@ section .text
 section .text
 %include "src/kernel/proc/usermode.asm"
 section .text
+; NexusHLK (zero-asm) ring-3 callback / app-done trampoline path. Ported from
+; src/kernel/proc/usermode_callbacks.inc + l3_install_app_done_trampoline (was in
+; usermode_integrity.inc); those .inc definitions are now removed to avoid a
+; duplicate-symbol clash. Defines call_app_l3, call_app_l3_packed,
+; call_app_l3_return, call_app_l3_app_done, l3_install_app_done_trampoline,
+; test_usermode_proc. Same single-TU: l3_runtime_ptr / l3_slot_base /
+; l3_translate_target / l3_copy_app_blob_to_slot / l3_apply_slot_isolation /
+; l3_apply_wx_policy / l3_user_stack_top resolve as forward refs.
+%include "build/nxh/usermode_callbacks.asm"
+section .text
 %include "src/kernel/proc/process.asm"
 section .text
+; NexusHLK Stage 2a: syscall LEAF validators/support (zero-asm). Must precede
+; syscall.asm so its globals (sc_get_slot_bounds, sc_range_in_bounds,
+; sc_validate_user_range/_io_range, sc_validate_callback_target, dbg_wc_hex64,
+; dbg_wmcreate_log) are defined before the dispatcher/handler .inc files use them.
+%include "build/nxh/syscall_validate.asm"
+section .text
+; NexusHLK Stage 2b: syscall HMAC / cap-mask security LEAF helpers (zero-asm).
+; Must precede syscall.asm so its globals (cpi_sign_callback, cpi_verify_callback,
+; cap_mask_sign, cap_mask_store, slot_cap_hmac_init) are defined before the
+; dispatcher/handler/security .inc files (and kernel_main) reference them.
+%include "build/nxh/syscall_secure.asm"
+section .text
 %include "src/kernel/proc/syscall.asm"
+; NexusHLK syscall data section (Stage 1 of docs/nhlk-syscall-rearchitecture.md):
+; the unconditional, const-sized syscall data symbols migrated out of
+; syscall_data.inc. Pure `section .data` (no .text); NASM -f bin aggregates it
+; into the writable .data region past _kernel_text_end regardless of position.
+section .data
+%include "build/nxh/syscall_data.asm"
 section .text
 %include "src/kernel/proc/workqueue.asm"
 
@@ -169,6 +191,13 @@ section .text
 section .text
 %include "src/kernel/drivers/xhci.asm"
 section .text
+; NexusHLK: USB HID LEAF helpers (zero-asm). Must precede usb_hid.asm so its
+; globals (usb_log_ch, usb_log_str, usb_log_crlf, usb_log_hex_nib,
+; usb_hid_flush_log, usb_find_endpoint, usb_try_known_mouse_endpoint) are
+; defined before usb_hid.asm's remaining asm references them. The data symbols
+; they touch are still defined in usb_hid.asm's section .data (one NASM unit).
+%include "build/nxh/usb_hid_helpers.asm"
+section .text
 %include "src/kernel/drivers/usb_hid.asm"
 section .text
 %include "src/kernel/drivers/rtl8156.asm"
@@ -197,6 +226,11 @@ section .text
 section .text
 %include "src/kernel/gui/render.asm"
 section .text
+; NexusHLK (zero-asm) window-manager leaf helpers — included BEFORE window.asm
+; so wm_get_window_at / wm_cb_intern / wm_cb_resolve / wm_bg_* /
+; wm_mark_outline_dirty symbols resolve for window.asm's callers.
+%include "build/nxh/wm_helpers.asm"
+section .text
 %include "src/kernel/gui/window.asm"
 section .text
 %include "src/kernel/gui/taskbar.asm"
@@ -205,7 +239,8 @@ section .text
 section .text
 %include "src/kernel/gui/cursor.asm"
 section .text
-%include "src/kernel/gui/boot_anim.asm"
+; NexusHLK boot animation player (zero-asm; compiled with --forbid-asm).
+%include "build/nxh/boot_anim.asm"
 
 ; --- Built-in User Apps ---
 section .text
@@ -242,7 +277,7 @@ strlen equ fn_strlen
 ; therefore sits at the top of the kernel code+helper region: [_start ..
 ; _kernel_text_end) is exactly the executable kernel image (no writable .data).
 ; Consumers:
-;   - measured_boot.asm hashes this range as "the kernel code" stage.
+;   - crypto.nxh hashes this range as the measured kernel-code stage.
 ;   - kernel_lockdown.asm marks this range read-only at PT level after init
 ;     (security_todo.md §9 "read-only kernel after init"). Writable .data lives
 ;     past this label, so locking [_start, _kernel_text_end) cannot fault a

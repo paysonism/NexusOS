@@ -694,6 +694,7 @@ process_find_by_window:
 ; and fall back to the inline path so the callback still runs.
 extern call_app_l3
 extern call_app_l3_packed
+extern ser_print_hex64
 extern wq_lock
 extern wq_unlock
 extern smp_alive_cores
@@ -729,6 +730,7 @@ dispatch_app_callback:
     mov r13, rsi                       ; window ptr
     mov r14, rdx                       ; arg1
     mov r15, rcx                       ; arg2
+    DBG_EVT EVT_CALLBACK_DISPATCH, 0, r12, r13, r14, r15, 0, 0
 
     cmp dword [ring3_ap_enabled], 0
     je .inline
@@ -810,6 +812,67 @@ dispatch_app_callback:
     mov rdx, r14
     mov rcx, r15
     call call_app_l3
+    DBG_EVT EVT_CALLBACK_RETURN, 0, rax, r12, r13, r14, r15, 0
+%ifdef ENABLE_DEBUG_SERIAL
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    SER 'D'
+    SER 'R'
+    SER 'E'
+    SER 'T'
+    SER ' '
+    SER 'a'
+    mov rdi, [rsp + 24]                 ; callback return value
+    call ser_print_hex64
+    SER ' '
+    SER 'p'
+    lea rdi, [rsp + 32]                 ; dispatch_app_callback rsp before pushes
+    call ser_print_hex64
+    SER ' '
+    SER 'b'
+    mov rdi, rbp
+    call ser_print_hex64
+    SER ' '
+    SER 'c'
+    mov rdi, [rsp + 32]                 ; local pad / frame low qword
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [rsp + 40]                 ; saved r15
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [rsp + 48]                 ; saved r14
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [rsp + 56]                 ; saved r13
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [rsp + 64]                 ; saved r12
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [rsp + 72]                 ; saved rbx
+    call ser_print_hex64
+    SER ' '
+    SER 'r'
+    mov rdi, r12
+    call ser_print_hex64
+    SER '/'
+    mov rdi, r13
+    call ser_print_hex64
+    SER '/'
+    mov rdi, r14
+    call ser_print_hex64
+    SER '/'
+    mov rdi, r15
+    call ser_print_hex64
+    SER 13
+    SER 10
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
+%endif
 
 .ret:
     add rsp, 8

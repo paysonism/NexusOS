@@ -1,0 +1,14 @@
+module "boot_sector";
+
+bits 16;
+org 0x7C00;
+
+global boot_start;
+
+fn boot_start() {
+    cli();
+    hlt();
+}
+
+pad_to 510 = 0;
+boot_signature;

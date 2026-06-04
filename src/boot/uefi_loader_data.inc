@@ -49,14 +49,18 @@ gdt64_tss_uefi:                     ; Selector 0x30 - TSS descriptor (16 bytes)
 gdt64_end:
 
 ; ============================================================================
-; Protocol GUIDs
+; Protocol GUIDs (128-bit EFI_GUID, mixed-endian per UEFI Appendix A:
+; first dd + two dw little-endian, trailing 8 bytes big-endian). Each value is
+; the canonical protocol GUID from the UEFI spec section noted.
 ; ============================================================================
 align 4
+; EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID 9042a9de-23dc-4a38-96fb-7aded080516a (UEFI §12.9)
 guid_gop:
     dd 0x9042a9de
     dw 0x23dc, 0x4a38
     db 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a
 
+; EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID 964e5b22-6459-11d2-8e39-00a0c969723b (UEFI §13.4)
 guid_sfs:
     dd 0x964e5b22
     dw 0x6459, 0x11d2
@@ -68,12 +72,13 @@ guid_blkio:
     dw 0x6459, 0x11d2
     db 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x39
 
+; EFI_LOADED_IMAGE_PROTOCOL_GUID 5b1b31a1-9562-11d2-8e3f-00a0c969723b (UEFI §9.1)
 guid_lip:
     dd 0x5b1b31a1
     dw 0x9562, 0x11d2
     db 0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b
 
-; EFI_SIMPLE_POINTER_PROTOCOL
+; EFI_SIMPLE_POINTER_PROTOCOL_GUID 31878c87-0b75-11d5-9a4f-0090273fc14d (UEFI §12.5)
 guid_spp:
     dd 0x31878c87
     dw 0x0b75, 0x11d5

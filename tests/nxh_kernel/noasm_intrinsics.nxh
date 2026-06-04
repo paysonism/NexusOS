@@ -1,0 +1,26 @@
+module "noasm_intrinsics";
+
+unsafe kernel_priv;
+unsafe kernel_int;
+
+global nxh_test_noasm_intrinsics;
+
+data test_gdtr: 10 = 0;
+
+fn nxh_test_noasm_intrinsics() {
+    let cr0 = read_cr0();
+    let cr4 = read_cr4();
+
+    write_cr0(cr0);
+    write_cr4(cr4);
+    lgdt(&test_gdtr);
+    lidt(&test_gdtr);
+    ltr(0x30);
+    load_ds(0x10);
+    load_es(0x10);
+    load_fs(0x10);
+    load_gs(0x10);
+    load_ss(0x10);
+    intn(0x10);
+    return 0;
+}

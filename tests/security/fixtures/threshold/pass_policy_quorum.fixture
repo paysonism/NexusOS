@@ -1,0 +1,7 @@
+checker=threshold_check
+expect=pass
+case=policy_quorum_2_of_3
+min_count=2
+allowed_roles=policy,update,audit
+required_roles=policy
+approvals=policy,update

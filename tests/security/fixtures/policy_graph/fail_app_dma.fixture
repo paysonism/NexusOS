@@ -1,0 +1,11 @@
+checker=policy_graph_check
+expect=fail
+case=app_dma_forbidden
+src_domain=app
+dst_domain=device
+capability=dma
+src_signed=1
+dst_signed=1
+threshold_ok=1
+wildcard=0
+production=1

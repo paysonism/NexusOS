@@ -317,8 +317,10 @@ app_launch:
     je .launch_paint
     cmp rdi, APP_ABOUT
     je .launch_about
+%ifndef RELEASE_BUILD
     cmp rdi, APP_SECURITY_PROBE
     je .launch_security_probe
+%endif
     cmp rdi, APP_TASKMGR
     je .launch_taskmgr
     cmp rdi, APP_PING
@@ -518,6 +520,7 @@ app_launch:
     jmp .done
 
 .launch_security_probe:
+%ifndef RELEASE_BUILD
     lea rdi, [rel szSecurityProbeTitle]
     mov rsi, 80
     mov rdx, 70
@@ -534,6 +537,7 @@ app_launch:
     xor r11d, r11d
     call app_set_window_handlers
     jmp .done
+%endif
 
 .launch_taskmgr:
     SER 'M'
@@ -873,6 +877,7 @@ app_command_name_to_id:
     call app_str_eq_ci
     test eax, eax
     jnz .acnti_about
+%ifndef RELEASE_BUILD
     lea rsi, [szAppNameSecurity]
     call app_str_eq_ci
     test eax, eax
@@ -881,6 +886,7 @@ app_command_name_to_id:
     call app_str_eq_ci
     test eax, eax
     jnz .acnti_security
+%endif
     lea rsi, [szAppNamePing]
     call app_str_eq_ci
     test eax, eax
@@ -909,9 +915,11 @@ app_command_name_to_id:
 .acnti_about:
     mov eax, APP_ABOUT
     ret
+%ifndef RELEASE_BUILD
 .acnti_security:
     mov eax, APP_SECURITY_PROBE
     ret
+%endif
 .acnti_ping:
     mov eax, APP_PING
     ret

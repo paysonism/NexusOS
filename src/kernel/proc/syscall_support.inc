@@ -5,75 +5,12 @@
 ; Extracted verbatim from syscall.asm (textual %include split, no logic change).
 ; Lines below remain in syscall_entry's local-label scope where applicable.
 ; ============================================================================
-dbg_wmcreate_log:
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push r8
-    push r9
-    push r10
-    push r11
-    push r15
-    mov r10, r15                              ; save slot before clobber
-    mov r11, r9                               ; save drawfn before clobber
-    lea rdi, [rel dbg_wc_s1]
-    call serial_puts
-    mov rsi, r10
-    call dbg_wc_hex64
-    lea rdi, [rel dbg_wc_s2]
-    call serial_puts
-    mov rsi, r11
-    call dbg_wc_hex64
-    call serial_crlf
-    pop r15
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-    ret
-
-; rsi=value -> 16 hex digits via serial_putc. Clobbers rax,rcx,rdx (saved here).
-dbg_wc_hex64:
-    push rax
-    push rcx
-    push rdx
-    push rbx
-    mov rcx, 16
-.dwc_loop:
-    rol rsi, 4
-    mov rax, rsi
-    and rax, 0x0F
-    cmp rax, 10
-    jb .dwc_dec
-    add rax, 'a' - 10
-    jmp .dwc_emit
-.dwc_dec:
-    add rax, '0'
-.dwc_emit:
-    mov dil, al
-    push rsi
-    push rcx
-    mov al, dil
-    movzx edi, al
-    call serial_putc
-    pop rcx
-    pop rsi
-    dec rcx
-    jnz .dwc_loop
-    pop rbx
-    pop rdx
-    pop rcx
-    pop rax
-    ret
+; dbg_wmcreate_log / dbg_wc_hex64 — MIGRATED to NexusHLK (Stage 2a). Now emitted
+; from src/kernel/nexushlk/syscall_validate.nxh as structured zero-asm fns with
+; the same global names and ABI (dbg_wmcreate_log: R15=slot, R9=drawfn;
+; dbg_wc_hex64: RSI=value -> 16 hex digits; both preserve all registers). The
+; dbg_wc_s1/dbg_wc_s2 strings below stay here and are referenced extern by the
+; generated module.
 
 section .data
 dbg_wc_s1: db "[WCREATE] slot=", 0

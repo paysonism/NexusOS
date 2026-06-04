@@ -1,0 +1,11 @@
+module "boot_unsafe_decl";
+
+bits 16;
+org 0x7C00;
+unsafe boot_io;
+
+global boot_start;
+
+fn boot_start() {
+    outb(0x80, 0);
+}

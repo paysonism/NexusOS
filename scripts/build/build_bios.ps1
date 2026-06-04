@@ -44,7 +44,9 @@ Write-Host ("Mode:   " + ($(if ($Release) { 'release' } else { 'debug' })))
 Write-Host "Perf:   $PerfProfile"
 Write-Host ("Trace:  " + ($(if ($Trace) { 'on' } else { 'off' })))
 
-& powershell -NoProfile -File (Join-Path $Root 'scripts\build\build_nxh.ps1')
+$NxhBuildArgs = @()
+if ($Release) { $NxhBuildArgs += '-Release' }
+& powershell -NoProfile -File (Join-Path $Root 'scripts\build\build_nxh.ps1') @NxhBuildArgs
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED NexusHL compile' -ForegroundColor Red; exit 1 }
 $CoverageTool = Join-Path $Root 'tools\check_coverage.py'
 if (Test-Path $CoverageTool) {

@@ -7,15 +7,12 @@
 setup_paging:
     push r14
     push r15
-    %define UEFI_PAGE_PRESENT      0x01
-    %define UEFI_PAGE_WRITABLE     0x02
-    %define UEFI_PAGE_USER         0x04
-    %define UEFI_PAGE_LARGE        0x80
-    ; W^X: kernel text lives in [KTEXT_START, KTEXT_END). All other pages NX.
-    %define UEFI_KTEXT_START_PAGE  0x100     ; PTE index of 0x100000
-    %define UEFI_KTEXT_END_PAGE    0x200     ; executable kernel text through 2 MiB
-    %define UEFI_PT0_BASE          0x74000   ; 4KB page table for PD0[0]
-    %define UEFI_APP_PT_BASE       0x75000   ; 8 PTs (0x75000..0x7CFFF) for app arena
+    ; Paging flag bits, page sizes, page-table physical bases, and the W^X
+    ; kernel-text PTE window are all named + spec-cited in src/include/uefi_abi.inc
+    ; (SDM Vol.3 §4.5/§4.6). UEFI_PT0_BASE/UEFI_APP_PT_BASE keep their original
+    ; names here as thin aliases of the header's _PHYS constants.
+    %define UEFI_PT0_BASE     UEFI_PT0_PHYS
+    %define UEFI_APP_PT_BASE  UEFI_APP_PT_PHYS
     push rbx
     push r12
     push r13
@@ -32,26 +29,26 @@ setup_paging:
     mov ecx, 19 * 4096 / 4
     rep stosd
 
-    ; PML4[0] -> PDPT0 at 0x71000 (covers 0-512 GB).
+    ; PML4[0] -> PDPT0 (covers 0-512 GB).
     ; Mark this branch user-accessible because PDPT0[0] contains the app arena.
-    mov qword [abs PT_BASE], 0x71000 | 7
-    ; PML4[1] -> PDPT1 at 0x72000 (covers 512-1024 GB), supervisor-only.
-    mov qword [abs PT_BASE + 8], 0x72000 | 3
+    mov qword [abs PT_BASE], UEFI_PDPT0_PHYS | (UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_USER)
+    ; PML4[1] -> PDPT1 (covers 512-1024 GB), supervisor-only.
+    mov qword [abs PT_BASE + 8], UEFI_PDPT1_PHYS | (UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE)
 
-    ; PDPT0[0] -> PD0 at 0x73000 for the first 1 GB, with User set.
-    mov qword [abs PT_BASE + 0x1000], 0x73000 | 7
+    ; PDPT0[0] -> PD0 for the first 1 GB, with User set.
+    mov qword [abs PT_BASE + 0x1000], UEFI_PD0_PHYS | (UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_USER)
 
     ; PDPT0[1..511]: 1 GB identity pages starting at 1 GB, supervisor-only, NX.
     mov rdi, PT_BASE + 0x1000 + 8
-    mov rbx, 0x40000000             ; physical base = 1 GB
+    mov rbx, PAGE_SIZE_1G           ; physical base = 1 GB
     mov r12d, 511
 .loop_pdpt0:
     mov rax, rbx
-    or  rax, 0x83                   ; Present | Writable | Page Size (1 GB)
+    or  rax, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_LARGE   ; 1 GB page
     bts rax, 63                     ; NX (data only, no code execution)
     mov [rdi], rax
     add rdi, 8
-    add rbx, 0x40000000             ; +1 GB
+    add rbx, PAGE_SIZE_1G           ; +1 GB
     dec r12d
     jnz .loop_pdpt0
 
@@ -84,7 +81,7 @@ setup_paging:
     jmp .pt0_write
 .pt0_write:
     mov [rdi], rdx
-    add eax, 0x1000
+    add eax, PAGE_SIZE_4K
     add rdi, 8
     inc ebx
     cmp ebx, 512
@@ -94,13 +91,13 @@ setup_paging:
     ; App arena PDEs get USER bit (code runs here, no NX).
     ; All other PDEs are kernel data/heap/framebuffer: NX.
     mov rdi, PT_BASE + 0x3000 + 8
-    mov rax, 0x200000
+    mov rax, PAGE_SIZE_2M
     or  rax, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_LARGE
     mov ebx, 1
     mov r14, [abs VBE_INFO + VBE_APP_ARENA_BASE_OFF]
     shr r14, 21
     mov r15, [abs VBE_INFO + VBE_APP_ARENA_SIZE_OFF]
-    add r15, 0x1FFFFF
+    add r15, PAGE_MASK_2M
     shr r15, 21
     add r15, r14
 .loop_pd0:
@@ -130,7 +127,7 @@ setup_paging:
     bts rdx, 63                     ; kernel data region: NX
 .pd0_write:
     mov [rdi], rdx
-    add rax, 0x200000
+    add rax, PAGE_SIZE_2M
     add rdi, 8
     inc ebx
     cmp ebx, 512
@@ -149,7 +146,7 @@ setup_paging:
     shl rcx, 9                      ; * 512 PTEs per PDE
 .loop_app_pt:
     mov [rdi], rax
-    add rax, 0x1000
+    add rax, PAGE_SIZE_4K
     add rdi, 8
     dec rcx
     jnz .loop_app_pt
@@ -164,21 +161,21 @@ setup_paging:
     mov rax, [rdi]
     and rax, ~UEFI_PAGE_PRESENT
     mov [rdi], rax
-    add rdi, 0x1000          ; same PTE slot in the next slot's PT
+    add rdi, PAGE_SIZE_4K    ; advance one PT page = same PTE slot, next slot
     dec rcx
     jnz .loop_guard_pt
 
     ; PDPT1[0..511]: 1 GB identity pages starting at 512 GB, supervisor-only, NX.
     mov rdi, PT_BASE + 0x2000
-    mov rbx, 0x8000000000           ; physical base = 512 GB
+    mov rbx, PAGE_SIZE_1G * 512      ; physical base = 512 GB
     mov r12d, 512
 .loop2:
     mov rax, rbx
-    or  rax, 0x83                   ; Present | Writable | Page Size (1 GB)
+    or  rax, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_LARGE   ; 1 GB page
     bts rax, 63                     ; NX
     mov [rdi], rax
     add rdi, 8
-    add rbx, 0x40000000             ; +1 GB
+    add rbx, PAGE_SIZE_1G            ; +1 GB
     dec r12d
     jnz .loop2
 

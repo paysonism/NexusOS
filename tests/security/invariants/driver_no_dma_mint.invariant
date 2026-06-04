@@ -1,0 +1,7 @@
+invariant=INV-DRIVER-NO-DMA-MINT
+title=Compromised driver cannot mint DMA access
+statement=A driver may use AUTH_DMA_MAP only via an explicit DMA grant, never self-minted.
+compromised=device driver domain
+denied_authority=AUTH_DMA_MAP without an explicit grant
+predicate=inv_driver_no_dma_mint
+status=modeled

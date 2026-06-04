@@ -3,71 +3,22 @@
 ; translation unit that emits smap_smep_init (main.asm references it extern).
 %include "smap.inc"
 
-sc_get_slot_bounds:
-    mov eax, r15d
-    cmp eax, MAX_WINDOWS
-    jb .slot_ok
-    xor eax, eax
-.slot_ok:
-    imul rax, APP_SLOT_SIZE
-    add rax, [rel l3_app_arena_base_v]
-    mov r8, rax
-    lea r9, [r8 + APP_SLOT_SIZE]
-    ret
-
-; RDI=ptr, RSI=len, R8=start, R9=end -> EAX=1 if fully inside [start,end)
-sc_range_in_bounds:
-    mov rax, rdi
-    cmp rax, r8
-    jb .range_fail
-    mov rdx, rdi
-    add rdx, rsi
-    jc .range_fail
-    cmp rdx, r9
-    ja .range_fail
-    mov eax, 1
-    ret
-.range_fail:
-    xor eax, eax
-    ret
-
-; RDI=ptr, RSI=len -> EAX=1 if range is inside the current app slot or the
-; built-in user blob. Zero-length ranges are rejected at the top: a 0-length
-; "valid" pointer is meaningless and combined with caller-side int-overflow
-; (len*bpp truncating to 0) it would let bogus huge ranges slip past.
-sc_validate_user_range:
-    test rsi, rsi
-    jnz .uvr_nonzero
-    xor eax, eax
-    ret
-.uvr_nonzero:
-    push rdi
-    push rsi
-    push r8
-    push r9
-    push r11
-    call sc_get_slot_bounds
-    call sc_range_in_bounds
-    mov r11d, eax
-    test r11d, r11d
-    jnz .uvr_done
-    mov r8, [rel app_blob_base_v]
-    mov r9, [rel app_blob_end_v]
-    call sc_range_in_bounds
-    mov r11d, eax
-.uvr_done:
-    mov eax, r11d
-    pop r11
-    pop r9
-    pop r8
-    pop rsi
-    pop rdi
-    ret
-
-; RDI=ptr, RSI=len -> EAX=1 if the range is inside user-owned memory.
-sc_validate_user_io_range:
-    call sc_validate_user_range
-    ret
+; ----------------------------------------------------------------------------
+; MIGRATED to NexusHLK (Stage 2a): the following LEAF validators are now emitted
+; from src/kernel/nexushlk/syscall_validate.nxh as structured zero-asm fns with
+; the SAME global symbol names and the SAME register ABI:
+;     sc_get_slot_bounds, sc_range_in_bounds, sc_validate_user_range,
+;     sc_validate_user_io_range, sc_validate_callback_target
+; The generated build/nxh/syscall_validate.asm is %include'd by kernel_build.asm
+; before syscall.asm, so callers here and in the handler .inc files still link.
+; (sc_range_in_bounds/sc_validate_user_range now use signed compares for the
+;  bounds tests; equivalent for the low-half user VAs these ever see.)
+;
+; The two helpers below STAY in assembly: they read USER memory byte-by-byte
+; inside USER_ACCESS_BEGIN/END (stac/clac only under ENABLE_SMAP); the NHLK
+; smap_open/close intrinsics emit UNCONDITIONAL stac/clac, which would #UD on a
+; non-SMAP build — so porting them would not be behavior-preserving.
+; ----------------------------------------------------------------------------
 
 ; RDI=ptr, RSI=max_len -> EAX=1 if a NUL-terminated string lives entirely in
 ; the current app slot or the built-in user blob.
@@ -251,16 +202,6 @@ sc_validate_path_canonical:
 ; SYS_FS_ENTRY_INFO. Slot 0x1D1000..0x1D5000 is currently unused and is
 ; reserved for future per-slot caches.
 
-; RDI=callback target -> EAX=1 if null or inside user-owned code/data.
-sc_validate_callback_target:
-    test rdi, rdi
-    jz .vct_ok
-    ; Require 64 bytes (one cache line) of mapped code at the entry point. A
-    ; 16-byte window let a 1-byte prologue at the very last bytes of the slot
-    ; pass; a realistic function prologue is larger than that.
-    mov rsi, 64
-    call sc_validate_user_range
-    ret
-.vct_ok:
-    mov eax, 1
-    ret
+; sc_validate_callback_target — MIGRATED to NexusHLK (Stage 2a). See
+; src/kernel/nexushlk/syscall_validate.nxh (RDI=callback target -> EAX=1 if null
+; or 64 mapped bytes inside user-owned memory).

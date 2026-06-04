@@ -14,6 +14,64 @@
     call trace_syscall
 %endif
     POP_ALL
+    DBG_EVT EVT_APP_DONE, r15, rax, rcx, rdx, 0, 0, 0
+%ifdef ENABLE_DEBUG_SERIAL
+    ; DEBUG (L3 app-done diagnosis): this is the final kernel point before
+    ; handing a ring-3 callback back to call_app_l3_return. Surface the saved
+    ; syscall-stack footer and the active runtime record before the canary
+    ; compare so a mismatch tells us whether the footer was clobbered, the slot
+    ; is wrong, or the runtime record points somewhere unexpected.
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    SER 'A'
+    SER 'D'
+    SER 'O'
+    SER 'N'
+    SER ' '
+    SER 's'
+    mov rdi, [rsp + 32]                 ; original [rsp] = slot
+    call ser_print_hex64
+    SER ' '
+    SER 'c'
+    mov rdi, [rsp + 40]                 ; original [rsp+8] = saved canary
+    call ser_print_hex64
+    SER ' '
+    SER 'k'
+    mov rdi, [rel kernel_canary]
+    call ser_print_hex64
+    SER ' '
+    SER 'p'
+    lea rdi, [rsp + 32]                 ; original footer pointer
+    call ser_print_hex64
+    mov edx, [rsp + 32]
+    cmp edx, MAX_WINDOWS
+    jb .adon_slot_ok
+    xor edx, edx
+.adon_slot_ok:
+    imul rdx, L3_RT_SIZE
+    lea rcx, [rel l3_runtime]
+    add rdx, rcx
+    SER ' '
+    SER 'r'
+    mov rdi, [rdx + L3_RT_USER_RIP]
+    call ser_print_hex64
+    SER ' '
+    SER 'u'
+    mov rdi, [rdx + L3_RT_USER_RSP]
+    call ser_print_hex64
+    SER ' '
+    SER 'n'
+    mov rdi, [rdx + L3_RT_SYSCALL_NUM]
+    call ser_print_hex64
+    SER 13
+    SER 10
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
+%endif
     ; Canary check before handing back to the L3 return path. Layout
     ; after POP_ALL: [rsp]=slot, [rsp+8]=canary. call_app_l3_return
     ; reads slot from [rsp].
@@ -24,9 +82,11 @@
 .app_done_canary_bad:
     mov rdi, rax
     lea rsi, [rel .app_done_canary_bad]
+    mov edx, 0x4144434E                  ; ADCN: app-done syscall footer canary
     jmp kernel_panic_canary
 
 .done:
+    DBG_EVT EVT_SYSCALL_EXIT, r15, 0, 0, 0, 0, 0, 0
 %ifdef ENABLE_TRACE
     mov eax, r15d
     cmp eax, MAX_WINDOWS
@@ -82,6 +142,7 @@
 .sc_postcond_fail:
     mov rdi, rax                        ; observed (mutated) saved arg value
     lea rsi, [rel .sc_postcond_fail]
+    mov edx, 0x504F5354                  ; POST: saved syscall arg postcondition
     jmp kernel_panic_canary
 .sc_postcond_skip:
 %endif
@@ -99,6 +160,7 @@
 .done_canary_bad:
     mov rdi, r10
     lea rsi, [rel .done_canary_bad]
+    mov edx, 0x44434E59                  ; DCNY: normal syscall footer canary
     jmp kernel_panic_canary
 .slot_ok_return:
     ; Per-syscall code-segment scrub. Walk the active slot's 512-entry PT and

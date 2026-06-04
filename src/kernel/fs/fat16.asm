@@ -279,6 +279,7 @@ fat16_canary_check:
 .fc_bad:
     mov rdi, rax
     lea rsi, [rel fat16_canary_check]
+    mov edx, 0x46415443                  ; FATC: FAT directory cache guard
     jmp kernel_panic_canary
 
 ; Internal: count valid files in root directory

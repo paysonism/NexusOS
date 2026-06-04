@@ -128,6 +128,7 @@
     ; (blank windows). The macro's "reloaded before the handler" note referred to
     ; the arg-register reloads at the dispatch tail, which are far too late.
     mov rax, [rsp + ALL_RAX]
+    DBG_EVT EVT_SYSCALL_ENTER, r15, rax, rcx, 0, 0, 0, 0
 
 %ifdef ENABLE_TRACE
     mov rdi, [rsp + ALL_RAX]
@@ -229,6 +230,84 @@
     ; not the app-visible one. The trace ring (appended pre-dispatch) keeps the
     ; app-visible value, which is the number the app actually issued.
     mov [rsp + ALL_RAX], rax
+%endif
+%ifdef ENABLE_DEBUG_SERIAL
+    ; DEBUG (click callback diagnosis): while a WM click callback is active,
+    ; emit every syscall with the click context that caused it. This is aimed at
+    ; quickly separating "bad NexusHL callback/syscall args" from lower-level
+    ; canary fallout without tracing the canary path itself.
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    cmp byte [rel click_debug_active], 0
+    je .clk_sys_done
+    SER 'C'
+    SER 'L'
+    SER 'K'
+    SER 'S'
+    SER ' '
+    SER 'q'
+    mov rdi, [rel click_debug_seq]
+    call ser_print_hex64
+    SER ' '
+    SER 's'
+    movzx edi, r15b
+    call ser_print_hex64
+    SER ' '
+    SER 'n'
+    mov rdi, [rsp + 64 + ALL_RAX]       ; real syscall number after permutation
+    call ser_print_hex64
+    SER ' '
+    SER 'r'
+    mov rdi, [rsp + 64 + ALL_RCX]       ; user RIP after SYSCALL
+    call ser_print_hex64
+    SER ' '
+    SER 'a'
+    mov rdi, [rsp + 64 + ALL_RDI]
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [rsp + 64 + ALL_RSI]
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [rsp + 64 + ALL_RDX]
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [rsp + 64 + ALL_R8]
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [rsp + 64 + ALL_R9]
+    call ser_print_hex64
+    SER ' '
+    SER 'c'
+    mov rdi, [rel click_debug_client_x]
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [rel click_debug_client_y]
+    call ser_print_hex64
+    SER ' '
+    SER 'w'
+    mov rdi, [rel click_debug_win]
+    call ser_print_hex64
+    SER ' '
+    SER 't'
+    mov rdi, [rel click_debug_target]
+    call ser_print_hex64
+    SER 13
+    SER 10
+.clk_sys_done:
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
 %endif
     mov rbx, rax
     ; SYSCALL_ENTRY_SIZE == 24, so rbx *= 24 via (rbx + rbx*2) << 3.
@@ -525,6 +604,7 @@
 .sc_cap_tamper:
     movzx edi, dl
     lea rsi, [rel .sc_cap_tamper]
+    mov edx, 0x43415054                  ; CAPT: slot capability HMAC tamper
     jmp kernel_panic_canary
 
 .sc_rate_reject:

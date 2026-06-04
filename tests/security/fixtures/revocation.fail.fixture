@@ -1,0 +1,3 @@
+checker=revocation_check
+expect=fail
+case=reject revoked signer or stale epoch

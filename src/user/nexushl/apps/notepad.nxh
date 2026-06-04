@@ -82,22 +82,22 @@ str szNpEntryInfo     = "                    "
 fn line_ptr(row) { return &notepad_buf + row * NP_MAX_COLS; }
 fn len_ptr(row)  { return &np_line_len + row * 4; }
 fn notepad_buf_off() {
-    asm "mov rax, notepad_buf - app_blob_start";
+    return &notepad_buf - &app_blob_start;
 }
 fn np_line_len_off() {
-    asm "mov rax, np_line_len - app_blob_start";
+    return &np_line_len - &app_blob_start;
 }
 fn np_num_lines_off() {
-    asm "mov rax, np_num_lines - app_blob_start";
+    return &np_num_lines - &app_blob_start;
 }
 fn np_scroll_top_off() {
-    asm "mov rax, np_scroll_top - app_blob_start";
+    return &np_scroll_top - &app_blob_start;
 }
 fn np_cursor_row_off() {
-    asm "mov rax, np_cursor_row - app_blob_start";
+    return &np_cursor_row - &app_blob_start;
 }
 fn np_cursor_col_off() {
-    asm "mov rax, np_cursor_col - app_blob_start";
+    return &np_cursor_col - &app_blob_start;
 }
 
 fn copy_line_to_scratch(src) {

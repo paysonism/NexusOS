@@ -1,0 +1,3 @@
+checker=threshold_check
+expect=pass
+case=valid quorum with allowed signer roles

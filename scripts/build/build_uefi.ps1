@@ -164,7 +164,9 @@ if (Test-Path $WallpaperTool) {
 }
 
 # 0b. Compile NexusHL apps -> build/nxh/*.asm (included by src/user/apps.asm)
-& powershell -NoProfile -File (Join-Path $Root 'scripts\build\build_nxh.ps1')
+$NxhBuildArgs = @()
+if ($Release) { $NxhBuildArgs += '-Release' }
+& powershell -NoProfile -File (Join-Path $Root 'scripts\build\build_nxh.ps1') @NxhBuildArgs
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED NexusHL compile' -ForegroundColor Red; exit 1 }
 
 # 0b2. Compile NexusHLK kernel modules -> build/nxh/*.asm (%include'd by
@@ -183,22 +185,27 @@ $KernelModules = @(
     @{ src = 'src\kernel\nexushlk\serial_poll.nxh'; out = 'build\nxh\serial_poll.asm' },
     @{ src = 'src\kernel\nexushlk\input_dispatch.nxh'; out = 'build\nxh\input_dispatch.asm' },
     @{ src = 'src\kernel\nexushlk\frame_present.nxh'; out = 'build\nxh\frame_present.asm' },
+    @{ src = 'src\kernel\nexushlk\boot_anim.nxh'; out = 'build\nxh\boot_anim.asm' },
     @{ src = 'src\kernel\nexushlk\serial_diag.nxh'; out = 'build\nxh\serial_diag.asm' },
+    @{ src = 'src\kernel\nexushlk\syscall_data.nxh'; out = 'build\nxh\syscall_data.asm' },
     @{ src = 'src\kernel\nexushlk\boot_diag.nxh';   out = 'build\nxh\boot_diag.asm' },
     @{ src = 'src\kernel\nexushlk\debug_overlay.nxh'; out = 'build\nxh\debug_overlay.asm' },
     @{ src = 'src\kernel\nexushlk\cpu_acct.nxh';    out = 'build\nxh\cpu_acct.asm' },
     @{ src = 'src\kernel\nexushlk\serial_console.nxh'; out = 'build\nxh\serial_console.asm' },
-    @{ src = 'src\kernel\nexushlk\real_boot_diag.nxh'; out = 'build\nxh\real_boot_diag.asm' },
-    @{ src = 'src\kernel\nexushlk\real_boot_diag_core.nxh'; out = 'build\nxh\real_boot_diag_core.asm' },
-    @{ src = 'src\kernel\nexushlk\real_boot_diag_fbperf.nxh'; out = 'build\nxh\real_boot_diag_fbperf.asm' },
-    @{ src = 'src\kernel\nexushlk\real_boot_diag_legacy.nxh'; out = 'build\nxh\real_boot_diag_legacy.asm' },
-    @{ src = 'src\kernel\nexushlk\real_boot_diag_gfx.nxh'; out = 'build\nxh\real_boot_diag_gfx.asm' }
+    @{ src = 'src\kernel\nexushlk\crypto.nxh'; out = 'build\nxh\crypto.asm' },
+    @{ src = 'src\kernel\nexushlk\syscall_validate.nxh'; out = 'build\nxh\syscall_validate.asm' },
+    @{ src = 'src\kernel\nexushlk\syscall_secure.nxh'; out = 'build\nxh\syscall_secure.asm' },
+    @{ src = 'src\kernel\nexushlk\wm_helpers.nxh'; out = 'build\nxh\wm_helpers.asm' },
+    @{ src = 'src\kernel\nexushlk\usb_hid_helpers.nxh'; out = 'build\nxh\usb_hid_helpers.asm' },
+    @{ src = 'src\kernel\nexushlk\usermode_callbacks.nxh'; out = 'build\nxh\usermode_callbacks.asm' }
 )
 foreach ($m in $KernelModules) {
     $mSrc = Join-Path $Root $m.src
     $mOut = Join-Path $Root $m.out
     Write-Host "  compile (kernel) $($m.src)" -ForegroundColor Yellow
-    & python $NxhcPy $mSrc -o $mOut -L $NxhLibDir --embed --target kernel
+    # --forbid-asm enforces the zero-asm invariant: every NexusHLK kernel module
+    # is fully structured. A reintroduced `asm`/`asm{}` escape fails the build.
+    & python $NxhcPy $mSrc -o $mOut -L $NxhLibDir --embed --target kernel --forbid-asm
     if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED NexusHLK kernel-module compile' -ForegroundColor Red; exit 1 }
 }
 $CoverageTool = Join-Path $Root 'tools\check_coverage.py'

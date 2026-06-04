@@ -7,10 +7,16 @@
 bits 16
 org 0x7E00
 %include "src/include/constants.inc"
+; BIOS firmware-interface magics (E820 / VBE / EFER) — named + spec-cited.
+%include "src/include/bios_boot.inc"
 
 KERNEL_CHUNK_SEG     equ 0x1000
 KERNEL_CHUNK_ADDR    equ 0x10000
 KERNEL_CHUNK_SECTORS equ 256        ; 128KB bounce buffer below 1MB
+; Transient long-mode stack used only between the PM->LM switch and the jump
+; into the kernel. (NOT the kernel's runtime stack, which is KERNEL_STACK_TOP
+; = 0xC00000 in boot_memory.inc; the kernel sets that up itself.)
+STAGE2_LM_STACK_TOP  equ 0x200000
 
 stage2_start:
     dw 0x4E58               ; 'NX' magic number (verified by MBR)
@@ -61,9 +67,9 @@ stage2_entry:
     mov al, '3'
     call serial_putc
 
-    ; Verify kernel loaded: check first 4 bytes at 0x100000
+    ; Verify kernel loaded: check first 4 bytes at KERNEL_LOAD_ADDR
     ; (load_kernel already entered unreal mode at the end)
-    mov edi, 0x100000
+    mov edi, KERNEL_LOAD_ADDR
     a32 mov eax, [ds:edi]
     test eax, eax
     jnz .kern_ok
@@ -110,14 +116,14 @@ bits 32
     mov cr4, eax
 
     ; Step 8: Load PML4 into CR3
-    mov eax, 0x70000         ; PML4 physical address
+    mov eax, PAGE_TABLE_ADDR ; PML4 physical address
     mov cr3, eax
 
     ; Step 9: Enable Long Mode and NX in EFER MSR
     ; NXE (bit 11) must be set before any PTE uses PAGE_NX (bit 63);
     ; the per-slot W^X enforcement in l3_apply_wx_policy relies on this.
     ; UEFI path sets the same bits in uefi_loader.asm; keep both in sync.
-    mov ecx, 0xC0000080      ; IA32_EFER MSR
+    mov ecx, IA32_EFER_MSR_BIOS ; IA32_EFER MSR
     rdmsr
     or eax, (1 << 8)         ; Set LME (Long Mode Enable)
     or eax, (1 << 11)        ; Set NXE (No-Execute Enable) -- enables PAGE_NX
@@ -142,8 +148,8 @@ bits 64
     mov gs, ax
     mov ss, ax
 
-    ; Set up kernel stack
-    mov rsp, 0x200000        ; KERNEL_STACK_TOP
+    ; Set up a transient long-mode stack (see STAGE2_LM_STACK_TOP above)
+    mov rsp, STAGE2_LM_STACK_TOP
 
     ; Serial: '6' = reached long mode
     mov dx, 0x3F8 + 5
@@ -156,10 +162,10 @@ bits 64
     out dx, al
 
     ; Paint screen GREEN as proof of Stage 2 completion
-    mov eax, [0x9000]        ; Framebuffer address from VBE info
+    mov eax, [VBE_INFO_ADDR] ; Framebuffer address from VBE info
     mov edi, eax
     mov ecx, (1024 * 768)    ; Number of pixels
-    mov eax, 0x0000FF00      ; GREEN
+    mov eax, 0x0000FF00      ; GREEN (0x00RRGGBB)
     rep stosd
 
     ; Serial: '7' = about to jump to kernel
@@ -173,7 +179,7 @@ bits 64
     out dx, al
 
     ; Check if kernel is actually loaded (first dword should not be zero)
-    mov eax, [0x100000]
+    mov eax, [KERNEL_LOAD_ADDR]
     test eax, eax
     jnz .kernel_present
     ; Kernel is zeros! Serial '!' and halt
@@ -198,8 +204,8 @@ bits 64
     mov al, '8'
     out dx, al
 
-    ; Jump to kernel at 0x100000
-    mov rax, 0x100000
+    ; Jump to kernel at KERNEL_LOAD_ADDR
+    mov rax, KERNEL_LOAD_ADDR
     jmp rax
 
 ; ============================================================================
@@ -299,30 +305,30 @@ print_hex:
 ; Stores entries at E820_MAP_ADDR (0x2000)
 ; Stores count at E820_COUNT_ADDR (0x1FF0)
 probe_memory:
-    mov di, 0x2000           ; ES:DI -> buffer for E820 entries
+    mov di, E820_MAP_ADDR    ; ES:DI -> buffer for E820 entries
     xor ebx, ebx            ; Continuation value (0 = start)
     xor si, si              ; Entry counter
 
 .e820_loop:
-    mov eax, 0x0000E820
-    mov ecx, 24              ; Buffer size (24 bytes per entry)
-    mov edx, 0x534D4150      ; 'SMAP' signature
+    mov eax, E820_FN
+    mov ecx, E820_ENTRY_SIZE ; Buffer size (24 bytes per entry)
+    mov edx, E820_SMAP_SIG   ; 'SMAP' signature
     int 0x15
 
     jc .e820_done            ; CF=1 on error or end
-    cmp eax, 0x534D4150      ; Verify 'SMAP' signature returned
+    cmp eax, E820_SMAP_SIG   ; Verify 'SMAP' signature returned
     jne .e820_done
 
     ; Valid entry
     inc si
-    add di, 24              ; Next entry slot
+    add di, E820_ENTRY_SIZE  ; Next entry slot
 
     test ebx, ebx           ; EBX=0 means last entry
     jz .e820_done
     jmp .e820_loop
 
 .e820_done:
-    mov [0x1FF0], si         ; Store entry count
+    mov [E820_COUNT_ADDR], si ; Store entry count
     ret
 
 ; --- Load kernel from disk sectors 64+ to 0x100000 ---

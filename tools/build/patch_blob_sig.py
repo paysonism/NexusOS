@@ -2,11 +2,11 @@
 """
 User-blob signature patcher (security_todo.md §9 "Sign the user blob").
 
-Computes the kernel-verified MAC over the built-in user blob and patches the
+Computes the kernel-verified HMAC-SHA256 over the built-in user blob and patches the
 expected MAC + the KASLR sliding-offset exclusion table into the raw kernel
 image(s) at build time, BEFORE the KASLR diff. See:
   - src/include/app_blob_sig.inc          (shared key + marker + threat model)
-  - src/kernel/core/measured_boot.asm     (runtime verifier)
+  - src/kernel/nexushlk/crypto.nxh        (runtime verifier)
 
 THREAT MODEL (docs/STATUS.md): root of trust is measured boot + a kernel-held
 key, NOT silicon; a physical attacker with the boot medium is out of scope. A
@@ -26,10 +26,9 @@ ascending blob-relative offset list into the kernel so the runtime verifier
 skips the same windows. The MAC therefore covers every non-relocated blob byte
 and is slide-independent; the relocated address words are excluded by design.
 
-MAC = FNV-1a( KEY8_LE || covered_blob || KEY8_LE ), an HMAC-style key envelope
-over the 64-bit FNV-1a family used across the tree. A documented stopgap: it
-detects accidental/casual tampering or a truncated/corrupted blob; it is NOT
-collision-resistant against a determined adversary (who is out of scope).
+MAC = HMAC-SHA256(KEY8_LE, covered_blob), where covered_blob folds 0x00 for
+each KASLR-sliding qword. The runtime verifier in crypto.nxh performs the same
+canonicalization before comparing the 32-byte digest patched here.
 
 The blob region is [start_marker, end_marker + len(end_marker)), i.e. exactly
 the embedded [app_blob_start, app_blob_end) the kernel hashes at runtime.
@@ -38,11 +37,10 @@ Usage:
   patch_blob_sig.py --a KERNEL.A.RAW --b KERNEL.B.RAW [--image EXTRA ...]
 """
 import argparse
+import hmac
+import hashlib
 import sys
 
-# FNV-1a 64-bit constants (match app_blob_sig.inc / measured_boot.asm).
-FNV_OFFSET = 0xCBF29CE484222325
-FNV_PRIME = 0x00000100000001B3
 MASK64 = (1 << 64) - 1
 
 # MUST equal APP_BLOB_SIG_KEY in src/include/app_blob_sig.inc ("NXBLOBSI").
@@ -59,7 +57,7 @@ APPS_START_MARKER = bytes((0x4E, 0x58, 0x41, 0x50, 0x50, 0x42, 0x4C, 0x4F,
 APPS_END_MARKER = bytes((0x4E, 0x58, 0x41, 0x50, 0x50, 0x42, 0x4C, 0x4F,
                          0x42, 0x45, 0x4E, 0x44, 0x21, 0xCA, 0xFE, 0xBE))
 
-# 16-byte locator preceding {MAC qword, count dword, offsets dword[MAX_FIXUPS]}
+# 16-byte locator preceding {MAC[32], count dword, offsets dword[MAX_FIXUPS]}
 # (match APP_BLOB_SIG_MARKER in app_blob_sig.inc: "NXBLOBSI"+"GMAC!"+0xDEC0DE).
 SIG_MARKER = bytes((0x4E, 0x58, 0x42, 0x4C, 0x4F, 0x42, 0x53, 0x49,
                     0x47, 0x4D, 0x41, 0x43, 0x21, 0xDE, 0xC0, 0xDE))
@@ -68,14 +66,6 @@ SIG_MARKER = bytes((0x4E, 0x58, 0x42, 0x4C, 0x4F, 0x42, 0x53, 0x49,
 def die(msg):
     sys.stderr.write("patch-blob-sig: FATAL: " + msg + "\n")
     sys.exit(1)
-
-
-def fold8(h, value):
-    """Fold the 8 little-endian bytes of a 64-bit value into FNV-1a hash h."""
-    for _ in range(8):
-        h = ((h ^ (value & 0xFF)) * FNV_PRIME) & MASK64
-        value >>= 8
-    return h
 
 
 def find_unique(buf, needle, what):
@@ -127,19 +117,19 @@ def derive_sliding_offsets(blob_a, blob_b):
     return offs
 
 
-def compute_mac(blob, sliding_offsets):
-    """FNV-1a(KEY || covered_blob || KEY), folding 0x00 over each sliding qword."""
-    skip = set()
+def canonical_blob(blob, sliding_offsets):
+    """Return blob bytes with each KASLR-sliding qword replaced by zero bytes."""
+    out = bytearray(blob)
     for off in sliding_offsets:
         for k in range(8):
-            skip.add(off + k)
-    h = FNV_OFFSET
-    h = fold8(h, APP_BLOB_SIG_KEY)              # key prefix
-    for idx, b in enumerate(blob):
-        byte = 0 if idx in skip else b          # exclude relocated bytes
-        h = ((h ^ byte) * FNV_PRIME) & MASK64
-    h = fold8(h, APP_BLOB_SIG_KEY)              # key suffix
-    return h
+            out[off + k] = 0
+    return bytes(out)
+
+
+def compute_mac(blob, sliding_offsets):
+    """HMAC-SHA256(KEY8_LE, canonical_blob)."""
+    key = APP_BLOB_SIG_KEY.to_bytes(8, "little")
+    return hmac.new(key, canonical_blob(blob, sliding_offsets), hashlib.sha256).digest()
 
 
 def patch_image(path, mac, offsets, blob_len):
@@ -153,11 +143,11 @@ def patch_image(path, mac, offsets, blob_len):
             f"({blob_len}) -- mismatched image?")
     sig = find_unique(buf, SIG_MARKER, "blob-sig")
     slot = sig + len(SIG_MARKER)
-    need = 8 + 4 + 4 * MAX_FIXUPS
+    need = 32 + 4 + 4 * MAX_FIXUPS
     if slot + need > len(buf):
         die(f"sig table runs past end of {path}")
     out = bytearray()
-    out += mac.to_bytes(8, "little")
+    out += mac
     out += len(offsets).to_bytes(4, "little")
     for off in offsets:
         out += off.to_bytes(4, "little")
@@ -202,7 +192,7 @@ def main():
         patch_image(path, mac, offsets, len(blob_a))
 
     print(f"  blob-sig: blob {len(blob_a)} bytes, {len(offsets)} sliding qwords "
-          f"excluded, MAC 0x{mac:016X} patched into "
+          f"excluded, HMAC-SHA256 {mac.hex()} patched into "
           f"{2 + len(args.image)} image(s)")
 
 

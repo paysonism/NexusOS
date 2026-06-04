@@ -4,7 +4,7 @@
 bits 64
 %include "constants.inc"
 
-extern fb_addr, main_loop_stage, main_loop_stage_done
+extern fb_addr, main_loop_stage, main_loop_stage_done, gui_initialized
 extern scr_pitch_q, scr_width, scr_height
 ; Per-slot syscall rate-limit token bucket, defined in syscall.asm. Refilled to
 ; SC_BUDGET_PER_TICK once per timer tick (security_todo.md §2).
@@ -207,6 +207,13 @@ pit_handler:
     dec ecx
     jnz .sc_budget_refill
 
+    ; App-slot integrity work is only meaningful after the GUI/app slots are
+    ; initialized. During the boot splash, PIT IRQs are already enabled for
+    ; frame pacing; running slot scans that early races partially initialized
+    ; app/syscall state and can trip the canary path before kmain reaches K6.
+    cmp byte [gui_initialized], 1
+    jne .skip_slot_security_scans
+
     ; --- Code-range integrity re-verify (security_todo.md §12) ---------------
     ; Every CODE_HASH_VERIFY_PERIOD ticks, re-hash each slot's executable code
     ; range and compare against the install-time baseline. A mismatch means an
@@ -235,6 +242,7 @@ pit_handler:
     jnz .skip_anomaly_scan
     call sc_anomaly_scan_all
 .skip_anomaly_scan:
+.skip_slot_security_scans:
 
     ; --- HANG DEBUG: write main_loop_stage and stage_done to a known
     ; framebuffer location every PIT tick so we can SEE which call hung even

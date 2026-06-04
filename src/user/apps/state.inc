@@ -144,8 +144,10 @@ szAppNameNotepad  db "notepad", 0
 szAppNameSettings db "settings", 0
 szAppNamePaint    db "paint", 0
 szAppNameAbout    db "about", 0
+%ifndef RELEASE_BUILD
 szAppNameSecurity db "security", 0
 szAppNameSecurityProbe db "security_probe", 0
+%endif
 szAppNamePing     db "ping", 0
 szAppNameMedia    db "media", 0
 szAppNameRoot     db "root", 0

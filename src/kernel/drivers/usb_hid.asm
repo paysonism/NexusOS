@@ -71,52 +71,11 @@ section .text
 ; USB probe log helpers. This is intentionally narrow: it persists the HID/xHCI
 ; probe path to USBLOG.TXT on the Nexus FAT data volume for real-hardware boots.
 ; ============================================================================
-usb_log_ch:
-    push rbx
-    push rcx
-    mov ebx, [usb_log_len]
-    cmp ebx, USB_LOG_BUF_SIZE - 2
-    jae .done
-    mov [usb_log_buf + rbx], al
-    inc ebx
-    mov [usb_log_len], ebx
-.done:
-    pop rcx
-    pop rbx
-    ret
-
-usb_log_str:
-    push rax
-    push rsi
-.loop:
-    lodsb
-    test al, al
-    jz .done
-    call usb_log_ch
-    jmp .loop
-.done:
-    pop rsi
-    pop rax
-    ret
-
-usb_log_crlf:
-    push rax
-    mov al, 13
-    call usb_log_ch
-    mov al, 10
-    call usb_log_ch
-    pop rax
-    ret
-
-usb_log_hex_nib:
-    and al, 0x0F
-    cmp al, 10
-    jb .digit
-    add al, 'A' - 10
-    jmp usb_log_ch
-.digit:
-    add al, '0'
-    jmp usb_log_ch
+; usb_log_ch / usb_log_str / usb_log_crlf / usb_log_hex_nib were migrated to
+; zero-asm NexusHLK — see src/kernel/nexushlk/usb_hid_helpers.nxh (compiled to
+; build/nxh/usb_hid_helpers.asm, %include'd by kernel_build.asm BEFORE this
+; file). Same global names + same custom register ABI (al/rsi in, all regs
+; preserved). The hex/kv formatters below stay in asm and call those globals.
 
 usb_log_hex8:
     push rax
@@ -162,28 +121,9 @@ usb_log_kv16:
     call usb_log_crlf
     ret
 
-usb_hid_flush_log:
-    push rbx
-    push rdx
-    push rdi
-    push rsi
-    cmp dword [usb_log_len], 0
-    je .ret
-    mov ebx, [usb_log_len]
-    cmp ebx, USB_LOG_BUF_SIZE
-    jae .cap
-    mov byte [usb_log_buf + rbx], 0
-.cap:
-    lea rdi, [rel usb_log_name]
-    lea rsi, [rel usb_log_buf]
-    mov edx, [usb_log_len]
-    call fat16_write_file
-.ret:
-    pop rsi
-    pop rdi
-    pop rdx
-    pop rbx
-    ret
+; usb_hid_flush_log was migrated to zero-asm NexusHLK —
+; see src/kernel/nexushlk/usb_hid_helpers.nxh. Same global name + ABI
+; (no args; persists usb_log_buf to USBLOG.TXT via fat16_write_file).
 
 ; ============================================================================
 ; usb_hid_init_same_ctrl - Re-enumerate on the currently active XHCI controller
@@ -1726,163 +1666,13 @@ usb_wait_completion:
     xor eax, eax
     ret
 
-; ============================================================================
-; usb_find_endpoint - Parse Config Descriptor at XHCI_CTRL_BUF_ADDR
-; Returns: EAX=1 found, updates usb_ep_addr, usb_ep_mps
-; ============================================================================
-usb_find_endpoint:
-    mov rsi, XHCI_CTRL_BUF_ADDR
-    ; Config descriptor header must include bLength, bDescriptorType, and
-    ; wTotalLength before any descriptor-specific field reads.
-    cmp byte [rsi], 4
-    jb .not_found
-    movzx ecx, word [rsi + 2]  ; wTotalLength
-    cmp ecx, 4
-    jb .not_found
-    cmp ecx, 512
-    ja .not_found
-    
-    ; Parse loop state
-    xor edx, edx             ; Offset in buffer
-    xor ebx, ebx             ; Flag: found mouse interface (0=no, 1=yes)
-    
-.parse:
-    cmp edx, ecx
-    jge .not_found
-    
-    ; Read bLength (offset + 0)
-    movzx eax, byte [rsi + rdx]
-    cmp eax, 2
-    jb .not_found            ; Zero/short descriptor? Abort to avoid infinite loop
-    mov r8d, edx
-    add r8d, eax
-    jc .not_found
-    cmp r8d, ecx
-    ja .not_found            ; Descriptor must fit inside wTotalLength
-    
-    ; Read bDescriptorType (offset + 1)
-    mov al, [rsi + rdx + 1]
-    
-    cmp al, USB_DESC_INTERFACE
-    je .check_interface
-    
-    cmp al, USB_DESC_ENDPOINT
-    je .check_endpoint
-    
-    jmp .next_desc
-
-.check_interface:
-    ; Found an interface descriptor.
-    ; The primary probe should prefer pointer-class HID devices.
-    ; A secondary probe may also accept a keyboard.
-    cmp byte [rsi + rdx], 8
-    jb .not_found
-
-    cmp byte [rsi + rdx + 5], 3  ; bInterfaceClass = HID?
-    jne .not_hid_interface
-
-    mov al, [rsi + rdx + 7]
-    cmp al, 2                   ; boot mouse
-    je .accept_hid_interface
-    cmp al, 1                   ; boot keyboard, allowed only for slot2
-    jne .check_report_hid
-    cmp byte [usb_accept_keyboard], 1
-    jne .not_hid_interface
-    jmp .accept_hid_interface
-
-.check_report_hid:
-    test al, al                  ; report protocol / vendor-specific HID
-    jne .not_hid_interface
-    cmp byte [usb_find_report_hid], 1
-    jne .not_hid_interface
-
-.accept_hid_interface:
-    mov [usb_hid_protocol], al
-    mov al, [rsi + rdx + 2]       ; bInterfaceNumber for class requests
-    mov [usb_interface_num], al
-    mov ebx, 1                   ; Set "found HID" flag - look for interrupt IN next
-    jmp .next_desc
-
-.not_hid_interface:
-    mov ebx, 0                   ; Not a usable HID interface
-    jmp .next_desc
-
-.check_endpoint:
-    ; Found an endpoint descriptor
-    ; Only care if we are currently inside a valid Mouse Interface
-    cmp byte [rsi + rdx], 7
-    jb .not_found
-    test ebx, ebx
-    jz .next_desc
-    
-    ; Check Attributes (offset + 3) -> bits 1:0 = Transfer Type
-    mov al, [rsi + rdx + 3]
-    and al, 0x03
-    cmp al, USB_EP_INTERRUPT
-    jne .next_desc
-    
-    ; Check Direction (offset + 2) -> bit 7 (1=IN)
-    mov al, [rsi + rdx + 2]
-    test al, 0x80
-    jz .next_desc
-    
-    ; Found Interrupt IN endpoint for a HID device (mouse or touchpad)!
-
-    ; Save Endpoint Address (bEndpointAddress, offset +2)
-    mov al, [rsi + rdx + 2]
-    mov [usb_ep_addr], al
-
-    ; Save Max Packet Size (wMaxPacketSize, offset +4, LE word)
-    mov ax, [rsi + rdx + 4]
-    and ax, 0x07FF               ; Bits 10:0 only (USB 2.0 HS can have bigger in high bits)
-    test ax, ax
-    jnz .mps_ok
-    mov ax, 8                    ; Fallback: 8 bytes (minimum HID boot-mouse packet)
-.mps_ok:
-    mov [usb_ep_mps], ax
-
-    ; Save Interval (bInterval, offset +6)
-    mov al, [rsi + rdx + 6]
-    mov [usb_ep_interval], al
-
-    ; Success!
-    mov eax, 1
-    ret
-
-.next_desc:
-    ; Advance by bLength
-    movzx eax, byte [rsi + rdx]
-    add edx, eax
-    jmp .parse
-
-.not_found:
-    xor eax, eax
-    ret
-
-; ============================================================================
-; usb_try_known_mouse_endpoint - Fallback for simple boot mice whose Windows
-; descriptor binding is known but whose real-hardware config walk failed.
-; VID_17EF/PID_602E is "USB Optical Mouse": HID boot mouse, EP1 IN, 4-byte
-; interrupt report. QEMU passthrough confirms the same packet size.
-; Returns EAX=1 if endpoint globals were filled.
-; ============================================================================
-usb_try_known_mouse_endpoint:
-    cmp word [usb_device_vid], 0x17EF
-    jne .no
-    cmp word [usb_device_pid], 0x602E
-    jne .no
-    cmp byte [usb_accept_keyboard], 1
-    je .no
-    mov byte [usb_hid_protocol], 2
-    mov byte [usb_interface_num], 0
-    mov byte [usb_ep_addr], 0x81
-    mov word [usb_ep_mps], 4
-    mov byte [usb_ep_interval], 10
-    mov eax, 1
-    ret
-.no:
-    xor eax, eax
-    ret
+; usb_find_endpoint and usb_try_known_mouse_endpoint were migrated to zero-asm
+; NexusHLK — see src/kernel/nexushlk/usb_hid_helpers.nxh. Same global names +
+; ABI (config-descriptor walk at XHCI_CTRL_BUF_ADDR -> EAX=1/0, fills
+; usb_ep_addr / usb_ep_mps / usb_ep_interval / usb_hid_protocol /
+; usb_interface_num). The structured port keeps the EXACT original bounds
+; checks (header >= 4 bytes, wTotalLength clamped to [4,512], per-descriptor
+; bLength >= 2 and off+bLength <= wTotalLength, iface >= 8 / ep >= 7).
 
 section .data
 ; --- DEBUG: USB mouse diagnostic counters (read by usb_debug_overlay) ---

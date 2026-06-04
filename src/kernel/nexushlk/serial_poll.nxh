@@ -1,65 +1,58 @@
 # ============================================================================
-# COM1 automation input poller.
-# Consumes bounded serial bursts, arms control commands, and forwards normal bytes.
+# COM1 automation input poller.  ZERO-ASM.
+# Consumes bounded serial bursts, arms control commands, and forwards normal
+# bytes. Structured NexusHLK (was a register-exact asm shim).
+#
+# FALL-THROUGH NOTE: the original asm shim had NO `ret` — after `.done` it fell
+# through into the next %include'd module (input_dispatch's `process_mouse`),
+# so every serial poll also ran process_mouse once. That behavior is reproduced
+# faithfully here by an explicit `process_mouse()` tail call before the
+# structured `ret`, so the main loop's per-iteration work is byte-for-byte the
+# same set of calls as before.
 # ============================================================================
 
 module "serial_poll";
 
+unsafe kernel_io;   # inb() from the COM1 LSR / data ports
+unsafe raw_mem;     # lb/sb of the serial_command_armed flag
+
 global serial_poll_command;
 
-fn serial_poll_command() {
-    asm "    push rax";
-    asm "    push rcx";
-    asm "    push rdx";
-    asm "    push rdi";
-    asm "";
-    asm "    ; Cap bytes consumed per call. On real hardware with no UART attached,";
-    asm "    ; reading the LSR at 0x3FD can return 0xFF (data-ready bit permanently";
-    asm "    ; set), which would freeze the main loop in an infinite read here.";
-    asm "    ; 256 bytes is far more than any legitimate burst per ~10ms tick.";
-    asm "    mov ecx, 256";
-    asm "";
-    asm ".poll:";
-    asm "    mov dx, 0x3F8 + 5";
-    asm "    in al, dx";
-    asm "    ; LSR == 0xFF means no UART present (floating bus / pull-ups).";
-    asm "    ; Treat as \"no data\" and bail out so the main loop can keep running.";
-    asm "    cmp al, 0xFF";
-    asm "    je .done";
-    asm "    test al, 1";
-    asm "    jz .done";
-    asm "";
-    asm "    mov dx, 0x3F8";
-    asm "    in al, dx";
-    asm "";
-    asm "    cmp byte [serial_command_armed], 0";
-    asm "    jne .dispatch_control";
-    asm "";
-    asm "    cmp al, 1";
-    asm "    je .arm_control";
-    asm "";
-    asm "    call serial_forward_input";
-    asm "    dec ecx";
-    asm "    jnz .poll";
-    asm "    jmp .done";
-    asm "";
-    asm ".arm_control:";
-    asm "    mov byte [serial_command_armed], 1";
-    asm "    dec ecx";
-    asm "    jnz .poll";
-    asm "    jmp .done";
-    asm "";
-    asm ".dispatch_control:";
-    asm "    mov byte [serial_command_armed], 0";
-    asm "    call serial_dispatch_control";
-    asm "    dec ecx";
-    asm "    jnz .poll";
-    asm "    jmp .done";
-    asm "";
-    asm ".done:";
-    asm "    pop rdi";
-    asm "    pop rdx";
-    asm "    pop rcx";
-    asm "    pop rax";
-}
+const COM1_DATA = 0x3F8;      # COM1 receive/transmit data register
+const COM1_LSR  = 0x3FD;      # COM1 line status register (0x3F8 + 5)
+const LSR_NO_UART    = 0xFF;  # floating bus / pull-ups -> no UART present
+const LSR_DATA_READY = 1;     # LSR bit0: a byte is available
+const POLL_CAP  = 256;        # max bytes consumed per call (anti-livelock)
+const ARM_BYTE  = 1;          # 0x01 prefix arms the next byte as a control cmd
 
+extern serial_command_armed;  # core_runtime_state.asm: byte arm flag
+
+# Drain up to POLL_CAP bytes from COM1. A 0x01 byte arms the next byte as a
+# control command (dispatched via serial_dispatch_control); any other byte is
+# forwarded to the focused window via serial_forward_input. Bails immediately on
+# a missing UART (LSR == 0xFF) or no data, so an unattached port can't livelock
+# the main loop.
+fn serial_poll_command() preserves(rax, rcx, rdx, rdi) {
+    cfg !"RELEASE_BUILD" {
+        let n = POLL_CAP;
+        while n > 0 {
+            let lsr = inb(COM1_LSR);
+            if lsr == LSR_NO_UART { break; }       # no UART present -> stop
+            if (lsr & LSR_DATA_READY) == 0 { break; }   # no byte ready -> stop
+            let b = inb(COM1_DATA);
+            if lb(&serial_command_armed) != 0 {
+                sb(&serial_command_armed, 0);
+                call serial_dispatch_control(al: b);
+            } else {
+                if b == ARM_BYTE {
+                    sb(&serial_command_armed, 1);
+                } else {
+                    call serial_forward_input(al: b);
+                }
+            }
+            n = n - 1;
+        }
+    }
+    # Reproduce the original shim's implicit fall-through into process_mouse.
+    process_mouse();
+}

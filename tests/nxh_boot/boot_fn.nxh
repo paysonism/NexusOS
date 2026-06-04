@@ -1,0 +1,30 @@
+module "boot_fn";
+
+bits 16;
+org 0x7C00;
+unsafe boot_int;
+unsafe boot_io;
+
+global boot_entry;
+
+data boot_counter: 1 x 2 = 3;
+
+fn bios_teletype(ah fnno, al ch, bx attr) {
+    intn(0x10);
+}
+
+fn boot_entry() {
+    cli();
+    load_ds(0);
+    load_es(0);
+    sti();
+
+    let n = boot_counter;
+    while n > 0 {
+        call bios_teletype(ah: 0x0E, al: 0x41, bx: 0x0007);
+        n = n - 1;
+    }
+    boot_counter = n;
+    outb(0x80, n);
+    hlt();
+}

@@ -4,6 +4,7 @@
 # opt-in step handled by whoever wants to wire a HL app into the image.
 
 param(
+    [switch]$Release,
     [switch]$Verify = $true
 )
 
@@ -24,6 +25,7 @@ New-Item -Path $OUT_DIR -ItemType Directory -Force | Out-Null
 Write-Host ''
 Write-Host '  NexusHL Build' -ForegroundColor Cyan
 Write-Host '  =============' -ForegroundColor Cyan
+Write-Host ("  Mode: " + ($(if ($Release) { 'release' } else { 'debug' }))) -ForegroundColor DarkGray
 
 $count = 0
 $manifestApps = @()
@@ -34,6 +36,10 @@ $includeLines = @(
 Get-ChildItem -Path $APP_DIR -Filter '*.nxh' | ForEach-Object {
     $in = $_.FullName
     $name = [IO.Path]::GetFileNameWithoutExtension($_.Name)
+    if ($Release -and $name -in @('hello')) {
+        Write-Host "  skip $name.nxh (debug/test app)" -ForegroundColor DarkGray
+        return
+    }
     $asm = Join-Path $OUT_DIR ($name + '.asm')
     Write-Host "  compile $name.nxh -> $name.asm" -ForegroundColor Yellow
     # Embed mode: strips bits/default/section so the output can be %include'd

@@ -1,0 +1,3 @@
+checker=signed_envelope
+expect=fail
+case=runnable artifact missing policy-dependency bit must be rejected

@@ -1,0 +1,3 @@
+checker=schema_canonical_check
+expect=fail
+case=reject duplicate critical or noncanonical schema field

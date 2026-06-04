@@ -1,0 +1,135 @@
+# NHL-native authority-graph INVARIANT kernel (seL4 validity track).
+#
+# This module encodes the machine-checkable invariants that bound damage after a
+# single-component compromise. It is NOT a claim of formal seL4 equivalence: it
+# is the adapted, explicitly-scoped subset of seL4-style properties this project
+# chooses to preserve (see docs/track3-sel4-validity-todo.md). Each invariant
+# names the compromised component and the authority it must NOT have.
+#
+# Authority is modeled as a bitmask. A domain "has" an authority iff its bit is
+# set. Every predicate fails closed (returns 0 on any violation).
+#
+# The declarative invariant files in tests/security/invariants/*.invariant
+# reference the predicates below by name; the runner asserts each referenced
+# predicate exists and that this module compiles --forbid-asm --deny-unsafe.
+
+module "security_invariant_check";
+
+global inv_subset;
+global inv_lacks_authority;
+global inv_requires_threshold;
+global inv_same_domain;
+global inv_flag_absent;
+global inv_scheduler_no_memory_grant;
+global inv_ipc_no_identity_forge;
+global inv_driver_no_dma_mint;
+global inv_pt_no_persist_without_threshold;
+global inv_policy_loader_signed_only;
+global inv_hypervisor_no_foreign_measurement;
+global inv_release_no_observation;
+
+# Authority bits. One bit per mintable authority in the model.
+const AUTH_MEMORY_GRANT = 1;       # map/grant memory to another domain
+const AUTH_MINT_IDENTITY = 2;      # assert/forge a component identity
+const AUTH_DMA_MAP = 4;            # create a DMA window
+const AUTH_PERSIST = 8;            # authorize persistent on-disk state
+const AUTH_SIGN_MEASUREMENT = 16;  # sign a trusted measurement
+const AUTH_INSTALL_POLICY = 32;    # install capability policy
+const AUTH_GLOBAL = 64;            # global / root authority (never single-domain)
+
+# --- Primitive invariants ---------------------------------------------------
+
+# Capability derivation never increases authority: a derived (child) capability's
+# authority must be a subset of its parent's. seL4's core "no authority
+# amplification" property, adapted.
+fn inv_subset(child_auth, parent_auth) {
+    if (child_auth & parent_auth) == child_auth {
+        return 1;
+    }
+    return 0;
+}
+
+# A domain must NOT hold a forbidden authority bit.
+fn inv_lacks_authority(domain_auth, forbidden_bit) {
+    if (domain_auth & forbidden_bit) != 0 {
+        return 0;
+    }
+    return 1;
+}
+
+# A sensitive authority may be exercised only when threshold approval is present.
+fn inv_requires_threshold(domain_auth, sensitive_bit, threshold_met) {
+    if (domain_auth & sensitive_bit) != 0 {
+        if threshold_met == 0 {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+# A signature/measurement binds to exactly one domain; cross-domain signing is
+# forbidden (no domain may sign for another).
+fn inv_same_domain(signer_domain, target_domain) {
+    if signer_domain == target_domain {
+        return 1;
+    }
+    return 0;
+}
+
+# A flag (e.g. release telemetry) must be absent.
+fn inv_flag_absent(flag) {
+    if flag == 0 {
+        return 1;
+    }
+    return 0;
+}
+
+# --- Named single-compromise containment invariants -------------------------
+
+# A compromised scheduler cannot grant memory access.
+fn inv_scheduler_no_memory_grant(scheduler_auth) {
+    return inv_lacks_authority(scheduler_auth, AUTH_MEMORY_GRANT);
+}
+
+# A compromised IPC router cannot forge component identity.
+fn inv_ipc_no_identity_forge(ipc_auth) {
+    return inv_lacks_authority(ipc_auth, AUTH_MINT_IDENTITY);
+}
+
+# A compromised device driver cannot mint DMA access on its own.
+fn inv_driver_no_dma_mint(driver_auth, dma_grant_present) {
+    if (driver_auth & AUTH_DMA_MAP) != 0 {
+        if dma_grant_present == 0 {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+# A compromised page-table manager cannot authorize persistence without
+# threshold policy approval.
+fn inv_pt_no_persist_without_threshold(pt_auth, threshold_met) {
+    return inv_requires_threshold(pt_auth, AUTH_PERSIST, threshold_met);
+}
+
+# A compromised policy loader cannot install unsigned policy.
+fn inv_policy_loader_signed_only(policy_signed) {
+    if policy_signed == 0 {
+        return 0;
+    }
+    return 1;
+}
+
+# A compromised hypervisor module cannot sign a trusted measurement for an
+# unrelated module: it may only measure its own domain.
+fn inv_hypervisor_no_foreign_measurement(signer_domain, measured_domain, signs_measurement) {
+    if signs_measurement == 0 {
+        return 1;
+    }
+    return inv_same_domain(signer_domain, measured_domain);
+}
+
+# Release builds must not observe the user: no telemetry/logging/identifier flag.
+fn inv_release_no_observation(telemetry_present) {
+    return inv_flag_absent(telemetry_present);
+}

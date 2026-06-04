@@ -1,0 +1,3 @@
+checker=policy_graph_check
+expect=pass
+case=valid signed policy edge with required threshold

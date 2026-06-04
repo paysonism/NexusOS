@@ -349,7 +349,7 @@ FN_BEGIN l3_apply_wx_policy, 0, 0, FN_RET_SCALAR
 ; l3_apply_wx_policy guards the *permissions*; this guards the *contents*.
 ;
 ; APPROACH: when a slot first commits a valid v1 manifest, hash every byte of
-; its executable code range (FNV-1a; same constants as measured_boot.asm, but a
+; its executable code range (FNV-1a; same constants as crypto.nxh, but a
 ; local stateless fold so we carry no cross-file dependency) and stash it in
 ; l3_code_hash[slot]. pit_handler periodically re-hashes and compares; a
 ; mismatch means executable bytes changed under us -> kernel_panic_canary.

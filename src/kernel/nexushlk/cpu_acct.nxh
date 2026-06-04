@@ -1,28 +1,52 @@
 # ============================================================================
-# NexusHLK BSP CPU-utilization accounting.
+# NexusHLK BSP CPU-utilization accounting.  ZERO-ASM.
 #
 # Ported out of the former src/kernel/core/main.asm into this NexusHL kernel module
 # (nxhc.py --target kernel, %include'd from kernel_build.asm right after
-# debug_overlay.asm, before measured_boot.asm). The main loop alternates a work
+# debug_overlay.asm, before crypto.nxh). The main loop alternates a work
 # phase (render + polling) and an idle phase (hlt); these routines timestamp the
 # transitions with RDTSC and, every ~50 PIT ticks, collapse the window into a
 # 0..100 percentage in [bsp_util] (Task Manager reads it via SYS_SYSINFO) and
 # publish an APERF/MPERF-scaled core MHz into smp_core_states.
 #
-# Single NASM translation unit (-f bin), so the still-in-main callers (kmain /
-# the main loop) and the data these routines read/write (acct_* accumulators,
-# tick_count, cpu_tsc_per_tick, bsp_util, the [abs smp_core_states + N] slots)
-# stay defined elsewhere in the kernel and bind with no extern wiring.
+# History: this used to be five register-exact `asm { }` shims reproduced verbatim
+# from the old core owner, because the routines lean on privileged instructions
+# (rdtsc/cpuid/rdmsr) AND on a hand-rolled, non-System-V register ABI —
+# cpu_acct_publish_mhz even took its inputs in r8 (elapsed PIT ticks) and r10
+# (current TSC) from its cpu_acct_work_end caller, which the old NexusHL `fn(args)`
+# form could not express. It is now fully structured NexusHLK with no `asm {}`:
+#   * the privileged ops are named intrinsics (rdtsc / rdmsr / cpuid_eax /
+#     cpuid_ecx) — `unsafe kernel_priv;` makes that authority explicit;
+#   * the cross-routine r8/r10 hand-off is gone: the two internal helpers
+#     (cpu_acct_init_aperf, cpu_acct_publish_mhz) take ordinary System-V args,
+#     which is legal because nothing outside this module calls them (only
+#     cpu_acct_init / _idle_end / _work_end are reached from kernel_lifecycle).
 #
-# Every routine is privileged-instruction heavy (rdtsc/cpuid/rdmsr) and uses a
-# hand-rolled register ABI — cpu_acct_publish_mhz even takes its inputs in r8
-# (elapsed PIT ticks) and r10 (current TSC) from its cpu_acct_work_end caller.
-# As in the sibling modules, that ABI can't be expressed through NexusHL's
-# System-V `fn(args)` form, so each body is a register-exact `asm { }` shim
-# reproduced verbatim from the old core owner; emitted bytes (and behavior) are unchanged.
+# This is a behavior-parity port, not a byte-identical one: the emitted
+# instruction stream changes (structured frames + intrinsic expansions), but the
+# observable effects on bsp_util / smp_core_states[24,28,64,72] / the acct_*
+# accumulators are identical for the in-range values these counters ever hold
+# (TSC/APERF/MPERF deltas over a ~50-tick window stay well under 2^63, so the
+# signed `idiv` the compiler emits matches the old unsigned `div`, and the
+# 64-bit `imul` matches the old 128-bit `mul` whose high half was always zero).
+#
+# Single NASM translation unit (-f bin): the still-in-main callers and the data
+# these routines read/write (acct_* accumulators, tick_count, cpu_tsc_per_tick,
+# bsp_util, smp_core_states) stay defined in core_runtime_state.asm. The `extern`
+# lines below are %unmacro'd to no-ops by kernel_build.asm and resolve as local
+# labels; they document this module's data dependencies.
+#
+# smp_core_states layout used here (matches the old [abs smp_core_states + N]):
+#   +24 dword  BSP utilization 0..100 (mirror of bsp_util)
+#   +28 dword  BSP clock estimate in MHz
+#   +64 qword  last APERF snapshot
+#   +72 qword  last MPERF snapshot
 # ============================================================================
 
 module "cpu_acct";
+
+unsafe kernel_priv;   # rdtsc / rdmsr / cpuid_* are privileged CPU intrinsics
+unsafe raw_mem;       # lb/lw/lq/sb/sw/sq against kernel-resident accounting state
 
 global cpu_acct_init;
 global cpu_acct_idle_end;
@@ -30,23 +54,123 @@ global cpu_acct_work_end;
 global cpu_acct_init_aperf;
 global cpu_acct_publish_mhz;
 
+# Accounting accumulators + window markers (core_runtime_state.asm, qword each).
+extern acct_last_mark;
+extern acct_work_start;
+extern acct_tsc_start;
+extern acct_win_tick;
+extern acct_busy_acc;
+extern acct_idle_acc;
+
+# Shared kernel counters / publish targets (core_runtime_state.asm).
+extern tick_count;        # qword: PIT tick counter
+extern cpu_tsc_per_tick;  # qword: calibrated TSC cycles per PIT tick
+extern bsp_util;          # dword: published 0..100 utilization
+extern smp_core_states;   # per-core state table (offsets above)
+
+const MSR_MPERF      = 0xE7;   # IA32_MPERF
+const MSR_APERF      = 0xE8;   # IA32_APERF
+const CPUID_THERMAL  = 6;      # leaf 6: thermal/power; ECX bit0 = APERF/MPERF
+const WINDOW_TICKS   = 50;     # collapse the accounting window every 50 PIT ticks
+const TSC_KHZ_SCALE  = 10000;  # tsc_per_tick / 10000 -> ~MHz-per-(tick/100) scale
+
+const SCS_UTIL   = 24;   # smp_core_states + 24  (dword) utilization mirror
+const SCS_MHZ    = 28;   # smp_core_states + 28  (dword) clock MHz estimate
+const SCS_APERF  = 64;   # smp_core_states + 64  (qword) last APERF snapshot
+const SCS_MPERF  = 72;   # smp_core_states + 72  (qword) last MPERF snapshot
+
+# True iff the CPU exposes the IA32_APERF / IA32_MPERF effective-frequency MSRs
+# (CPUID leaf 6 must exist, and leaf-6 ECX bit 0 must be set).
+fn aperf_mperf_supported() {
+    if cpuid_eax(0) < CPUID_THERMAL { return 0; }
+    return (cpuid_ecx(CPUID_THERMAL) & 1) != 0;
+}
+
+# Snapshot the current TSC into every window marker and seed the published clock
+# from the static calibration, then prime the APERF/MPERF baseline.
 fn cpu_acct_init() {
-    asm "    rdtsc\n    shl rdx, 32\n    or rax, rdx\n    mov [acct_last_mark], rax\n    mov [acct_work_start], rax\n    mov [acct_tsc_start], rax\n    mov rax, [tick_count]\n    mov [acct_win_tick], rax\n    mov dword [abs smp_core_states + 24], 0\n    mov rax, [cpu_tsc_per_tick]\n    xor rdx, rdx\n    mov rcx, 10000\n    div rcx\n    mov [abs smp_core_states + 28], eax\n    call cpu_acct_init_aperf\n    ret";
+    let now = rdtsc();
+    sq(&acct_last_mark, now);
+    sq(&acct_work_start, now);
+    sq(&acct_tsc_start, now);
+    sq(&acct_win_tick, lq(&tick_count));
+    sw(&smp_core_states + SCS_UTIL, 0);
+    sw(&smp_core_states + SCS_MHZ, lq(&cpu_tsc_per_tick) / TSC_KHZ_SCALE);
+    cpu_acct_init_aperf();
 }
 
+# End of an idle (hlt) phase: fold elapsed-since-last-mark into the idle
+# accumulator and reset work_start to now.
 fn cpu_acct_idle_end() {
-    asm "    push rcx\n    push rdx\n    rdtsc\n    shl rdx, 32\n    or rax, rdx\n    mov rcx, rax\n    sub rax, [acct_last_mark]\n    add [acct_idle_acc], rax\n    mov [acct_work_start], rcx\n    pop rdx\n    pop rcx\n    ret";
+    let now = rdtsc();
+    sq(&acct_idle_acc, lq(&acct_idle_acc) + (now - lq(&acct_last_mark)));
+    sq(&acct_work_start, now);
 }
 
+# End of a work phase: fold elapsed-since-work_start into the busy accumulator.
+# Once per ~50-tick window, collapse busy/(busy+idle) into a 0..100 percentage,
+# publish a fresh clock estimate, and reset the window.
 fn cpu_acct_work_end() {
-    asm "    push rbx\n    push rcx\n    push rdx\n    rdtsc\n    shl rdx, 32\n    or rax, rdx\n    mov rbx, rax\n    sub rax, [acct_work_start]\n    add [acct_busy_acc], rax\n    mov [acct_last_mark], rbx\n    mov rax, [tick_count]\n    sub rax, [acct_win_tick]\n    cmp rax, 50\n    jl .acct_done\n    push r8\n    push r9\n    push r10\n    mov r8, rax\n    mov r10, rbx\n    mov rax, [acct_busy_acc]\n    mov rcx, [acct_idle_acc]\n    add rcx, rax\n    test rcx, rcx\n    jz .acct_clock\n    mov rbx, 100\n    xor rdx, rdx\n    mul rbx\n    div rcx\n    cmp rax, 100\n    jbe .acct_store\n    mov rax, 100\n.acct_store:\n    mov [bsp_util], eax\n    mov [abs smp_core_states + 24], eax\n.acct_clock:\n    call cpu_acct_publish_mhz\n.acct_clock_done:\n    mov [acct_tsc_start], r10\n    pop r10\n    pop r9\n    pop r8\n.acct_reset:\n    mov qword [acct_busy_acc], 0\n    mov qword [acct_idle_acc], 0\n    mov rax, [tick_count]\n    mov [acct_win_tick], rax\n.acct_done:\n    pop rdx\n    pop rcx\n    pop rbx\n    ret";
+    let now = rdtsc();
+    sq(&acct_busy_acc, lq(&acct_busy_acc) + (now - lq(&acct_work_start)));
+    sq(&acct_last_mark, now);
+
+    let elapsed = lq(&tick_count) - lq(&acct_win_tick);
+    if elapsed >= WINDOW_TICKS {
+        let busy = lq(&acct_busy_acc);
+        let total = busy + lq(&acct_idle_acc);
+        if total != 0 {
+            let util = (busy * 100) / total;
+            if util > 100 { util = 100; }
+            sw(&bsp_util, util);
+            sw(&smp_core_states + SCS_UTIL, util);
+        }
+        cpu_acct_publish_mhz(elapsed, now);
+        sq(&acct_tsc_start, now);
+        sq(&acct_busy_acc, 0);
+        sq(&acct_idle_acc, 0);
+        sq(&acct_win_tick, lq(&tick_count));
+    }
 }
 
+# Seed the APERF/MPERF baseline so the first windowed delta in
+# cpu_acct_publish_mhz is meaningful. No-op on CPUs without the MSRs.
 fn cpu_acct_init_aperf() {
-    asm "    push rax\n    push rbx\n    push rcx\n    push rdx\n    xor eax, eax\n    cpuid\n    cmp eax, 6\n    jb .done\n    mov eax, 6\n    cpuid\n    test ecx, 1\n    jz .done\n    mov ecx, 0xE8\n    rdmsr\n    shl rdx, 32\n    or rax, rdx\n    mov [abs smp_core_states + 64], rax\n    mov ecx, 0xE7\n    rdmsr\n    shl rdx, 32\n    or rax, rdx\n    mov [abs smp_core_states + 72], rax\n.done:\n    pop rdx\n    pop rcx\n    pop rbx\n    pop rax\n    ret";
+    if aperf_mperf_supported() {
+        sq(&smp_core_states + SCS_APERF, rdmsr(MSR_APERF));
+        sq(&smp_core_states + SCS_MPERF, rdmsr(MSR_MPERF));
+    }
 }
 
-fn cpu_acct_publish_mhz() {
-    asm "    push rax\n    push rbx\n    push rcx\n    push rdx\n    push r9\n    xor eax, eax\n    cpuid\n    cmp eax, 6\n    jb .tsc_fallback\n    mov eax, 6\n    cpuid\n    test ecx, 1\n    jz .tsc_fallback\n    mov ecx, 0xE8\n    rdmsr\n    shl rdx, 32\n    or rax, rdx\n    mov rbx, rax\n    sub rax, [abs smp_core_states + 64]\n    mov [abs smp_core_states + 64], rbx\n    mov r9, rax\n    mov ecx, 0xE7\n    rdmsr\n    shl rdx, 32\n    or rax, rdx\n    mov rbx, rax\n    sub rax, [abs smp_core_states + 72]\n    mov [abs smp_core_states + 72], rbx\n    mov rcx, rax\n    test rcx, rcx\n    jz .tsc_fallback\n    mov rax, [cpu_tsc_per_tick]\n    xor rdx, rdx\n    mov rbx, 10000\n    div rbx\n    mul r9\n    xor rdx, rdx\n    div rcx\n    mov [abs smp_core_states + 28], eax\n    jmp .done\n.tsc_fallback:\n    mov rax, r10\n    sub rax, [acct_tsc_start]\n    mov r9, r8\n    imul r9, 10000\n    test r9, r9\n    jz .done\n    xor rdx, rdx\n    div r9\n    mov [abs smp_core_states + 28], eax\n.done:\n    pop r9\n    pop rdx\n    pop rcx\n    pop rbx\n    pop rax\n    ret";
-}
+# Publish a core clock estimate (MHz) into smp_core_states+28.
+#   elapsed = PIT ticks in the just-closed window
+#   now     = TSC at window close
+# Preferred path: effective frequency = base_scale * dAPERF / dMPERF, where
+# base_scale = cpu_tsc_per_tick / 10000. Falls back to a pure-TSC estimate
+# (tsc_delta / (elapsed * 10000)) when APERF/MPERF is unavailable or its delta
+# is degenerate. Mirrors the old r8(elapsed)/r10(now) shim exactly.
+fn cpu_acct_publish_mhz(elapsed, now) {
+    if aperf_mperf_supported() {
+        let aperf = rdmsr(MSR_APERF);
+        let aperf_delta = aperf - lq(&smp_core_states + SCS_APERF);
+        sq(&smp_core_states + SCS_APERF, aperf);
 
+        let mperf = rdmsr(MSR_MPERF);
+        let mperf_delta = mperf - lq(&smp_core_states + SCS_MPERF);
+        sq(&smp_core_states + SCS_MPERF, mperf);
+
+        if mperf_delta != 0 {
+            let base = lq(&cpu_tsc_per_tick) / TSC_KHZ_SCALE;
+            sw(&smp_core_states + SCS_MHZ, ((base * aperf_delta) / mperf_delta));
+            return;
+        }
+        # mperf_delta == 0: fall through to the TSC fallback (matches the old
+        # `jz .tsc_fallback` after the snapshots were already written).
+    }
+
+    let tsc_delta = now - lq(&acct_tsc_start);
+    let denom = elapsed * TSC_KHZ_SCALE;
+    if denom != 0 {
+        sw(&smp_core_states + SCS_MHZ, tsc_delta / denom);
+    }
+}

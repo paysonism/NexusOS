@@ -22,52 +22,62 @@ bits 16   ; We are in 16-bit Unreal Mode
 
 %include "src/include/boot_memory.inc"
 
+; Page-table entry flag bits (SDM Vol.3 §4.5; bit 63 = XD/NX, §4.6).
 PAGE_PRESENT    equ 0x01
 PAGE_WRITABLE   equ 0x02
 PAGE_USER       equ 0x04     ; User-accessible (ring 3)
 PAGE_LARGE      equ 0x80     ; 2MB page (PS bit in PD entry)
-APP_USER_PDE0   equ (APP_DATA_ADDR / 0x200000)
-APP_USER_PDE_COUNT equ ((APP_SLOT_COUNT * APP_SLOT_SIZE + 0x1FFFFF) / 0x200000)
+; Architectural page size (used as the 2 MiB physical stride below).
+PAGE_SIZE_2M    equ 0x200000
+; Page-table page physical addresses, contiguous from PAGE_TABLE_ADDR
+; (boot_memory.inc = 0x70000). PD3 is relocated above the arena PTs.
+PAGE_PML4_BASE  equ PAGE_TABLE_ADDR        ; 0x70000  PML4
+PAGE_PDPT_BASE  equ (PAGE_TABLE_ADDR + 0x1000) ; 0x71000  PDPT (PML4[0])
+PAGE_PD0_BASE   equ (PAGE_TABLE_ADDR + 0x2000) ; 0x72000  PD0 (0..1 GB)
+PAGE_PD1_BASE   equ (PAGE_TABLE_ADDR + 0x3000) ; 0x73000  PD1 (1..2 GB)
+PAGE_PD2_BASE   equ (PAGE_TABLE_ADDR + 0x4000) ; 0x74000  PD2 (2..3 GB)
+APP_USER_PDE0   equ (APP_DATA_ADDR / PAGE_SIZE_2M)
+APP_USER_PDE_COUNT equ ((APP_SLOT_COUNT * APP_SLOT_SIZE + 0x1FFFFF) / PAGE_SIZE_2M)
 PD3_BASE        equ 0x81000
 
 setup_paging:
     ; Clear page table region: PML4 + PDPT + PD0 + PD1 + PD2
     ; + APP_USER_PDE_COUNT arena PTs + PD3 + syscall-stack PT
     ; = 5 + 12 + 1 + 1 = 19 pages (0x70000..0x82FFF).
-    mov edi, 0x70000
+    mov edi, PAGE_PML4_BASE
     xor eax, eax
     mov ecx, (19 * 4096) / 4
     a32 rep stosd
 
-    ; PML4[0] -> PDPT at 0x71000
-    mov edi, 0x70000
-    mov eax, 0x71000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
+    ; PML4[0] -> PDPT
+    mov edi, PAGE_PML4_BASE
+    mov eax, PAGE_PDPT_BASE | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
     a32 mov [edi], eax
 
-    ; PDPT[0] -> PD at 0x72000 (covers 0-1GB)
-    mov edi, 0x71000
-    mov eax, 0x72000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
+    ; PDPT[0] -> PD0 (covers 0-1GB)
+    mov edi, PAGE_PDPT_BASE
+    mov eax, PAGE_PD0_BASE | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
     a32 mov [edi], eax
 
-    ; PDPT[1] -> PD at 0x73000 (covers 1-2GB)
-    mov edi, 0x71008
-    mov eax, 0x73000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
+    ; PDPT[1] -> PD1 (covers 1-2GB)
+    mov edi, PAGE_PDPT_BASE + 8
+    mov eax, PAGE_PD1_BASE | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
     a32 mov [edi], eax
 
-    ; PDPT[2] -> PD at 0x74000 (covers 2-3GB)
-    mov edi, 0x71010
-    mov eax, 0x74000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
+    ; PDPT[2] -> PD2 (covers 2-3GB)
+    mov edi, PAGE_PDPT_BASE + 16
+    mov eax, PAGE_PD2_BASE | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
     a32 mov [edi], eax
 
     ; PDPT[3] -> PD at PD3_BASE (covers 3-4GB). Moved from 0x75000 so the
     ; arena 4KB PTs at APP_ARENA_PT_BASE can occupy 0x75000..0x80FFF.
-    mov edi, 0x71018
+    mov edi, PAGE_PDPT_BASE + 24
     mov eax, PD3_BASE | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER
     a32 mov [edi], eax
 
     ; Fill PD tables with 2MB pages. Arena PDEs (in PD0) are rewritten below
     ; to point at 4KB PTs instead of being large pages.
-    mov edi, 0x72000            ; PD0 base (PD1/PD2 follow contiguously; PD3 is at PD3_BASE)
+    mov edi, PAGE_PD0_BASE      ; PD0 base (PD1/PD2 follow contiguously; PD3 is at PD3_BASE)
     mov eax, PAGE_PRESENT | PAGE_WRITABLE | PAGE_LARGE  ; Supervisor-only by default
     mov ecx, 512 * 3            ; 1536 entries (PD0..PD2)
     xor ebx, ebx                ; PDE index across the 0..3 GB map
@@ -94,7 +104,7 @@ setup_paging:
     a32 mov [edi], eax
     pop eax
 
-    add eax, 0x200000           ; Next 2MB page physical address
+    add eax, PAGE_SIZE_2M       ; Next 2MB page physical address
     add edi, 8                  ; Next PD entry (8 bytes each)
     inc ebx
     dec ecx
@@ -106,7 +116,7 @@ setup_paging:
     mov ecx, 512
 .fill_pd3:
     a32 mov [edi], eax
-    add eax, 0x200000
+    add eax, PAGE_SIZE_2M
     add edi, 8
     dec ecx
     jnz .fill_pd3
