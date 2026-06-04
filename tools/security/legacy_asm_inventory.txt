@@ -202,4 +202,3 @@ src/user/poc/wx_poc_exec_w.asm | user-poc | low | legacy | TBD
 src/user/poc/wx_poc_pos.asm | user-poc | low | legacy | TBD
 src/user/poc/wx_poc_write_x.asm | user-poc | low | legacy | TBD
 src/user/templates/hello_callback.asm | user-templates | low | legacy | TBD
-tools/quantum/seed.inc | tools-quantum | low | legacy | TBD

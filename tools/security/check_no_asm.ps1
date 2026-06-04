@@ -135,6 +135,15 @@ $trustedNxhPrefixes = @(
 )
 $roadmapPath = Join-Path $root 'docs\nhl-beyond-zero-trust-todo.md'
 
+# Exclude git-ignored paths (generated/secret files such as tools/quantum/seed.inc)
+# so the scan does not drift between a local working tree and a clean CI checkout.
+$ignoredByGit = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+try {
+    foreach ($g in (& git -C $root ls-files --others --ignored --exclude-standard 2>$null)) {
+        if ($g) { [void]$ignoredByGit.Add(($g -replace '\\', '/')) }
+    }
+} catch { }
+
 $files = Get-ChildItem -LiteralPath $root -Recurse -File -Force | ForEach-Object {
     $repoPath = Get-RepoPath -Root $root -Path $_.FullName
     [pscustomobject]@{
@@ -143,7 +152,8 @@ $files = Get-ChildItem -LiteralPath $root -Recurse -File -Force | ForEach-Object
         Extension = $_.Extension.ToLowerInvariant()
     }
 } | Where-Object {
-    -not (Test-UnderPrefix -Path $_.RepoPath -Prefixes $ignoredPrefixes)
+    (-not (Test-UnderPrefix -Path $_.RepoPath -Prefixes $ignoredPrefixes)) -and
+    (-not $ignoredByGit.Contains($_.RepoPath))
 }
 
 if ($StrictExtensions) {
