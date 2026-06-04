@@ -1,0 +1,11 @@
+checker=compatibility_check
+expect=pass
+case=window_service_supported
+service=window
+app_min_abi=1
+app_max_abi=3
+service_abi=2
+requested_capability=window
+granted_capability=window
+deprecated=0
+adapter_present=0

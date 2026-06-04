@@ -73,7 +73,9 @@ app_l3_done_trampoline:
 %include "src/user/apps/shell.inc"
 ; paint.inc deleted — Paint is now a pure-NexusHL app built by build_nxh.ps1
 ; and included via build/nxh/generated_apps.inc above.
+%ifndef RELEASE_BUILD
 %include "src/user/apps/security_probe.inc"
+%endif
 %include "src/user/apps/media_viewer.inc"
 ; End sentinel (16 bytes, distinct from start marker).
 db 0x4E, 0x58, 0x41, 0x50, 0x50, 0x42, 0x4C, 0x4F    ; "NXAPPBLO"

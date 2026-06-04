@@ -1,0 +1,7 @@
+invariant=INV-CAP-DERIVATION
+title=Capability derivation never amplifies authority
+statement=A derived capability's authority is a subset of its parent's authority.
+compromised=any domain holding a capability
+denied_authority=any authority bit not present in the parent capability
+predicate=inv_subset
+status=modeled

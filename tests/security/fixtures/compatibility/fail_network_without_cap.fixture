@@ -1,0 +1,11 @@
+checker=compatibility_check
+expect=fail
+case=network_capability_missing
+service=network
+app_min_abi=1
+app_max_abi=3
+service_abi=2
+requested_capability=network
+granted_capability=window
+deprecated=0
+adapter_present=0

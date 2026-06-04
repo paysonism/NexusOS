@@ -1,0 +1,3 @@
+checker=signed_envelope
+expect=pass
+case=canonical envelope: good magic, schema 1, ascending fields, required bits present

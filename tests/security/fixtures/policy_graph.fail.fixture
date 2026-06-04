@@ -1,0 +1,3 @@
+checker=policy_graph_check
+expect=fail
+case=reject unsigned or privileged policy edge

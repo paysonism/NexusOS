@@ -1,0 +1,3 @@
+checker=signed_artifact_check
+expect=fail
+case=reject malformed signed artifact metadata

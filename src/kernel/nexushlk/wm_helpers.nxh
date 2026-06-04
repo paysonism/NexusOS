@@ -21,22 +21,21 @@
 # scr_pitch_q) resolve as forward references with no extern wiring.
 #
 # WHAT IS PORTED HERE (verified genuinely leaf / pure-computation):
-#   wm_get_window_at          — pure geometry hit-test over the window array
-#   wm_cb_intern              — bounded callback-table fill (#UD-on-OOB target)
-#   wm_cb_resolve             — bounded callback-table lookup
-#   wm_bg_fill_solid          — solid framebuffer fill (per-pixel dword store)
-#   wm_bg_save_cache          — backbuffer -> cache copy (per-pixel dword)
-#   wm_bg_restore_cache       — cache -> backbuffer copy (per-pixel dword)
-#   wm_bg_diamond             — diamond scanline geometry (calls render_rect)
-#   wm_mark_outline_dirty     — 4-edge dirty marking (calls render_mark_dirty)
+#   wm_get_window_at          - pure geometry hit-test over the window array
+#   wm_handle_mouse_event     - mouse routing, title/app drag, CPI callback dispatch
+#   wm_cb_intern              - bounded callback-table fill (#UD-on-OOB target)
+#   wm_cb_resolve             - bounded callback-table lookup
+#   wm_bg_fill_solid          - solid framebuffer fill (per-pixel dword store)
+#   wm_bg_save_cache          - backbuffer -> cache copy (per-pixel dword)
+#   wm_bg_restore_cache       - cache -> backbuffer copy (per-pixel dword)
+#   wm_bg_diamond             - diamond scanline geometry (calls render_rect)
+#   wm_mark_outline_dirty     - 4-edge dirty marking (calls render_mark_dirty)
 #
-# WHAT STAYS IN window.asm (left with a comment pointer, NOT ported): all the
-# boot/render/dispatch-critical fns (wm_draw_*, wm_handle_mouse_event,
-# wm_cb_trampoline [CPI-verified callback dispatch — project rule forbids
-# instrumenting cpi_* callback dispatch], wm_create_window*, wm_init,
-# wm_close_window, wm_poll_wallpaper_render, wallpaper_render_job, and the
-# wm_wallpaper_cache_addr / wm_focus_top_active internal helpers).
-#
+# WHAT STAYS IN window.asm (left with a comment pointer, NOT ported): boot /
+# render / lifecycle fns (wm_draw_*, wm_create_window*, wm_init,
+# wm_close_window, wm_poll_wallpaper_render, wallpaper_render_job),
+# wm_cb_trampoline, and the wm_wallpaper_cache_addr / wm_focus_top_active
+# internal helpers.
 # NOTE on the bg fill/copy loops: the asm used `rep stosd` / `rep movsd`. The
 # zero-asm re-expression is a per-pixel dword loop (sw/lw are 32-bit accessors).
 # The pixel stream produced is byte-identical (same DESKTOP_SOLID_COLOR, same
@@ -49,6 +48,7 @@ unsafe raw_mem;          # lb/lw/lq/sb/sw/sq over window-pool / hit-test state
 unsafe implicit_extern;  # &fn / &data resolved as same-unit kernel labels (-f bin)
 
 global wm_get_window_at;
+global wm_handle_mouse_event;
 global wm_cb_intern;
 global wm_cb_resolve;
 global wm_bg_fill_solid;
@@ -76,10 +76,450 @@ const WIN_OFF_Y           = 16;
 const WIN_OFF_W           = 24;
 const WIN_OFF_H           = 32;
 const WIN_OFF_FLAGS       = 40;
+const WIN_OFF_CLICKFN     = 128;
+const WIN_OFF_DRAGFN      = 144;
+const WIN_OFF_RCLICKFN    = 152;
 const WF_VISIBLE          = 0x01;
 const WF_ACTIVE           = 0x10;
+const WF_FOCUSED          = 0x04;
+const BORDER_WIDTH        = 2;
+const TITLEBAR_HEIGHT     = 28;
+const CLOSE_BTN_SIZE      = 20;
+const MIN_BTN_SIZE        = 20;
+const BTN_LEFT            = 1;
+const BTN_RIGHT           = 2;
+const NO_WINDOW           = -1;
 const DESKTOP_SOLID_COLOR = 0x00202632;
+const WM_CB_FIELD_CLICK   = 0;
+const WM_CB_FIELD_DRAG    = 2;
+const WM_CB_FIELD_RCLICK  = 3;
 const WM_CB_FIELDS        = 4;
+
+# Debug-build click trace state. The syscall dispatcher reads this while a
+# click callback is active, so a canary/freeze during a user click has the WM
+# context and per-syscall arguments in the serial log without tracing canaries.
+data click_debug_active: 1 x 1 = 0;
+data click_debug_seq: 1 x 8 = 0;
+data click_debug_slot: 1 x 8 = 0;
+data click_debug_field: 1 x 8 = 0;
+data click_debug_win: 1 x 8 = 0;
+data click_debug_mouse_x: 1 x 8 = 0;
+data click_debug_mouse_y: 1 x 8 = 0;
+data click_debug_client_x: 1 x 8 = 0;
+data click_debug_client_y: 1 x 8 = 0;
+data click_debug_stored: 1 x 8 = 0;
+data click_debug_target: 1 x 8 = 0;
+data click_debug_focus_before: 1 x 8 = 0;
+data click_debug_focus_after: 1 x 8 = 0;
+data click_debug_buttons: 1 x 8 = 0;
+data click_debug_wflags: 1 x 8 = 0;
+
+extern wm_window_count;
+extern wm_drag_window_id;
+extern wm_drag_off_x;
+extern wm_drag_off_y;
+extern wm_drag_preview_x;
+extern wm_drag_preview_y;
+extern wm_drag_preview_w;
+extern wm_drag_preview_h;
+extern wm_last_buttons;
+extern wm_app_drag_window_id;
+extern wm_app_drag_last_x;
+extern wm_app_drag_last_y;
+extern cursor_mode;
+extern scr_width;
+extern scr_height;
+extern dbg_event_emit6;
+
+const EVT_FOCUS_CHANGE = 0x464F4353; # FOCS
+const EVT_INPUT_ROUTE  = 0x494E5054; # INPT
+
+fn wm_ptr(id) { return WINDOW_POOL_ADDR + id * WINDOW_STRUCT_SIZE; }
+
+fn click_dbg_putc(ch) {
+    cfg "ENABLE_DEBUG_SERIAL" {
+        call serial_putc(rdi: ch);
+    }
+}
+
+fn click_dbg_hex(value) {
+    cfg "ENABLE_DEBUG_SERIAL" {
+        call ser_print_hex64(rdi: value);
+    }
+}
+
+fn click_dbg_crlf() {
+    cfg "ENABLE_DEBUG_SERIAL" {
+        click_dbg_putc(13);
+        click_dbg_putc(10);
+    }
+}
+
+fn click_dbg_tag(a, b, c, d) {
+    cfg "ENABLE_DEBUG_SERIAL" {
+        click_dbg_putc(a);
+        click_dbg_putc(b);
+        click_dbg_putc(c);
+        click_dbg_putc(d);
+        click_dbg_putc(32);
+    }
+}
+
+fn click_dbg_mouse(tag_d, mouse_x, mouse_y, buttons, prev_focus, hit, flags) {
+    cfg "ENABLE_DEBUG_SERIAL" {
+        click_dbg_tag(67, 76, 75, tag_d);       # "CLK?"
+        click_dbg_putc(120); click_dbg_hex(mouse_x);
+        click_dbg_putc(32); click_dbg_putc(121); click_dbg_hex(mouse_y);
+        click_dbg_putc(32); click_dbg_putc(98); click_dbg_hex(buttons);
+        click_dbg_putc(32); click_dbg_putc(102); click_dbg_hex(prev_focus);
+        click_dbg_putc(32); click_dbg_putc(104); click_dbg_hex(hit);
+        click_dbg_putc(32); click_dbg_putc(103); click_dbg_hex(flags);
+        click_dbg_crlf();
+    }
+}
+
+fn click_dbg_focus(id, old_focus, new_focus, flags) {
+    cfg "ENABLE_DEBUG_SERIAL" {
+        click_dbg_tag(67, 76, 75, 70);          # "CLKF"
+        click_dbg_putc(105); click_dbg_hex(id);
+        click_dbg_putc(32); click_dbg_putc(111); click_dbg_hex(old_focus);
+        click_dbg_putc(32); click_dbg_putc(110); click_dbg_hex(new_focus);
+        click_dbg_putc(32); click_dbg_putc(103); click_dbg_hex(flags);
+        click_dbg_crlf();
+    }
+}
+
+fn click_dbg_cpi_req(kind, slot, field, win, stored, arg1, arg2) {
+    cfg "ENABLE_DEBUG_SERIAL" {
+        click_dbg_tag(67, 80, 73, kind);        # "CPI?"
+        click_dbg_putc(115); click_dbg_hex(slot);
+        click_dbg_putc(32); click_dbg_putc(102); click_dbg_hex(field);
+        click_dbg_putc(32); click_dbg_putc(119); click_dbg_hex(win);
+        click_dbg_putc(32); click_dbg_putc(112); click_dbg_hex(stored);
+        click_dbg_putc(32); click_dbg_putc(97); click_dbg_hex(arg1);
+        click_dbg_putc(47); click_dbg_hex(arg2);
+        click_dbg_crlf();
+    }
+}
+
+fn click_dbg_callback_start(slot, field, win, mouse_x, mouse_y, arg1, arg2, stored, target, focus_before, buttons, flags) {
+    cfg "ENABLE_DEBUG_SERIAL" {
+        sq(&click_debug_seq, lq(&click_debug_seq) + 1);
+        sq(&click_debug_slot, slot);
+        sq(&click_debug_field, field);
+        sq(&click_debug_win, win);
+        sq(&click_debug_mouse_x, mouse_x);
+        sq(&click_debug_mouse_y, mouse_y);
+        sq(&click_debug_client_x, arg1);
+        sq(&click_debug_client_y, arg2);
+        sq(&click_debug_stored, stored);
+        sq(&click_debug_target, target);
+        sq(&click_debug_focus_before, focus_before);
+        sq(&click_debug_focus_after, focus_before);
+        sq(&click_debug_buttons, buttons);
+        sq(&click_debug_wflags, flags);
+        sb(&click_debug_active, 1);
+
+        click_dbg_tag(67, 76, 75, 67);          # "CLKC"
+        click_dbg_putc(113); click_dbg_hex(lq(&click_debug_seq));
+        click_dbg_putc(32); click_dbg_putc(115); click_dbg_hex(slot);
+        click_dbg_putc(32); click_dbg_putc(119); click_dbg_hex(win);
+        click_dbg_putc(32); click_dbg_putc(120); click_dbg_hex(mouse_x);
+        click_dbg_putc(32); click_dbg_putc(121); click_dbg_hex(mouse_y);
+        click_dbg_putc(32); click_dbg_putc(99); click_dbg_hex(arg1);
+        click_dbg_putc(47); click_dbg_hex(arg2);
+        click_dbg_putc(32); click_dbg_putc(102); click_dbg_hex(focus_before);
+        click_dbg_putc(32); click_dbg_putc(112); click_dbg_hex(stored);
+        click_dbg_putc(32); click_dbg_putc(116); click_dbg_hex(target);
+        click_dbg_crlf();
+    }
+}
+
+fn click_dbg_callback_end(focus_after) {
+    cfg "ENABLE_DEBUG_SERIAL" {
+        sq(&click_debug_focus_after, focus_after);
+        click_dbg_tag(67, 76, 75, 69);          # "CLKE"
+        click_dbg_putc(113); click_dbg_hex(lq(&click_debug_seq));
+        click_dbg_putc(32); click_dbg_putc(115); click_dbg_hex(lq(&click_debug_slot));
+        click_dbg_putc(32); click_dbg_putc(102); click_dbg_hex(lq(&click_debug_focus_before));
+        click_dbg_putc(45); click_dbg_hex(focus_after);
+        click_dbg_crlf();
+        sb(&click_debug_active, 0);
+    }
+}
+
+fn wm_client_x(win, mouse_x) { return mouse_x - lq(win + WIN_OFF_X) - BORDER_WIDTH; }
+fn wm_client_y(win, mouse_y) { return mouse_y - lq(win + WIN_OFF_Y) - TITLEBAR_HEIGHT; }
+
+fn wm_hit_window_at(x, y) {
+    let f = lq(&wm_focused_window);
+    if f != NO_WINDOW {
+        if f >= 0 && f < MAX_WINDOWS {
+            let p = wm_ptr(f);
+            let fl = lq(p + WIN_OFF_FLAGS);
+            if (fl & WF_ACTIVE) != 0 && (fl & WF_VISIBLE) != 0 {
+                let wx = lq(p + WIN_OFF_X);
+                let wy = lq(p + WIN_OFF_Y);
+                if x >= wx && x < wx + lq(p + WIN_OFF_W) {
+                    if y >= wy && y < wy + lq(p + WIN_OFF_H) { return f; }
+                }
+            }
+        }
+    }
+    let i = MAX_WINDOWS - 1;
+    while i >= 0 {
+        let p = wm_ptr(i);
+        let fl = lq(p + WIN_OFF_FLAGS);
+        if (fl & WF_ACTIVE) != 0 && (fl & WF_VISIBLE) != 0 {
+            let wx = lq(p + WIN_OFF_X);
+            let wy = lq(p + WIN_OFF_Y);
+            if x >= wx && x < wx + lq(p + WIN_OFF_W) {
+                if y >= wy && y < wy + lq(p + WIN_OFF_H) { return i; }
+            }
+        }
+        i = i - 1;
+    }
+    return NO_WINDOW;
+}
+
+fn wm_clear_focus_flags() {
+    let i = 0;
+    while i < MAX_WINDOWS {
+        let win = wm_ptr(i);
+        sq(win + WIN_OFF_FLAGS, lq(win + WIN_OFF_FLAGS) & 0xFFFFFFFFFFFFFFFB);
+        i = i + 1;
+    }
+}
+
+fn wm_focus_window(id) {
+    let old_focus = lq(&wm_focused_window);
+    wm_clear_focus_flags();
+    let win = wm_ptr(id);
+    sq(win + WIN_OFF_FLAGS, lq(win + WIN_OFF_FLAGS) | WF_FOCUSED);
+    sq(&wm_focused_window, id);
+    cfg "ENABLE_DEBUG_SERIAL" {
+        call dbg_event_emit6(rdi: EVT_FOCUS_CHANGE, rsi: id, rdx: old_focus, rcx: id, r8: win, r9: lq(win + WIN_OFF_FLAGS));
+    }
+    click_dbg_focus(id, old_focus, id, lq(win + WIN_OFF_FLAGS));
+}
+
+fn wm_dispatch_verified_callback(slot, field, stored, win, arg1, arg2) {
+    if stored == 0 { return 0; }
+    let cpi_off = WIN_OFF_DRAGFN;
+    if field == WM_CB_FIELD_RCLICK { cpi_off = WIN_OFF_RCLICKFN; }
+    click_dbg_cpi_req(68, slot, cpi_off, win, stored, arg1, arg2); # "CPID"
+    let target = cpi_verify_callback(stored, win, cpi_off);
+    if target == 0 { return 0; }
+    return dispatch_app_callback(target, win, arg1, arg2);
+}
+
+fn wm_dirty_outline(x, y, w, h) {
+    call render_mark_dirty(rdi: x, rsi: y, rdx: w, rcx: 2);
+    call render_mark_dirty(rdi: x, rsi: y + h - 2, rdx: w, rcx: 2);
+    call render_mark_dirty(rdi: x, rsi: y, rdx: 2, rcx: h);
+    call render_mark_dirty(rdi: x + w - 2, rsi: y, rdx: 2, rcx: h);
+}
+
+fn wm_handle_title_drag(mouse_x, mouse_y, buttons) {
+    let id = lq(&wm_drag_window_id);
+    if id == NO_WINDOW { return 0; }
+    if (buttons & BTN_LEFT) == 0 {
+        sq(&wm_drag_window_id, NO_WINDOW);
+        sb(&cursor_mode, 0);
+        return 1;
+    }
+
+    let win = wm_ptr(id);
+    let x = mouse_x - lq(&wm_drag_off_x);
+    let y = mouse_y - lq(&wm_drag_off_y);
+    let max_x = lw(&scr_width) - lq(win + WIN_OFF_W);
+    if max_x < 0 { max_x = 0; }
+    if x > max_x { x = max_x; }
+    if x < 0 { x = 0; }
+
+    let max_y = lw(&scr_height) - lq(win + WIN_OFF_H);
+    if max_y < 0 { max_y = 0; }
+    if y > max_y { y = max_y; }
+    if y < 0 { y = 0; }
+
+    wm_dirty_outline(lq(&wm_drag_preview_x), lq(&wm_drag_preview_y),
+                     lq(&wm_drag_preview_w), lq(&wm_drag_preview_h));
+    sq(&wm_drag_preview_x, x);
+    sq(&wm_drag_preview_y, y);
+    wm_dirty_outline(x, y, lq(&wm_drag_preview_w), lq(&wm_drag_preview_h));
+    sq(win + WIN_OFF_X, x);
+    sq(win + WIN_OFF_Y, y);
+    return 0;
+}
+
+fn wm_handle_app_drag(mouse_x, mouse_y, buttons) {
+    if (buttons & BTN_LEFT) == 0 {
+        sq(&wm_app_drag_window_id, NO_WINDOW);
+        return 0;
+    }
+    let id = lq(&wm_app_drag_window_id);
+    if id == NO_WINDOW { return 0; }
+    if id < 0 || id >= MAX_WINDOWS {
+        sq(&wm_app_drag_window_id, NO_WINDOW);
+        return 0;
+    }
+
+    let win = wm_ptr(id);
+    if (lq(win + WIN_OFF_FLAGS) & WF_ACTIVE) == 0 {
+        sq(&wm_app_drag_window_id, NO_WINDOW);
+        return 0;
+    }
+    let cx = wm_client_x(win, mouse_x);
+    let cy = wm_client_y(win, mouse_y);
+    if cx == lq(&wm_app_drag_last_x) {
+        if cy == lq(&wm_app_drag_last_y) { return 1; }
+    }
+    sq(&wm_app_drag_last_x, cx);
+    sq(&wm_app_drag_last_y, cy);
+    wm_dispatch_verified_callback(id, WM_CB_FIELD_DRAG, lq(win + WIN_OFF_DRAGFN), win, cx, cy);
+    return 1;
+}
+
+fn wm_handle_right_click(mouse_x, mouse_y) {
+    let id = wm_hit_window_at(mouse_x, mouse_y);
+    if id == NO_WINDOW { return 0; }
+    let win = wm_ptr(id);
+    if mouse_y - lq(win + WIN_OFF_Y) <= TITLEBAR_HEIGHT { return 0; }
+    let cx = wm_client_x(win, mouse_x);
+    let cy = wm_client_y(win, mouse_y);
+    wm_dispatch_verified_callback(id, WM_CB_FIELD_RCLICK, lq(win + WIN_OFF_RCLICKFN), win, cx, cy);
+    return 1;
+}
+
+fn wm_start_title_drag(id, win, mouse_x, rel_y) {
+    sq(&wm_drag_window_id, id);
+    sq(&wm_drag_off_x, mouse_x - lq(win + WIN_OFF_X));
+    sq(&wm_drag_off_y, rel_y);
+    sq(&wm_drag_preview_x, lq(win + WIN_OFF_X));
+    sq(&wm_drag_preview_y, lq(win + WIN_OFF_Y));
+    sq(&wm_drag_preview_w, lq(win + WIN_OFF_W));
+    sq(&wm_drag_preview_h, lq(win + WIN_OFF_H));
+    sb(&cursor_mode, 1);
+    render_save_backbuffer();
+    wm_focus_window(id);
+}
+
+fn wm_handle_client_click(id, win, mouse_x, mouse_y) {
+    let stored = lq(win + WIN_OFF_CLICKFN);
+    cfg "ENABLE_DEBUG_SERIAL" {
+        call dbg_event_emit6(rdi: EVT_INPUT_ROUTE, rsi: id, rdx: WIN_OFF_CLICKFN, rcx: win, r8: mouse_x, r9: mouse_y);
+    }
+    if stored == 0 {
+        wm_focus_window(id);
+        return 0;
+    }
+    if (lq(&wm_last_buttons) & BTN_LEFT) != 0 {
+        return 1;
+    }
+
+    let drag = lq(win + WIN_OFF_DRAGFN);
+    if drag != 0 {
+        sq(&wm_app_drag_window_id, id);
+        sq(&wm_app_drag_last_x, wm_client_x(win, mouse_x));
+        sq(&wm_app_drag_last_y, wm_client_y(win, mouse_y));
+    }
+
+    let focus_before = lq(&wm_focused_window);
+    let cx = wm_client_x(win, mouse_x);
+    let cy = wm_client_y(win, mouse_y);
+    click_dbg_cpi_req(67, id, WIN_OFF_CLICKFN, win, stored, cx, cy); # "CPIC"
+    let target = cpi_verify_callback(stored, win, WIN_OFF_CLICKFN);
+    click_dbg_callback_start(id, WIN_OFF_CLICKFN, win, mouse_x, mouse_y,
+                             cx, cy, stored, target, focus_before, BTN_LEFT,
+                             lq(win + WIN_OFF_FLAGS));
+    if target != 0 {
+        dispatch_app_callback(target, win, cx, cy);
+    }
+    click_dbg_callback_end(lq(&wm_focused_window));
+    if lq(&wm_focused_window) == focus_before {
+        wm_focus_window(id);
+    }
+    return 1;
+}
+
+# Handle mouse input: RDI=mouseX, RSI=mouseY, RDX=buttons. Returns 1 when the
+# WM consumed the event or a title/app drag is active; 0 otherwise.
+fn wm_handle_mouse_event(rdi mouse_x, rsi mouse_y, rdx buttons)
+        preserves(rbx, rcx, rdx, rsi, rdi, r8, r9, r10, r11, r12, r13, r14, r15) {
+    let handled = 0;
+
+    if lq(&wm_drag_window_id) != NO_WINDOW {
+        handled = wm_handle_title_drag(mouse_x, mouse_y, buttons);
+        sq(&wm_last_buttons, buttons);
+        if handled != 0 { return 1; }
+        if lq(&wm_drag_window_id) != NO_WINDOW { return 1; }
+        return 0;
+    }
+
+    if lq(&wm_app_drag_window_id) != NO_WINDOW {
+        handled = wm_handle_app_drag(mouse_x, mouse_y, buttons);
+        sq(&wm_last_buttons, buttons);
+        return handled;
+    }
+
+    if (buttons & BTN_RIGHT) != 0 {
+        if (lq(&wm_last_buttons) & BTN_RIGHT) == 0 {
+            handled = wm_handle_right_click(mouse_x, mouse_y);
+            sq(&wm_last_buttons, buttons);
+            return handled;
+        }
+        sq(&wm_last_buttons, buttons);
+        return 0;
+    }
+
+    if (buttons & BTN_LEFT) == 0 {
+        sq(&wm_last_buttons, buttons);
+        return 0;
+    }
+
+    let focus_at_entry = lq(&wm_focused_window);
+    let id = wm_hit_window_at(mouse_x, mouse_y);
+    if id == NO_WINDOW {
+        click_dbg_mouse(78, mouse_x, mouse_y, buttons, focus_at_entry, id, 0); # "CLKN"
+        wm_clear_focus_flags();
+        sq(&wm_focused_window, NO_WINDOW);
+        sq(&wm_last_buttons, buttons);
+        return 0;
+    }
+    let win = wm_ptr(id);
+    click_dbg_mouse(77, mouse_x, mouse_y, buttons, focus_at_entry, id,
+                    lq(win + WIN_OFF_FLAGS));                                 # "CLKM"
+
+    let close_x = lq(win + WIN_OFF_X) + lq(win + WIN_OFF_W) - CLOSE_BTN_SIZE - 4;
+    let chrome_y = lq(win + WIN_OFF_Y) + 4;
+    if mouse_x >= close_x && mouse_x <= close_x + CLOSE_BTN_SIZE {
+        if mouse_y >= chrome_y && mouse_y <= chrome_y + CLOSE_BTN_SIZE {
+            wm_close_window(id);
+            sq(&wm_last_buttons, buttons);
+            return 0;
+        }
+    }
+
+    let min_x = lq(win + WIN_OFF_X) + lq(win + WIN_OFF_W) - CLOSE_BTN_SIZE * 2 - 8;
+    if mouse_x >= min_x && mouse_x <= min_x + MIN_BTN_SIZE {
+        if mouse_y >= chrome_y && mouse_y <= chrome_y + MIN_BTN_SIZE {
+            sq(win + WIN_OFF_FLAGS, (lq(win + WIN_OFF_FLAGS) | 0x08) & 0xFFFFFFFFFFFFFFFE);
+            sq(&wm_last_buttons, buttons);
+            return 0;
+        }
+    }
+
+    let rel_y = mouse_y - lq(win + WIN_OFF_Y);
+    if rel_y <= TITLEBAR_HEIGHT {
+        wm_start_title_drag(id, win, mouse_x, rel_y);
+        sq(&wm_last_buttons, buttons);
+        return 1;
+    }
+
+    handled = wm_handle_client_click(id, win, mouse_x, mouse_y);
+    sq(&wm_last_buttons, buttons);
+    return handled;
+}
 
 # ---------------------------------------------------------------------------
 # wm_get_window_at — find topmost window at (X, Y).

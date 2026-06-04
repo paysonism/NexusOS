@@ -176,12 +176,21 @@ def parse(toks,path):
             decls.append(node("strdef",name=nm,val=val))
         elif t.v=="const":
             p.eat(); nm=p.eat("id").v; p.eat("=")
-            neg=False
-            if p.peek().k=="-": p.eat(); neg=True
-            v=p.eat("num").v
-            if neg: v = -v
-            p.match(";")
-            decls.append(node("const",name=nm,val=v))
+            if p.peek().v=="extern":
+                # `const NAME = extern;` — symbolic passthrough: NAME is an
+                # assembly-time constant (an `equ` defined in a kernel include).
+                # Codegen emits the bare symbol and NASM resolves it, so the
+                # value is never duplicated into NHLK (maintainability: the header
+                # stays the single source of the name). Not const-foldable.
+                p.eat(); p.match(";")
+                decls.append(node("const",name=nm,symbolic=True))
+            else:
+                neg=False
+                if p.peek().k=="-": p.eat(); neg=True
+                v=p.eat("num").v
+                if neg: v = -v
+                p.match(";")
+                decls.append(node("const",name=nm,val=v))
         elif t.v=="module":
             # Kernel-mode unit marker: `module "name";`. Names the translation
             # unit for the generated-file banner. Presence does NOT itself switch
@@ -390,6 +399,22 @@ def _parse_stmt_inner(p):
     if t.v=="while":
         p.eat(); cond=parse_expr(p); body=parse_block(p)
         return node("while",cond=cond,body=body)
+    if t.v=="cfg":
+        # Build-time conditional compilation: `cfg "NAME" { ... }` wraps the
+        # block in `%ifdef NAME ... %endif`; `cfg !"NAME" { ... }` uses %ifndef;
+        # an optional `else { ... }` emits the %else arm. The only way structured
+        # NHLK can express the kernel's per-build-config (ENABLE_CET, NEXUS_SMP,
+        # FBPERF_NO_WC, ...) code paths without dropping to an asm escape.
+        p.eat()
+        neg=False
+        if p.peek().k=="!":
+            p.eat(); neg=True
+        name=p.eat("str").v
+        body=parse_block(p)
+        els=None
+        if p.match("else"):
+            els=parse_block(p)
+        return node("cfg",name=name,neg=neg,body=body,els=els)
     if t.v=="break":
         p.eat(); p.match(";"); return node("break")
     if t.v=="continue":
@@ -507,6 +532,8 @@ _NULLARY_INTRINSICS={
     # control / barrier — no value
     "cli":["cli"], "sti":["sti"], "hlt":["hlt"], "swapgs":["swapgs"],
     "sysretq":["o64 sysret"], "iretq":["iretq"], "ud2":["ud2"],
+    "ret_naked":["ret"],              # explicit near return for `naked` fns
+                                      # (naked has no auto epilogue/ret)
     "lfence":["lfence"], "mfence":["mfence"], "sfence":["sfence"],
     "pause":["pause"], "wbinvd":["wbinvd"], "nop":["nop"],
     "smap_open":["stac"], "smap_close":["clac"],
@@ -520,6 +547,9 @@ _NULLARY_INTRINSICS={
     # naked/raw-stack primitives (for `naked` fns, e.g. the SYSCALL trampoline)
     "read_rsp":["mov rax, rsp"],      # current stack pointer
     "pop_val":["pop rax"],            # pop top of stack into rax
+    # EFLAGS read (value, naked/iret paths). pushfq/pop is the only architectural
+    # way to materialize RFLAGS into a GPR. Pairs with write_flags(v).
+    "read_flags":["pushfq","pop rax"],
 }
 
 def rbpoff(o):
@@ -547,6 +577,7 @@ class CG:
         s.table_counts={}     # dispatch table name -> entry count (for call_table)
         s.fnbegin_emitted=set()  # exported kernel fns emitted via FN_BEGIN (skip top-level global)
         s.consts={}
+        s.symconsts=set()   # `const X = extern;` — emit bare symbol, NASM resolves
         s.externs=set()
         s.unsafe_caps=set()
         s.deny_unsafe=False
@@ -838,7 +869,10 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None,target="user
             cg.rodata.append(f"{lbl}: " + _emit_db_bytes(d["val"]))
             str_defs[d["name"]]=lbl
         elif d["k"]=="const":
-            cg.consts[d["name"]]=d["val"]
+            if d.get("symbolic"):
+                cg.symconsts.add(d["name"])
+            else:
+                cg.consts[d["name"]]=d["val"]
         elif d["k"]=="extern":
             cg.externs.add(d["name"])
         elif d["k"]=="data":
@@ -1491,6 +1525,9 @@ def gen_kernel_fn(cg,fn):
                 n+=count_lets(s.get("els",[]) or [])
             if k=="while":
                 n+=count_lets(s.get("body",[]))
+            if k=="cfg":
+                n+=count_lets(s.get("body",[]))
+                n+=count_lets(s.get("els",[]) or [])
         return n
     reg_param_count=min(len(params),len(CALL_REGS))
     n_locals=count_lets(body)
@@ -1584,6 +1621,9 @@ def gen_kernel_fn_regabi(cg,fn,name,regparams,preserves,body):
                 n+=count_lets(s.get("els",[]) or [])
             if k=="while":
                 n+=count_lets(s.get("body",[]))
+            if k=="cfg":
+                n+=count_lets(s.get("body",[]))
+                n+=count_lets(s.get("els",[]) or [])
         return n
     n_locals=count_lets(body)
     nregp=len(bindings)
@@ -1694,6 +1734,9 @@ def gen_fn(cg,fn,prefix):
                 n+=count_lets(s.get("els",[]) or [])
             if k=="while":
                 n+=count_lets(s.get("body",[]))
+            if k=="cfg":
+                n+=count_lets(s.get("body",[]))
+                n+=count_lets(s.get("els",[]) or [])
         return n
     reg_param_count=min(len(params),len(CALL_REGS))
     n_locals=count_lets(fn["body"])
@@ -1818,6 +1861,18 @@ def _gen_stmt_body(st,s):
     elif k=="continue":
         if not cg.loops: raise SyntaxError("continue outside loop")
         cg.emit(f"    jmp {cg.loops[-1][1]}")
+    elif k=="cfg":
+        # Wrap the generated block in a NASM build-config conditional. The block
+        # is self-contained (fresh labels), so NASM including/excluding it does
+        # not affect the surrounding code's labels. `cfg "X" {..}` -> %ifdef X,
+        # `cfg !"X" {..}` -> %ifndef X, optional `else {..}` -> %else.
+        directive = "%ifndef" if s.get("neg") else "%ifdef"
+        cg.emit(f"{directive} {s['name']}")
+        for stmt in s["body"]: gen_stmt(st,stmt)
+        if s.get("els"):
+            cg.emit("%else")
+            for stmt in s["els"]: gen_stmt(st,stmt)
+        cg.emit("%endif")
     elif k=="asm":
         for ln in s["text"].split("\\n"):
             cg.emit("    "+ln)
@@ -1904,6 +1959,9 @@ def gen_expr(st,e):
                 cg.emit(f"    mov rax, [rbp{rbpoff(st.scope[n])}]")
         elif n in cg.consts:
             cg.emit(f"    mov rax, {cg.consts[n]}")
+        elif n in getattr(cg,"symconsts",set()):
+            # symbolic passthrough const: NASM resolves the equ at assemble time.
+            cg.emit(f"    mov rax, {n}")
         elif n in cg.str_defs:
             cg.emit(f"    lea rax, [rel {cg.str_defs[n]}]")
         elif n in cg.state_defs:
@@ -2120,13 +2178,149 @@ def gen_expr(st,e):
                 cg.emit("    push rax")
             cg.emit("    xor rax, rax")
             return
+        if name=="pop_to_mem":
+            # pop_to_mem(addr): pop the top stack qword into *addr. addr is
+            # evaluated FIRST into rax (stack-balanced), then `pop qword [rax]`
+            # consumes the caller-left top-of-stack value. Used by the naked
+            # resume trampoline to capture the slot id POP_ALL left at [rsp]
+            # without the addr-then-value ordering hazard of sq(addr, pop_val()).
+            # kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("pop_to_mem() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic pop_to_mem()")
+            if len(args)!=1: raise SyntaxError("pop_to_mem takes 1 arg (dest address)")
+            gen_expr(st,args[0])                  # addr -> rax (stack-balanced)
+            cg.emit("    pop qword [rax]")
+            cg.emit("    xor rax, rax")
+            return
+        if name in ("save_rsp","save_flags"):
+            # save_rsp(addr) / save_flags(addr): store the CURRENT rsp / RFLAGS to
+            # *addr, where addr is evaluated FIRST into rax (its internal codegen
+            # is stack-balanced, so rsp is back at the true frame level by the
+            # store). This is the correct way to record the kernel resume frame in
+            # a naked trampoline: writing rsp through the normal sq(addr, read_rsp)
+            # path would capture rsp while the sq destination address is still
+            # pushed, recording a value 8 bytes low. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv",f"kernel intrinsic {name}()")
+            if len(args)!=1: raise SyntaxError(f"{name} takes 1 arg (dest address)")
+            gen_expr(st,args[0])                  # addr -> rax (stack-balanced)
+            if name=="save_rsp":
+                cg.emit("    mov [rax], rsp")
+            else:
+                cg.emit("    pushfq")
+                cg.emit("    pop qword [rax]")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="write_flags":
+            # write_flags(v): restore RFLAGS from v (push v ; popfq). Pairs with
+            # read_flags(); used on the kernel-resume side of the ring-3 callback
+            # round-trip to reinstate the saved kernel RFLAGS. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("write_flags() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic write_flags()")
+            if len(args)!=1: raise SyntaxError("write_flags takes 1 arg (flags value)")
+            gen_expr(st,args[0])
+            cg.emit("    push rax")
+            cg.emit("    popfq")
+            cg.emit("    xor rax, rax")
+            return
+        if name in ("push_reg","pop_reg"):
+            # push_reg(REG) / pop_reg(REG): push/pop a NAMED general-purpose
+            # register verbatim. The argument MUST be a bare register identifier
+            # (not an expression) so the callee-save/restore discipline of a naked
+            # ring-3-trampoline frame is expressed explicitly, one register per
+            # statement, with no hidden scratch use. Author intent stays exact:
+            # the saved set and its order are visible in the source. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv",f"kernel intrinsic {name}()")
+            if len(args)!=1 or args[0].get("k")!="ident":
+                raise SyntaxError(f"{name} takes one bare register name (e.g. {name}(rbx))")
+            reg=args[0]["name"]
+            if reg not in REG_TABLE or REG_TABLE[reg][1]!=64:
+                raise SyntaxError(f"{name}: {reg} is not a 64-bit general register")
+            canon=REG_TABLE[reg][0]
+            cg.emit(f"    push {canon}" if name=="push_reg" else f"    pop {canon}")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="set_reg":
+            # set_reg(REG, v): load a NAMED general-purpose register with v
+            # (eval v -> rax ; mov REG, rax). For naked ring-3-trampoline frames
+            # that must place exact values in the System-V arg registers
+            # (rdi/rsi/rdx) right before an iretq/sysretq, where the structured
+            # stack machine cannot keep them live. The register MUST be a bare
+            # identifier and is the author's explicit responsibility: any later
+            # codegen that uses REG/rax as scratch would clobber it, so set_reg is
+            # only correct as the LAST writes before the control-transfer
+            # intrinsic. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("set_reg() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic set_reg()")
+            if len(args)!=2 or args[0].get("k")!="ident":
+                raise SyntaxError("set_reg takes (REG, value) with REG a bare register name")
+            reg=args[0]["name"]
+            if reg not in REG_TABLE or REG_TABLE[reg][1]!=64:
+                raise SyntaxError(f"set_reg: {reg} is not a 64-bit general register")
+            canon=REG_TABLE[reg][0]
+            gen_expr(st,args[1])
+            cg.emit(f"    mov {canon}, rax")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="rep_movsq":
+            # rep_movsq(dst, src, qcount): copy qcount qwords src->dst (cld; rep
+            # movsq), the structured form of the shadow-window block copy. Loads
+            # rdi=dst, rsi=src, rcx=qcount, clears DF, then rep movsq. The caller
+            # is responsible for any SMAP bracket (smap_open/smap_close) around it
+            # when either side is user (PTE.U) memory. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("rep_movsq() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic rep_movsq()")
+            if len(args)!=3: raise SyntaxError("rep_movsq takes 3 args (dst, src, qcount)")
+            gen_expr(st,args[0]); cg.emit("    push rax")    # dst
+            gen_expr(st,args[1]); cg.emit("    push rax")    # src
+            gen_expr(st,args[2]); cg.emit("    mov rcx, rax")# qcount
+            cg.emit("    pop rsi")                            # src
+            cg.emit("    pop rdi")                            # dst
+            cg.emit("    cld")
+            cg.emit("    rep movsq")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="syscall_raw":
+            # syscall_raw(num): issue a syscall with a RAW immediate number — NO
+            # APP_SYSNO fixup record. For kernel-resident code that runs in ring 3
+            # at a kernel VA OUTSIDE the per-slot copied app blob (the app-done
+            # trampoline, the L3 test blob): the dispatcher attributes such a
+            # syscall to slot 0 (identity permutation), so the raw number is the
+            # real table row. Emitting APP_SYSNO here would push a bogus .scfix
+            # record at a kernel-relative offset the loader must never rewrite.
+            # The number must be a compile-time constant. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("syscall_raw() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic syscall_raw()")
+            if len(args)!=1: raise SyntaxError("syscall_raw takes 1 arg (constant number)")
+            numc=const_fold_int(cg,args[0])
+            if numc is None or numc<0 or numc>255:
+                raise SyntaxError("syscall_raw number must be a constant in 0..255")
+            cg.emit(f"    mov eax, {numc}")
+            cg.emit("    syscall")
+            cg.emit("    xor rax, rax")
+            return
         if name in ("rdmsr","write_cr0","write_cr3","write_cr4","invlpg",
-                    "inb","outb","wrmsr","wrmsr_split","lgdt","lidt","ltr",
+                    "inb","outb","ind","outd","wrmsr","wrmsr_split","lgdt","lidt","ltr",
                     "intn","load_ds","load_es","load_fs","load_gs","load_ss"):
             if not getattr(cg,"kernel",False):
                 raise SyntaxError(f"{name}() intrinsic requires --target kernel")
             if getattr(cg,"target","user")!="boot":
-                if name in ("inb","outb"):
+                if name in ("inb","outb","ind","outd"):
                     _require_cap(cg,"kernel_io",f"kernel intrinsic {name}()")
                 elif name=="intn":
                     _require_cap(cg,"kernel_int","kernel intn()")
@@ -2200,6 +2394,19 @@ def gen_expr(st,e):
                 gen_expr(st,args[1]); cg.emit("    mov ecx, eax")      # val -> cl
                 cg.emit("    pop rdx")                                 # port -> dx
                 cg.emit("    mov al, cl"); cg.emit("    out dx, al")
+                cg.emit("    xor rax, rax")
+            elif name=="ind":
+                # ind(port) -> rax = dword read. dx = port. Zero-extended into rax.
+                if len(args)!=1: raise SyntaxError("ind takes 1 arg (port)")
+                gen_expr(st,args[0]); cg.emit("    mov dx, ax")
+                cg.emit("    in eax, dx"); cg.emit("    mov eax, eax")
+            elif name=="outd":
+                # outd(port, val): dx=port, eax=val (32-bit OUT).
+                if len(args)!=2: raise SyntaxError("outd takes 2 args (port, val)")
+                gen_expr(st,args[0]); cg.emit("    push rax")          # port
+                gen_expr(st,args[1]); cg.emit("    mov ecx, eax")      # val -> ecx
+                cg.emit("    pop rdx")                                 # port -> dx
+                cg.emit("    mov eax, ecx"); cg.emit("    out dx, eax")
                 cg.emit("    xor rax, rax")
             return
         if name in getattr(cg,"fn_argc",{}) and len(args)!=cg.fn_argc[name]:

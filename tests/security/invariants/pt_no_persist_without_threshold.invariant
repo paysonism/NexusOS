@@ -1,0 +1,7 @@
+invariant=INV-PT-NO-PERSIST
+title=Compromised page-table manager cannot authorize persistence alone
+statement=AUTH_PERSIST is exercisable only with threshold policy approval.
+compromised=page-table manager domain
+denied_authority=AUTH_PERSIST without threshold approval
+predicate=inv_pt_no_persist_without_threshold
+status=modeled

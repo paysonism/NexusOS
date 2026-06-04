@@ -1,0 +1,82 @@
+# NHL-native threshold rule policy kernel.
+#
+# The trusted rule set is deliberately small: reject malformed quorum rules,
+# duplicate signer roles, wrong-role approvals, and threshold downgrades.
+
+module "security_threshold_check";
+
+global security_threshold_role_bit;
+global security_threshold_rule_valid;
+global security_threshold_has_duplicate3;
+global security_threshold_approves3;
+global security_threshold_change_valid;
+
+const THRESHOLD_MAX_SIGNERS = 8;
+const THRESHOLD_ROLE_BOOT = 1;
+const THRESHOLD_ROLE_KERNEL = 2;
+const THRESHOLD_ROLE_POLICY = 4;
+const THRESHOLD_ROLE_UPDATE = 8;
+const THRESHOLD_ROLE_RECOVERY = 16;
+const THRESHOLD_ROLE_AUDIT = 32;
+const THRESHOLD_ALL_ROLES = 63;
+
+fn security_threshold_role_bit(role) {
+    if role == 1 { return THRESHOLD_ROLE_BOOT; }
+    if role == 2 { return THRESHOLD_ROLE_KERNEL; }
+    if role == 3 { return THRESHOLD_ROLE_POLICY; }
+    if role == 4 { return THRESHOLD_ROLE_UPDATE; }
+    if role == 5 { return THRESHOLD_ROLE_RECOVERY; }
+    if role == 6 { return THRESHOLD_ROLE_AUDIT; }
+    return 0;
+}
+
+fn security_threshold_popcount6(mask) {
+    let n = 0;
+    if (mask & THRESHOLD_ROLE_BOOT) != 0 { n = n + 1; }
+    if (mask & THRESHOLD_ROLE_KERNEL) != 0 { n = n + 1; }
+    if (mask & THRESHOLD_ROLE_POLICY) != 0 { n = n + 1; }
+    if (mask & THRESHOLD_ROLE_UPDATE) != 0 { n = n + 1; }
+    if (mask & THRESHOLD_ROLE_RECOVERY) != 0 { n = n + 1; }
+    if (mask & THRESHOLD_ROLE_AUDIT) != 0 { n = n + 1; }
+    return n;
+}
+
+fn security_threshold_rule_valid(min_count, signer_count, allowed_mask, required_mask) {
+    if min_count <= 0 { return 0; }
+    if signer_count <= 0 { return 0; }
+    if signer_count > THRESHOLD_MAX_SIGNERS { return 0; }
+    if min_count > signer_count { return 0; }
+    if allowed_mask <= 0 { return 0; }
+    if (allowed_mask & required_mask) != required_mask { return 0; }
+    if security_threshold_popcount6(allowed_mask) < min_count { return 0; }
+    return 1;
+}
+
+fn security_threshold_has_duplicate3(role_a, role_b, role_c) {
+    if role_a != 0 { if role_a == role_b { return 1; } }
+    if role_a != 0 { if role_a == role_c { return 1; } }
+    if role_b != 0 { if role_b == role_c { return 1; } }
+    return 0;
+}
+
+fn security_threshold_approves3(min_count, allowed_mask, required_mask, role_a, role_b, role_c) {
+    if security_threshold_has_duplicate3(role_a, role_b, role_c) { return 0; }
+    let mask = 0;
+    let bit = security_threshold_role_bit(role_a);
+    if bit != 0 { mask = mask | bit; }
+    bit = security_threshold_role_bit(role_b);
+    if bit != 0 { mask = mask | bit; }
+    bit = security_threshold_role_bit(role_c);
+    if bit != 0 { mask = mask | bit; }
+    if (mask & allowed_mask) != mask { return 0; }
+    if (mask & required_mask) != required_mask { return 0; }
+    if security_threshold_popcount6(mask) < min_count { return 0; }
+    return 1;
+}
+
+fn security_threshold_change_valid(old_min, new_min, old_mask, new_mask) {
+    if new_min < old_min { return 0; }
+    if (new_mask & old_mask) != old_mask { return 0; }
+    if security_threshold_popcount6(new_mask) < new_min { return 0; }
+    return 1;
+}

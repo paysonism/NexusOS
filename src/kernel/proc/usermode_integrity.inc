@@ -154,13 +154,50 @@ FN_DECL l3_code_hash_verify_all, 0, 0, FN_RET_SCALAR
     ; Executable bytes diverged from the install-time baseline. Treat as a W^X
     ; integrity violation and take the same fail-closed path as a corrupted
     ; canary / forged callback. Never returns.
+    DBG_EVT_IMPORTANT EVT_WX_HASH_FAIL, rcx, rax, [l3_code_hash + rcx*8], [l3_wx_manifest_ver + rcx*8], [l3_wx_code_start + rcx*8], [l3_wx_code_end + rcx*8], 0
+%ifdef ENABLE_DEBUG_SERIAL
+    SER 'W'
+    SER 'C'
+    SER 'X'
+    SER 'H'
+    SER ' '
+    SER 's'
+    mov edi, ecx
+    call ser_print_hex64
+    SER ' '
+    SER 'r'
+    mov rdi, rax
+    call ser_print_hex64
+    SER ' '
+    SER 'e'
+    mov rdi, [l3_code_hash + rcx*8]
+    call ser_print_hex64
+    SER ' '
+    SER 'v'
+    mov rdi, [l3_wx_manifest_ver + rcx*8]
+    call ser_print_hex64
+    SER ' '
+    SER 'b'
+    mov rdi, [l3_wx_code_start + rcx*8]
+    call ser_print_hex64
+    SER '/'
+    mov rdi, [l3_wx_code_end + rcx*8]
+    call ser_print_hex64
+    SER ' '
+    SER 'l'
+    movzx edi, byte [l3_code_hash_valid + rcx]
+    call ser_print_hex64
+    SER 13
+    SER 10
+%endif
+    mov rdi, rax
+    lea rsi, [rel .va_mismatch]
+    mov r10, [l3_code_hash + rcx*8]
+    mov edx, 0x57435848                  ; WCXH: executable code hash mismatch
     jmp kernel_panic_canary
 
-FN_DECL l3_install_app_done_trampoline, 0, 0, FN_RET_SCALAR
-    push rcx
-    mov ecx, edi
-    call l3_slot_base
-    add rax, [rel l3_slot_code_slide + rcx*8]
-    add rax, app_l3_done_trampoline - app_blob_start
-    pop rcx
-    ret
+; l3_install_app_done_trampoline MIGRATED TO ZERO-ASM NexusHLK:
+; src/kernel/nexushlk/usermode_callbacks.nxh -> build/nxh/usermode_callbacks.asm
+; (%include'd by kernel_build.asm). It is part of the ring-3 callback/app-done
+; trampoline path and was ported with that path; defining it here too would be a
+; duplicate symbol. See feedback_no_asm_shims_full_zero_asm.

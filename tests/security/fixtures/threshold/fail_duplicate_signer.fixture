@@ -1,0 +1,7 @@
+checker=threshold_check
+expect=fail
+case=duplicate_policy_signer
+min_count=2
+allowed_roles=policy,update,audit
+required_roles=policy
+approvals=policy,policy

@@ -3073,6 +3073,7 @@ rtl8156_ser_phex8:
 ;   [NETSELFTEST PASS rtl8139]   ← only the emulated PCI NIC worked
 ;   [NETSELFTEST FAIL]           ← neither backend reached DHCP+ping
 ; -------------------------------------------------------------------------
+%ifndef RELEASE_BUILD
 extern rtl_active
 extern rtl_dhcp_bound
 extern net_ping_ipv4
@@ -3158,6 +3159,7 @@ ser_selftest_pass_8139 db "[NETSELFTEST PASS rtl8139]", 10, 0
 ser_selftest_fail      db "[NETSELFTEST FAIL]", 10, 0
 ser_selftest_no_xhci   db "[NETSELFTEST xhci_init failed]", 10, 0
 ser_selftest_no_init   db "[NETSELFTEST rtl8156_init failed - falling back to rtl8139]", 10, 0
+%endif
 sz_r8156_init  db "NET: RTL8156 USB init", 0
 sz_r8156_ready db "NET: RTL8156 USB ready", 0
 sz_r8156_fail  db "NET: RTL8156 USB unavailable", 0

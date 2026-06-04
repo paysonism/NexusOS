@@ -129,6 +129,10 @@ reduce maintenance risk.
 
 ## P2: NexusHL
 
+- [ ] Use `docs/nhl-beyond-zero-trust-todo.md` as the master plan for the
+      NHL-only beyond-zero-trust architecture: no new `.asm`, no new `.inc`, no
+      inline assembly, signed everything, release privacy by default, and
+      partitioned authority that survives single-component compromise.
 - [ ] Add compiler tests for `src/user/nexushl/compiler/nxhc.py`: lex, parse, sema, emit.
 - [ ] Add golden output tests for `hello.nxh`, `explorer.nxh`, and `notepad.nxh`.
 - [ ] Add source maps from NXH lines to generated assembly labels.

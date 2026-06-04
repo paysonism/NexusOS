@@ -1,0 +1,3 @@
+checker=signed_artifact_check
+expect=pass
+case=valid signed artifact header and signature window

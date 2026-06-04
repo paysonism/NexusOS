@@ -1,0 +1,3 @@
+checker=signed_envelope
+expect=pass
+case=kernel artifact with all 13 required fields and in-bounds offsets accepted

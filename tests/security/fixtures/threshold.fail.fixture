@@ -1,0 +1,3 @@
+checker=threshold_check
+expect=fail
+case=reject duplicate signer or threshold downgrade

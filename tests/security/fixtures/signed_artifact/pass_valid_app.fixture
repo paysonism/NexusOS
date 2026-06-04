@@ -1,0 +1,10 @@
+checker=signed_artifact_check
+expect=pass
+case=valid_app_artifact
+schema=1
+artifact_type=app
+domain=app
+hash_len=32
+signature_len=64
+signer_role=app_store
+revocation_epoch=1

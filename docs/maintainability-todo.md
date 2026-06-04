@@ -94,27 +94,10 @@ not fanned out to agents.
 
 ### 3a. Oversized files (>700-line flag) — split candidates, worst first
 
-- [ ] [`src/kernel/core/main.asm`](../src/kernel/core/main.asm) — **3,614** lines (was 4,970; -1,356 over 2 batches). Top structural outlier. **Decomposition via NexusHLK** (kernel emit mode of `nxhc.py`), 2026-06-01. Five modules now live under [`src/kernel/nexushlk/`](../src/kernel/nexushlk/): `serial_diag` (svg_dump leaves), `boot_diag` (diag_emit_*/svg_dump_serial/serial_forward_input), `debug_overlay` (usb_debug_overlay/ovl_*/usb_dbg_pci_scan), `cpu_acct` (cpu_acct_*), `serial_console` (serial_dispatch_control). Each compiled to `build/nxh/*.asm`, `%include`d after main.asm (order preserved, inside `[_start,_kernel_text_end)`). Build green + serial-diff behavior-verified (deterministic `-NoMemRandom -NoKaslr`); user-app outputs byte-identical.
-  - ✅ **Compiler blocker resolved (2026-06-03)**: nxhc kernel mode now supports
-    explicit-register parameter binding + `preserves(...)` (e.g. `fn f(rdi cursor,
-    rdx val) preserves(rax, rcx)`) **and** privileged-instruction intrinsics
-    (`rdtsc`/`rdmsr`/`cpuid_*`), so the hand-rolled non-System-V leaves can be
-    written structurally instead of as `asm{}` shims. Statement-level conversion
-    status of the five modules:
-    - `cpu_acct` — ✅ **fully zero-asm** (2026-06-03). All five routines rewritten
-      as structured NexusHLK; compiles under `--forbid-asm`, declares its authority
-      explicitly (`unsafe kernel_priv; unsafe raw_mem;`) so `--deny-unsafe` rejects
-      it. The old `cpu_acct_publish_mhz` r8/r10 caller-ABI hand-off is gone — the
-      two internal helpers now take ordinary System-V args (legal: only
-      init/idle_end/work_end are reached from kernel_lifecycle). Behavior-parity
-      port (full kernel build green; effects on bsp_util / smp_core_states /
-      acct_* accumulators unchanged for the in-range counter values).
-    - `boot_diag` — partial: `diag_puth64` is structured (explicit-register form);
-      `diag_emit_hexbytes`/`diag_emit_line`/`svg_dump_serial`/`serial_forward_input`
-      remain `asm{}` shims.
-    - `debug_overlay`, `serial_diag`, `serial_console` — still verbatim `asm{}`
-      shims (the large render/PCI-scan bodies; next conversion candidates).
-  - `real_boot_diag_dump` (~1,584 lines) intentionally NOT ported — `%ifdef`-gated dead-code with 200+ inline externs; a verbatim string port would be pointless.
+- [x] ~~[`src/kernel/core/main.asm`](../src/kernel/core/main.asm)~~ — **fully decomposed + ZERO-ASM** (2026-06-03). main.asm no longer exists: its logic lives in [`src/kernel/nexushlk/`](../src/kernel/nexushlk/) (the NexusHLK kernel-emit modules) and its data/state in [`core_runtime_state.asm`](../src/kernel/core/core_runtime_state.asm). **Every NexusHLK module is now genuinely structured NexusHLK with NO inline asm** — `grep -E '^\s*asm\s+"' src/kernel/nexushlk/*.nxh` is empty, and the kernel build compiles each module with `--forbid-asm` (a reintroduced shim breaks the build). Verified: full UEFI build green, headless boot markers (CPU:/CACHE:/MEMCAP:/`M12K*F!`) pass, the `[K0..L3]` boot-stage sequence emits, and a QEMU screendump shows the desktop/icons/taskbar/FPS rendering correctly.
+  - **Converted modules** (behavior-parity, not byte-identical — emitted stream differs like the cpu_acct port): `boot_diag`, `debug_overlay`, `serial_console`, `serial_poll`, `kernel_console`, `context_menu`, `input_dispatch`, `kernel_lifecycle` (kmain), `frame_present` (render_frame + live-refresh). Previously done: `cpu_acct`, `serial_diag`.
+  - **Dead code deleted**: the four `real_boot_diag_*` modules (~1,400 asm lines, `%ifdef`-gated debug with 200+ inline externs) + their two live call sites (the `=` keybind / serial command) were removed rather than ported — a verbatim port was pointless, and deletion satisfies "no asm" with no default-build behavior change.
+  - **Compiler additions (nxhc.py) that made full zero-asm possible**: (1) `cfg "NAME" {..}` / `cfg !"NAME" {..}` build-config conditionals → NASM `%ifdef`/`%ifndef` (kmain's ENABLE_SMAP/CET/KPTI/SHADOW_STACK_POC/FBPERF_NO_WC/NEXUS_SMP/PROBE_NK_PT paths); (2) `ind()`/`outd()` 32-bit port I/O intrinsics (PCI CF8/CFC config access, inline in debug_overlay); (3) `const NAME = extern;` symbolic-constant passthrough (reference a kernel `equ` by name — NASM resolves it — instead of duplicating its value, used throughout frame_present). These join the earlier explicit-register ABI + `preserves(...)` + privileged intrinsics.
 - [x] [`src/kernel/proc/syscall.asm`](../src/kernel/proc/syscall.asm) — ~~**4,942** lines. Dispatcher + hardening in one file.~~ Split 2026-06-02 into a 284-line orchestrator + 10 `syscall_*.inc` modules (largest `syscall_security.inc` at 641). Pure textual `%include` split — `KERNEL.BIN` byte-identical pre/post (sha256 verified). Handler slices stay in `syscall_entry`'s local-label scope.
 - [ ] [`src/kernel/drivers/rtl8156.asm`](../src/kernel/drivers/rtl8156.asm) — 3,282
 - [ ] [`src/kernel/drivers/xhci.asm`](../src/kernel/drivers/xhci.asm) — 2,641

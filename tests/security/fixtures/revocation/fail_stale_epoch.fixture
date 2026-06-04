@@ -1,0 +1,8 @@
+checker=revocation_check
+expect=fail
+case=stale_signer_epoch
+signer_epoch=4
+minimum_epoch=5
+signer_revoked=0
+artifact_epoch=4
+policy_epoch=5

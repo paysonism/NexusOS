@@ -309,11 +309,11 @@ fn hmac_boot_prepare() {
 fn sha256_self_test() {
     sha256_hash(&sha_self_abc_msg, 0, &sha_tmp_digest);
     if !digest_eq(&sha_tmp_digest, &sha_self_empty, 32) {
-        kernel_panic_canary(0x53484100, &sha256_self_test);
+        kernel_panic_canary(0x53484100, &sha256_self_test, 0x53484130);
     }
     sha256_hash(&sha_self_abc_msg, 3, &sha_tmp_digest);
     if !digest_eq(&sha_tmp_digest, &sha_self_abc, 32) {
-        kernel_panic_canary(0x53484161, &sha256_self_test);
+        kernel_panic_canary(0x53484161, &sha256_self_test, 0x53484133);
     }
 }
 
@@ -332,7 +332,7 @@ fn app_blob_verify_signature() {
     hmac_boot_prepare();
     hmac_blob_canonical(lq(&app_blob_base_v), lq(&app_blob_size_v), &sha_tmp_digest);
     if !digest_eq(&sha_tmp_digest, &mb_blob_sig_expected, 32) {
-        kernel_panic_canary(0x424C4F42, &app_blob_verify_signature);
+        kernel_panic_canary(0x424C4F42, &app_blob_verify_signature, 0x424C4F42);
     }
     sb(&mb_blob_sig_done, 1);
 }

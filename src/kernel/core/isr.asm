@@ -290,6 +290,7 @@ FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
 .isr_canary_bad:
     mov rdi, rax
     lea rsi, [rel .isr_canary_bad]
+    mov edx, 0x49535243                  ; ISRC: ring-0 exception footer canary
     jmp kernel_panic_canary
 
 .exc_ring3_abort:
@@ -315,6 +316,7 @@ FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
 .isr_r3_canary_bad:
     mov rdi, rax
     lea rsi, [rel .isr_r3_canary_bad]
+    mov edx, 0x5233434E                  ; R3CN: ring-3 exception abort footer canary
     jmp kernel_panic_canary
 
 ; ============================================================================
@@ -426,6 +428,7 @@ FN_DECL irq_common_stub, 0, 0, FN_RET_SCALAR
 .irq_canary_bad:
     mov rdi, rax
     lea rsi, [rel .irq_canary_bad]
+    mov edx, 0x49525143                  ; IRQC: IRQ footer canary
     jmp kernel_panic_canary
 
 isr_nested_halt:

@@ -6,6 +6,7 @@
 %define MACROS_INC
 
 %include "trace.inc"
+%include "debug_events.inc"
 
 ; tools/build_sig_registry.py emits build/sig_hashes.inc before the kernel
 ; assembles; it provides `%define <name>__hash` lines so FN_BEGIN stamps the

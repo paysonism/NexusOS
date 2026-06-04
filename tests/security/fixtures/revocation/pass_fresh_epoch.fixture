@@ -1,0 +1,8 @@
+checker=revocation_check
+expect=pass
+case=fresh_signer_epoch
+signer_epoch=5
+minimum_epoch=5
+signer_revoked=0
+artifact_epoch=5
+policy_epoch=5

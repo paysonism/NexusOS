@@ -411,8 +411,10 @@ sc_hirisk_table:
 ; returns.
 ; ----------------------------------------------------------------------------
 global kernel_panic_canary
+extern dbg_event_dump_serial
 kernel_panic_canary:
     cli
+    DBG_EVT_IMPORTANT EVT_PANIC, r15, rdi, rsi, rdx, r10, 0, 0
     ; §11: a kernel-integrity panic on the syscall path means *this* slot's last
     ; few syscalls are the prime forensic evidence. Ship them on serial before
     ; halting (r15 still holds the faulting slot id here). Save rdi/rsi — the
@@ -420,8 +422,11 @@ kernel_panic_canary:
     ; the panic banner below still reads the original args.
     push rdi
     push rsi
+    push rdx
     movzx edi, r15b
     call sc_trace_dump
+    call dbg_event_dump_serial
+    pop rdx
     pop rsi
     pop rdi
     SER 'C'
@@ -462,6 +467,16 @@ kernel_panic_canary:
     SER 'x'
     SER '='
     mov rdi, r10
+    call ser_print_hex64
+    SER ' '
+    SER 'y'
+    SER '='
+    mov rdi, rdx
+    call ser_print_hex64
+    SER ' '
+    SER 'q'
+    SER '='
+    mov rdi, rsp
     call ser_print_hex64
     SER 13
     SER 10

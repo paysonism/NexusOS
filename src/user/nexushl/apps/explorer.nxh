@@ -97,13 +97,6 @@ extern fat16_size_buf;
 extern prop_entry_ptr;
 extern exp_prop_visible;
 
-# `properties_drawfn_addr` is an asm-escape helper that returns the address
-# of our own properties_draw callback. NexusHL has no `&local_fn` syntax
-# (the `&` operator only resolves to strings, consts, or externs), so we
-# resort to the documented `asm "..."` escape to load rax directly. The
-# function body has no `return`, so codegen leaves rax untouched by the
-# epilogue — what the asm sets is what the caller receives.
-
 # -------------------- small helpers --------------------
 
 # Snapshot the currently selected entry into `&szEntryInfo`. Returns 1 on
@@ -235,26 +228,14 @@ fn enter_selected() {
     syscall(SYS_HANDLE_CLOSE, h);
 }
 
-fn properties_drawfn_addr() {
-    asm "lea rax, [rel app_hl_explorer_properties_draw]";
-}
-
-fn properties_clickfn_addr() {
-    asm "lea rax, [rel app_hl_explorer_properties_click]";
-}
-
-fn properties_keyfn_addr() {
-    asm "lea rax, [rel app_hl_explorer_properties_key]";
-}
-
 fn open_properties() {
     if selected_snapshot() == 0 { return; }
     let win_idx = syscall(SYS_WM_CREATE, 250, 200, 240, 196,
-                          &szPropTitleHL, properties_drawfn_addr());
+                          &szPropTitleHL, &app_hl_explorer_properties_draw);
     if win_idx == -1 { return; }
     syscall(SYS_WM_HANDLERS, win_idx,
-            properties_clickfn_addr(),
-            properties_keyfn_addr());
+            &app_hl_explorer_properties_click,
+            &app_hl_explorer_properties_key);
     # SYS_WM_CREATE allocates a *new* app slot for the new window, so the
     # Properties drawfn runs in a slot that doesn't have access to the
     # Explorer's per-slot state (explorer_sel, prop_entry_ptr, …). Pass the

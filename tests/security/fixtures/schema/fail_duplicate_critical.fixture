@@ -1,0 +1,11 @@
+checker=schema_canonical_check
+expect=fail
+case=duplicate_critical_field
+schema_id=signed_artifact
+schema_version=1
+field=schema_version
+critical=1
+duplicate=1
+encoded_width=1
+value=1
+depth=2

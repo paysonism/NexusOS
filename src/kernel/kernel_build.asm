@@ -51,22 +51,14 @@ section .text
 ; by nxhc.py --target kernel.
 section .text
 %include "build/nxh/boot_diag.asm"
+%ifndef RELEASE_BUILD
 section .text
 %include "build/nxh/debug_overlay.asm"
+%endif
 section .text
 %include "build/nxh/cpu_acct.asm"
 section .text
 %include "build/nxh/serial_console.asm"
-section .text
-%include "build/nxh/real_boot_diag.asm"
-section .text
-%include "build/nxh/real_boot_diag_core.asm"
-section .text
-%include "build/nxh/real_boot_diag_fbperf.asm"
-section .text
-%include "build/nxh/real_boot_diag_legacy.asm"
-section .text
-%include "build/nxh/real_boot_diag_gfx.asm"
 section .text
 %include "build/nxh/crypto.asm"
 section .text
@@ -77,6 +69,8 @@ section .text
 %include "src/kernel/core/security_status.asm"
 section .text
 %include "src/kernel/core/klog.asm"
+section .text
+%include "src/kernel/core/debug_events.asm"
 section .text
 %include "src/kernel/core/idt.asm"
 section .text
@@ -99,6 +93,16 @@ section .text
 %include "src/boot/gdt.asm"
 section .text
 %include "src/kernel/proc/usermode.asm"
+section .text
+; NexusHLK (zero-asm) ring-3 callback / app-done trampoline path. Ported from
+; src/kernel/proc/usermode_callbacks.inc + l3_install_app_done_trampoline (was in
+; usermode_integrity.inc); those .inc definitions are now removed to avoid a
+; duplicate-symbol clash. Defines call_app_l3, call_app_l3_packed,
+; call_app_l3_return, call_app_l3_app_done, l3_install_app_done_trampoline,
+; test_usermode_proc. Same single-TU: l3_runtime_ptr / l3_slot_base /
+; l3_translate_target / l3_copy_app_blob_to_slot / l3_apply_slot_isolation /
+; l3_apply_wx_policy / l3_user_stack_top resolve as forward refs.
+%include "build/nxh/usermode_callbacks.asm"
 section .text
 %include "src/kernel/proc/process.asm"
 section .text
@@ -235,7 +239,8 @@ section .text
 section .text
 %include "src/kernel/gui/cursor.asm"
 section .text
-%include "src/kernel/gui/boot_anim.asm"
+; NexusHLK boot animation player (zero-asm; compiled with --forbid-asm).
+%include "build/nxh/boot_anim.asm"
 
 ; --- Built-in User Apps ---
 section .text

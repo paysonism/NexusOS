@@ -1,0 +1,3 @@
+checker=compatibility_check
+expect=fail
+case=reject unsupported ABI or missing adapter

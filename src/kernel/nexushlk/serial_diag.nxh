@@ -19,20 +19,22 @@
 # These five helpers are LEAF serial-output routines with a hand-rolled,
 # non-System-V register ABI (arg in AL / EAX / RSI; ALL registers preserved).
 #
-# Three of them — svg_dump_nibble, svg_dump_hexbyte, svg_dump_dec — are now
-# written as GENUINELY STRUCTURED NexusHLK using the kernel-mode explicit-
-# register ABI feature (nxhc.py): a parameter is bound to a physical register
-# (`fn f(al nib) ...`), `preserves(all)` re-states the original "pushes
-# everything" save/restore contract, and `call f(al: expr);` expresses the
-# custom-ABI inter-routine calls (the targets take their argument in al, not in
-# the System-V rdi). The compiler spills each register param to a stack slot on
-# entry, runs the structured body over that slot, restores the preserved set on
-# exit, and writes any non-preserved (output) param register back. The emitted
-# behavior over COM1 is byte-identical to the prior asm{} shims.
+# ALL FIVE are now written as GENUINELY STRUCTURED NexusHLK with ZERO inline
+# asm, using the kernel-mode explicit-register ABI feature (nxhc.py): a
+# parameter is bound to a physical register (`fn f(al nib) ...`),
+# `preserves(all)` re-states the original "pushes everything" save/restore
+# contract, and `call f(al: expr);` expresses the custom-ABI inter-routine
+# calls (the targets take their argument in al, not in the System-V rdi). The
+# compiler spills each register param to a stack slot on entry, runs the
+# structured body over that slot, restores the preserved set on exit, and
+# writes any non-preserved (output) param register back. The emitted behavior
+# over COM1 is byte-identical to the prior hand-written asm shims.
 #
-# svg_dump_putc (a single OUT) and svg_dump_puts (a tight string loop reading
-# rsi) remain register-exact asm{} shims: they are pure I/O leaves whose value
-# is in the literal instruction, not in structure.
+# svg_dump_putc is the single-OUT leaf, now expressed via the privileged
+# `outb(COM1, ch)` intrinsic (`unsafe kernel_io;`). svg_dump_puts is the
+# tight string loop, now a structured `while` over `lb(str)` byte loads
+# (`unsafe raw_mem;`) that calls svg_dump_putc per char — INPUT-only rsi,
+# preserved on exit. Neither uses any inline-assembly escape.
 #
 # The data strings (svg_dump_hdr/dim/ftr) and the higher-level callers
 # (svg_dump_serial, diag_emit_line, diag_puth64, diag_emit_hexbytes) stay in
@@ -40,6 +42,9 @@
 # ============================================================================
 
 module "serial_diag";
+
+unsafe kernel_io;   # outb() to COM1 in svg_dump_putc
+unsafe raw_mem;     # lb() over the NUL-terminated string in svg_dump_puts
 
 global svg_dump_putc;
 global svg_dump_puts;
@@ -54,16 +59,24 @@ const ASCII_ZERO  = 48;   # '0'
 const ASCII_A_M10 = 55;   # 'A' - 10
 const HEX_BASE    = 10;   # nibbles 0..9 are digits, 10..15 are 'A'..'F'
 
-# al = character -> COM1.  Preserves all registers.  (Pure OUT leaf — kept as a
-# register-exact asm shim: a single port write has no structure to recover.)
-fn svg_dump_putc() {
-    asm "push rax\npush rdx\nmov dx, 0x3F8\nout dx, al\npop rdx\npop rax\nret";
+# al = character -> COM1.  Preserves all registers.  Pure OUT leaf: the byte
+# in al is written to the COM1 data port via the privileged outb() intrinsic.
+fn svg_dump_putc(al ch) preserves(all) {
+    outb(COM1, ch);
 }
 
-# rsi = NUL-terminated string -> COM1.  Preserves all registers.  (Tight
-# byte-loop reading rsi directly — kept as a register-exact asm shim.)
-fn svg_dump_puts() {
-    asm "push rax\npush rsi\n.puts_loop:\nmov al, [rsi]\ntest al, al\njz .puts_done\ncall svg_dump_putc\ninc rsi\njmp .puts_loop\n.puts_done:\npop rsi\npop rax\nret";
+# rsi = NUL-terminated string -> COM1.  Preserves all registers (rsi is
+# INPUT-only — the local cursor advances, the bound register is restored on
+# exit).  Walks byte-by-byte until the NUL, emitting each char via
+# svg_dump_putc.
+fn svg_dump_puts(rsi sptr) preserves(all) {
+    let p = sptr;
+    let c = lb(p);
+    while c != 0 {
+        call svg_dump_putc(al: c);
+        p = p + 1;
+        c = lb(p);
+    }
 }
 
 # eax = byte (low 8 bits) -> two uppercase hex chars on COM1.

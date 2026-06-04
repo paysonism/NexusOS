@@ -1,84 +1,52 @@
 # ============================================================================
-# Early kernel console and klog mirror.
-# Owns debug_print: RSI = NUL-terminated message; preserves the original register-save contract.
+# Early kernel console and klog mirror.  ZERO-ASM.
+# Owns debug_print: RSI = NUL-terminated message; preserves all registers.
+# Structured NexusHLK (was a register-exact asm shim).
 # ============================================================================
 
 module "kernel_console";
 
+unsafe raw_mem;   # lb/lw/lq/sw against kernel-resident console state
+
 global debug_print;
 
-fn debug_print() {
-    asm "    push rax";
-    asm "    push rbx";
-    asm "    push rcx";
-    asm "    push rdx";
-    asm "    push rdi";
-    asm "    push rsi";
-    asm "    push r8";
-    asm "    push r9";
-    asm "    push r10";
-    asm "    push r11";
-    asm "    push r12";
-    asm "";
-    asm "    mov r12, rsi     ; Preserve RSI";
-    asm "";
-    asm "    ; Always capture the message in the kernel log ring buffer, regardless of";
-    asm "    ; whether the framebuffer is available or the GUI has started. This is the";
-    asm "    ; data source for the F12 overlay and the (future) USB MSC log flush.";
-    asm "    extern klog_write";
-    asm "    call klog_write";
-    asm "";
-    asm "    ; Screen Output";
-    asm "    mov rax, [bb_addr]";
-    asm "    test rax, rax";
-    asm "    jz .done";
-    asm "";
-    asm "    ; Boot splash: keep the green console hidden during boot so the animation";
-    asm "    ; owns the screen. Holding a key reveals the live console.";
-    asm "    extern kb_repeat_scancode";
-    asm "    cmp byte [gui_initialized], 1";
-    asm "    je .console_draw";
-    asm "    movzx ecx, byte [kb_repeat_scancode]";
-    asm "    test ecx, ecx";
-    asm "    jz .done";
-    asm ".console_draw:";
-    asm "";
-    asm "    mov edi, 0";
-    asm "    mov esi, [debug_y]";
-    asm "    mov edx, 800";
-    asm "    mov ecx, 16";
-    asm "    mov r8d, 0x00000000";
-    asm "    call fill_rect";
-    asm "    ";
-    asm "    mov edi, 10";
-    asm "    mov esi, [debug_y]";
-    asm "    mov rdx, r12";
-    asm "    mov ecx, 0x0000FF00";
-    asm "    mov r8d, 0x00000000";
-    asm "    call render_text";
-    asm "    add dword [debug_y], 16";
-    asm "    ";
-    asm "    cmp dword [debug_y], 600";
-    asm "    jl .y_ok";
-    asm "    mov dword [debug_y], 0";
-    asm ".y_ok:";
-    asm "";
-    asm "    cmp byte [gui_initialized], 1";
-    asm "    je .done";
-    asm "    call display_flip";
-    asm ".done:";
-    asm "    pop r12";
-    asm "    pop r11";
-    asm "    pop r10";
-    asm "    pop r9";
-    asm "    pop r8";
-    asm "    pop rsi";
-    asm "    pop rdi";
-    asm "    pop rdx";
-    asm "    pop rcx";
-    asm "    pop rbx";
-    asm "    pop rax";
-    asm "    ret";
-    asm "";
-}
+const COL_GREEN   = 0x0000FF00;   # console text colour (0x00RRGGBB)
+const COL_BLACK   = 0x00000000;   # background / clear colour
+const CON_FILL_X  = 0;            # x of the per-line clear rect
+const CON_TEXT_X  = 10;           # x of the rendered text
+const CON_WIDTH   = 800;          # clear-rect width
+const CON_LINE_H  = 16;           # line height (also the y advance)
+const CON_Y_WRAP  = 600;          # wrap debug_y back to 0 at this y
+const GUI_READY   = 1;            # gui_initialized sentinel
 
+# Kernel-resident state this reads/writes (defined elsewhere in the unit).
+extern bb_addr;             # qword: back-buffer address (0 until framebuffer up)
+extern gui_initialized;     # byte: 1 once the window manager owns the screen
+extern kb_repeat_scancode;  # byte: nonzero while a key is held (reveals console)
+extern debug_y;             # dword: next console line y
+
+# rsi = NUL-terminated message. Always mirrors into the klog ring; additionally
+# draws the green boot console when the framebuffer is up and either the GUI has
+# started or a key is held (so the boot splash owns the screen otherwise).
+# Preserves all registers (rsi is input-only).
+fn debug_print(rsi msg) preserves(all) {
+    call klog_write(rsi: msg);
+
+    if lq(&bb_addr) == 0 { return; }
+
+    # Pre-GUI, stay hidden unless a key is held; once the GUI is up, always draw.
+    if lb(&gui_initialized) != GUI_READY {
+        if lb(&kb_repeat_scancode) == 0 { return; }
+    }
+
+    # Clear the line, render the text, advance + wrap the cursor.
+    fill_rect(CON_FILL_X, lw(&debug_y), CON_WIDTH, CON_LINE_H, COL_BLACK);
+    render_text(CON_TEXT_X, lw(&debug_y), msg, COL_GREEN, COL_BLACK);
+    sw(&debug_y, lw(&debug_y) + CON_LINE_H);
+    if lw(&debug_y) >= CON_Y_WRAP { sw(&debug_y, 0); }
+
+    # Pre-GUI we own the flip; once the WM is up it presents frames itself.
+    if lb(&gui_initialized) != GUI_READY {
+        display_flip();
+    }
+}

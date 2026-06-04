@@ -1,0 +1,3 @@
+checker=compatibility_check
+expect=pass
+case=supported service ABI and granted capability

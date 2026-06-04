@@ -1,0 +1,3 @@
+checker=revocation_check
+expect=pass
+case=fresh artifact epoch with nonmatching revocation record

@@ -1,0 +1,3 @@
+checker=signed_envelope
+expect=fail
+case=duplicate or descending field id breaks canonical ordering and is rejected

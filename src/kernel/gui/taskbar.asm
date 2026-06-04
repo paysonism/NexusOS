@@ -106,7 +106,9 @@ extern app_hl_paint_draw
 extern app_hl_settings_draw
 extern app_hl_taskmgr_draw
 extern app_hl_terminal_draw
+%ifndef RELEASE_BUILD
 extern app_security_probe_draw
+%endif
 
 ; Draw the taskbar + start menu
 FN_BEGIN tb_draw, 0, 0, FN_RET_SCALAR
@@ -641,8 +643,10 @@ tb_icon_for_window:
     je .about
     cmp rax, app_hl_taskmgr_draw
     je .taskmgr
+%ifndef RELEASE_BUILD
     cmp rax, app_security_probe_draw
     je .about
+%endif
     cmp rax, app_bmp_draw
     je .file
 .file:
