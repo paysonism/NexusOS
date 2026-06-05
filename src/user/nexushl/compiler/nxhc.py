@@ -59,6 +59,14 @@ def _build_reg_table():
 
 REG_TABLE=_build_reg_table()
 
+# SSE2 XMM register names. The XMM data path (display non-temporal blits, dword
+# broadcast fills) is expressed with statement-form intrinsics that take a BARE
+# xmm register name — the same explicit-register discipline as push_reg/set_reg.
+# XMM lifetimes are the author's responsibility: the structured stack machine
+# keeps live values only in GP rbp slots, so it never relies on an XMM register
+# surviving across statements (consistent with set_reg semantics).
+XMM_REGS=frozenset(f"xmm{i}" for i in range(16))
+
 def _reg_at_width(canon, bits):
     # Return the register spelling for canonical 64-bit reg `canon` at `bits`.
     for spell,(c,w) in REG_TABLE.items():
@@ -2273,6 +2281,61 @@ def gen_expr(st,e):
             cg.emit(f"    mov {canon}, rax")
             cg.emit("    xor rax, rax")
             return
+        if name in ("xmm_loadu","xmm_loada","xmm_store","xmm_store_nt","xmm_bcast32") and getattr(cg,"kernel",False):
+            # SSE2 XMM data-path intrinsics (statement form, bare xmm register
+            # operand). These let the display non-temporal blit + dword-broadcast
+            # fill loops be written zero-asm; the loop structure itself is ordinary
+            # NHL while/if. Each emits exactly one (bcast32: two) real SSE2
+            # instruction. The 16-byte memory operand of a movdqa / movntdq store
+            # MUST be 16-byte aligned or the CPU #GP-faults — that alignment is the
+            # author's contract (the same as the hand-written driver). A movntdq
+            # (xmm_store_nt) is a non-temporal store: pair the loop with sfence()
+            # before the data is read back. raw_mem (these touch raw VRAM/buffers).
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"raw_mem",f"kernel intrinsic {name}()")
+            # arg shapes:
+            #   xmm_loadu/loada(XMM, addr)        load  16B [addr] -> XMM
+            #   xmm_store/store_nt(addr, XMM)     store XMM -> 16B [addr]
+            #   xmm_bcast32(XMM, val32)           XMM = [v,v,v,v]
+            if len(args)!=2:
+                raise SyntaxError(f"{name} takes 2 args")
+            if name in ("xmm_loadu","xmm_loada","xmm_bcast32"):
+                xnode,vnode=args[0],args[1]          # (XMM, addr|val)
+            else:
+                vnode,xnode=args[0],args[1]          # (addr, XMM)
+            if xnode.get("k")!="ident" or xnode["name"] not in XMM_REGS:
+                raise SyntaxError(f"{name}: xmm operand must be a bare xmm register (xmm0..xmm15)")
+            xr=xnode["name"]
+            gen_expr(st,vnode)                        # addr or val32 -> rax
+            if name=="xmm_loadu":
+                cg.emit(f"    movdqu {xr}, [rax]")
+            elif name=="xmm_loada":
+                cg.emit(f"    movdqa {xr}, [rax]")
+            elif name=="xmm_store":
+                cg.emit(f"    movdqa [rax], {xr}")
+            elif name=="xmm_store_nt":
+                cg.emit(f"    movntdq [rax], {xr}")
+            else:  # xmm_bcast32: replicate the low dword across all four lanes
+                cg.emit(f"    movd {xr}, eax")
+                cg.emit(f"    pshufd {xr}, {xr}, 0")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="isqrt" and getattr(cg,"kernel",False):
+            # isqrt(n) -> rax = floor(sqrt(n)) for an unsigned 64-bit n via the SSE2
+            # scalar-FP idiom the display fill_circle uses (cvtsi2sd/sqrtsd/
+            # cvttsd2si). Clobbers xmm0 (documented — author owns XMM lifetimes).
+            # Exact for n < 2^52 (the double mantissa); display radii are tiny so
+            # this matches the hand-written behavior. raw_mem not needed (no mem).
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("isqrt() intrinsic requires --target kernel")
+            if len(args)!=1: raise SyntaxError("isqrt takes 1 arg (n)")
+            gen_expr(st,args[0])                      # n -> rax
+            cg.emit("    cvtsi2sd xmm0, rax")
+            cg.emit("    sqrtsd xmm0, xmm0")
+            cg.emit("    cvttsd2si rax, xmm0")
+            return
         if name=="rep_movsq":
             # rep_movsq(dst, src, qcount): copy qcount qwords src->dst (cld; rep
             # movsq), the structured form of the shadow-window block copy. Loads
@@ -2292,6 +2355,49 @@ def gen_expr(st,e):
             cg.emit("    cld")
             cg.emit("    rep movsq")
             cg.emit("    xor rax, rax")
+            return
+        if name in ("rep_stosd","rep_movsd") and getattr(cg,"kernel",False):
+            # rep_stosd(dst, val32, dcount): fill dcount dwords at dst with val32
+            #   (cld; rep stosd). rep_movsd(dst, src, dcount): copy dcount dwords
+            # src->dst (cld; rep movsd). The structured form of the dword block
+            # fill/copy idiom the GUI/display fast paths use. Caller owns any SMAP
+            # bracket when either side is user (PTE.U) memory. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv",f"kernel intrinsic {name}()")
+            if len(args)!=3: raise SyntaxError(f"{name} takes 3 args (dst, {'val32' if name=='rep_stosd' else 'src'}, dcount)")
+            gen_expr(st,args[0]); cg.emit("    push rax")     # dst
+            gen_expr(st,args[1]); cg.emit("    push rax")     # val32 / src
+            gen_expr(st,args[2]); cg.emit("    mov rcx, rax") # dcount
+            if name=="rep_stosd":
+                cg.emit("    pop rax")                         # val32 -> eax (source)
+                cg.emit("    pop rdi")                         # dst
+                cg.emit("    cld")
+                cg.emit("    rep stosd")
+            else:
+                cg.emit("    pop rsi")                         # src
+                cg.emit("    pop rdi")                         # dst
+                cg.emit("    cld")
+                cg.emit("    rep movsd")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="atomic_xchg" and getattr(cg,"kernel",False):
+            # atomic_xchg(addr, val32) -> rax = old *addr (dword). `xchg` with a
+            # memory operand is implicitly LOCK'd, so this is an atomic
+            # read-modify-write — the primitive behind the driver xchg spinlocks
+            # (e.g. display raster_select_*). addr is evaluated first, then val.
+            # kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("atomic_xchg() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic atomic_xchg()")
+            if len(args)!=2: raise SyntaxError("atomic_xchg takes 2 args (addr, val32)")
+            gen_expr(st,args[0]); cg.emit("    push rax")     # addr
+            gen_expr(st,args[1]); cg.emit("    mov ecx, eax") # new value
+            cg.emit("    pop rax")                            # addr -> rax
+            cg.emit("    xchg dword [rax], ecx")              # atomic: ecx <- old *addr
+            cg.emit("    mov eax, ecx")                       # old value -> rax (zero-extended)
             return
         if name=="syscall_raw":
             # syscall_raw(num): issue a syscall with a RAW immediate number — NO
