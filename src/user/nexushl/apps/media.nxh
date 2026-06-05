@@ -39,6 +39,7 @@ state {
     mp_no_loop: 4;
     mp_seek_to: 4;
     mp_dragging: 4;
+    mp_text_scroll_line: 4;
 }
 
 # Draw is a stub: the actual draw fn registered on the window is the
@@ -64,5 +65,6 @@ fn click(win, cx, cy) {
 
 fn key(win, k) {
     let file = media_slot_file(win);
+    if mp_handle_text_key(win, k, file, &mp_text_scroll_line) == 1 { return; }
     mp_handle_key(k, file, &mp_paused, &mp_frame, &mp_no_loop, &mp_seek_to);
 }

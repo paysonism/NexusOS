@@ -1,0 +1,3 @@
+checker=signed_envelope
+expect=pass
+case=checked envelope accept combines canonical TLVs exact payload tiling and bounded streaming limits

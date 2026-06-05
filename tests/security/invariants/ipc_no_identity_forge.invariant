@@ -4,4 +4,4 @@ statement=The IPC router domain never holds AUTH_MINT_IDENTITY.
 compromised=IPC router domain
 denied_authority=AUTH_MINT_IDENTITY
 predicate=inv_ipc_no_identity_forge
-status=modeled
+status=proven

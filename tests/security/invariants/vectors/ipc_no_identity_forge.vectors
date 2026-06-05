@@ -1,0 +1,12 @@
+# INV-IPC-NO-FORGE vectors — predicate inv_ipc_no_identity_forge(auth).
+# The IPC router domain must never hold AUTH_MINT_IDENTITY.
+invariant=INV-IPC-NO-FORGE
+predicate=inv_ipc_no_identity_forge
+# ipc router with no identity-mint authority -> ok
+case=accept | 0
+# ipc router holding unrelated bits but not MINT_IDENTITY -> ok
+case=accept | AUTH_MEMORY_GRANT
+# ipc router holding AUTH_MINT_IDENTITY -> identity forgery
+case=reject | AUTH_MINT_IDENTITY
+# mint-identity bit set among others -> still a violation
+case=reject | 6

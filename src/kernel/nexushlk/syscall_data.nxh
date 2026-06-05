@@ -27,6 +27,7 @@
 # Constant values mirror their constants.inc / syscall_caps.inc / syscall_trace.inc
 # equ definitions (verified 2026-06-02):
 #   MAX_WINDOWS = APP_SLOT_COUNT = 12 ; CAP_CORE = 0x01 ; SC_BUDGET_PER_TICK = 4096
+#   SC_GUI_BUDGET_PER_TICK = 8192
 #   CAP_AUDIT_ENTRIES = 64 ; CAP_AUDIT_ENT_SIZE = 16
 #   SC_TRACE_SLOT_BYTES = SC_TRACE_RING_ENTRIES(16) * SC_TRACE_ENT_SIZE(16) = 256
 #   SC_TRACE_HIST_SLOTS = 128
@@ -37,6 +38,7 @@ module "syscall_data";
 const MAX_WINDOWS          = 12;
 const CAP_CORE             = 0x01;
 const SC_BUDGET_PER_TICK   = 4096;
+const SC_GUI_BUDGET_PER_TICK = 8192;
 const CAP_AUDIT_ENTRIES    = 64;
 const CAP_AUDIT_ENT_SIZE   = 16;
 const SC_TRACE_SLOT_BYTES  = 256;
@@ -45,6 +47,7 @@ const SC_TRACE_HIST_SLOTS  = 128;
 global syscall_count;
 global kernel_canary;
 global slot_sc_budget;
+global slot_gui_budget;
 
 # Monotonic syscall counter.
 data syscall_count: 1 x 8 = 0;
@@ -61,9 +64,20 @@ data sc_net_dns_busy:  1 x 1 = 0;
 # Ring-3 SYSCALL demo greeting (NUL-terminated).
 data szHelloUser = "-> Hello from RING 3 (via SYSCALL)!";
 
-# Per-slot effective capability mask. Default-deny: every slot boots at CAP_CORE.
+# Per-slot effective capability mask LOW byte. Default-deny: every slot boots at
+# CAP_CORE. The mask widened to 16 bits (CAP_FS split into read/write/delete);
+# the high byte lives in the parallel slot_cap_mask_hi[] below. Keeping the low
+# byte a standalone array means every byte-wide reader of the coarse low caps
+# (dispatcher GUI-exempt test, security/audit paths) stays unchanged.
 align 8;
 data slot_cap_mask: MAX_WINDOWS x 1 = CAP_CORE;
+
+# Per-slot capability mask HIGH byte (CAP_FS_READ/WRITE/DELETE etc.). BSS-zero =
+# 0 because CAP_CORE has no high bits. Written together with slot_cap_mask and
+# the authenticator by cap_mask_store; folded into slot_cap_hmac so a flip in
+# either byte is detected at the dispatcher gate.
+align 8;
+data slot_cap_mask_hi: MAX_WINDOWS x 1 = 0;
 
 # Per-slot capability-cache authenticator paralleling slot_cap_mask[]. Seeded at
 # boot by slot_cap_hmac_init once kernel_canary holds its final value.
@@ -81,6 +95,11 @@ data cap_audit_ring: CAP_AUDIT_ENTRIES * CAP_AUDIT_ENT_SIZE x 1 = 0;
 # SC_BUDGET_PER_TICK each PIT tick.
 align 16;
 data slot_sc_budget: MAX_WINDOWS x 2 = SC_BUDGET_PER_TICK;
+
+# Per-slot GUI/frame syscall budget. GUI rows use this instead of bypassing
+# rate limiting entirely.
+align 16;
+data slot_gui_budget: MAX_WINDOWS x 2 = SC_GUI_BUDGET_PER_TICK;
 
 # Per-slot security-reject strike counter (auto-kill at SC_STRIKE_LIMIT).
 align 16;

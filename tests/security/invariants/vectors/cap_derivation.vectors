@@ -1,0 +1,15 @@
+# INV-CAP-DERIVATION vectors — predicate inv_subset(child_auth, parent_auth).
+# Positive: child authority is a subset of parent (no amplification).
+# Negative: child carries a bit the parent does not have (amplification).
+invariant=INV-CAP-DERIVATION
+predicate=inv_subset
+# child {MEMORY_GRANT} subset of parent {MEMORY_GRANT,DMA_MAP}
+case=accept | 1, 5
+# child == parent (equal sets are subsets)
+case=accept | 7, 7
+# empty child is a subset of anything
+case=accept | 0, 64
+# child has DMA_MAP (4) not present in parent {MEMORY_GRANT} -> amplification
+case=reject | 5, 1
+# child has GLOBAL (64) parent has none
+case=reject | 64, 0

@@ -5,7 +5,7 @@
 ; Stage 1 of docs/nhlk-syscall-rearchitecture.md migrated the UNCONDITIONAL,
 ; const-sized data symbols (syscall_count, kernel_canary, sc_net_*_busy,
 ; szHelloUser, slot_cap_mask, slot_cap_hmac, cap_audit_head/ring, slot_sc_budget,
-; slot_sc_strikes, sc_trace_ring/head/hist) to
+; slot_gui_budget, slot_sc_strikes, sc_trace_ring/head/hist) to
 ;   src/kernel/nexushlk/syscall_data.nxh
 ; -> build/nxh/syscall_data.asm (zero-asm `data`/`global` decls), %include'd by
 ; kernel_build.asm under `section .data`.

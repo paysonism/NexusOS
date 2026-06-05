@@ -401,11 +401,16 @@
     push rdi                          ; stash original app_id for the audit record
     sub edi, APP_MIN_ID
     lea rcx, [rel app_manifest_table]
-    movzx eax, byte [rcx + rdi]       ; manifest cap bits for this app
-    lea rcx, [rel slot_cap_mask]
+    movzx eax, word [rcx + rdi*2]     ; manifest cap bits (16-bit, dw table)
+    ; Current 16-bit mask = low byte (slot_cap_mask) | high byte (slot_cap_mask_hi).
     movzx edx, r15b
-    movzx ebx, byte [rcx + rdx]       ; old mask (for the audit record)
-    and al, bl                        ; AND-narrow against the current mask
+    lea rcx, [rel slot_cap_mask]
+    movzx ebx, byte [rcx + rdx]       ; old mask low byte
+    lea rcx, [rel slot_cap_mask_hi]
+    movzx r9d, byte [rcx + rdx]
+    shl r9d, 8
+    or ebx, r9d                       ; ebx = old 16-bit mask (for AND + audit)
+    and ax, bx                        ; AND-narrow against the current mask (16-bit)
     ; Audit this capability transition before persisting it (security_todo.md
     ; §4). cap_audit_log(dil=slot, sil=old, dl=new, cl=reason, r8d=app_id);
     ; it preserves all caller regs.
@@ -421,9 +426,9 @@
     ; Persist the narrowed mask together with a fresh authenticator so the
     ; dispatcher's HMAC check accepts it. cap_mask_store(rdi=slot, rsi=mask).
     movzx edi, r15b
-    movzx esi, al
+    movzx esi, ax                     ; full 16-bit narrowed mask
     call cap_mask_store
-    movzx eax, sil                    ; resulting effective mask
+    movzx eax, si                     ; resulting effective mask (16-bit)
     mov [rsp + ALL_RAX], rax
     jmp .done
 .sc_app_declare_manifest_reject:

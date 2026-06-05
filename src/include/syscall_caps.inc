@@ -17,9 +17,9 @@
 ;     property: capabilities are bounded by the static manifest.
 ;
 ; Maintenance:
-;   - To add a new capability domain, define a new CAP_* bit here (1 byte
-;     wide; we have room for 8). Tag the relevant SYSCALL_ENTRY rows with
-;     it. Add it to the manifest of any app that needs it.
+;   - To add a new capability domain, define a new CAP_* bit here (2 bytes
+;     wide). Tag the relevant SYSCALL_ENTRY rows with it. Add it to the
+;     manifest of any app that needs it.
 ;   - To add a new app, append a row to app_manifest_table at index
 ;     (app_id - APP_MIN_ID). Keep the table dense; APP_MAX_ID bounds the
 ;     array.
@@ -28,20 +28,39 @@
 %ifndef SYSCALL_CAPS_INC
 %define SYSCALL_CAPS_INC
 
-; --- Capability bits (1-byte mask) ------------------------------------------
+; --- Capability bits (2-byte mask) ------------------------------------------
 ; CAP_CORE is implicitly granted to every slot; tagging core syscalls with it
 ; is a no-op against CAP_ALL but makes the intent explicit and survives any
 ; future change to the default mask.
-CAP_CORE        equ 0x01    ; print, exit, app_done, ticks, sysinfo, handles
-CAP_GUI         equ 0x02    ; wm, draw, blend, cursor, display, desktop, xml
-CAP_FS          equ 0x04    ; fat16 read/write/enumerate/chdir/mkdir/...
-CAP_NET         equ 0x08    ; ping, dhcp, dns, tcp_connect
-CAP_APP_CTRL    equ 0x10    ; launch / open other apps
-CAP_WX          equ 0x20    ; mprotect_wx, wx_install_manifest, wx_jit_alias
-CAP_MEDIA       equ 0x40    ; media_blit_scaled, open_file_media
-; bit 0x80 reserved
+;
+; The mask widened from 1 to 2 bytes so CAP_FS could split into read/write/
+; delete and CAP_GUI could split into draw/display. Storage is a low byte
+; (slot_cap_mask[]) plus a parallel high byte (slot_cap_mask_hi[]); the row tag
+; in the syscall table is a full word (SYSCALL_ENTRY's `dw`). The tamper
+; authenticator folds high^low so a flip in either byte is detected (see
+; cap_mask_sign / the dispatcher gate).
+CAP_CORE        equ 0x0001  ; print, exit, app_done, ticks, sysinfo, handles
+CAP_NET         equ 0x0008  ; ping, dhcp, dns, tcp_connect
+CAP_APP_CTRL    equ 0x0010  ; launch / open other apps
+CAP_WX          equ 0x0020  ; mprotect_wx, wx_install_manifest, wx_jit_alias
+CAP_MEDIA       equ 0x0040  ; media_blit_scaled, open_file_media
+; low-byte bits 0x0002 (former coarse CAP_GUI), 0x0004 (former coarse CAP_FS),
+; and 0x0080 are now free/reserved.
 
-CAP_ALL         equ 0xFF
+; --- Fine-grained capabilities (high byte) ----------------------------------
+; The former single CAP_FS (0x04) split into three so a manifest can grant, e.g.
+; read-only or read/write-without-delete. CAP_FS remains as the umbrella alias
+; (all three) so existing CAP_FS-bearing manifests keep full FS access.
+CAP_FS_READ     equ 0x0100  ; count/entry/chdir/read/format_name/entry_info/open
+CAP_FS_WRITE    equ 0x0200  ; write/mkdir/rename/sync_root
+CAP_FS_DELETE   equ 0x0400  ; delete
+CAP_FS          equ (CAP_FS_READ | CAP_FS_WRITE | CAP_FS_DELETE)
+CAP_GUI_DRAW    equ 0x0800  ; gui_rect/text, wm, draw/blend/xml, media_blit
+CAP_GUI_DISPLAY equ 0x1000  ; display mode/flags, desktop background, cursor
+CAP_GUI         equ (CAP_GUI_DRAW | CAP_GUI_DISPLAY)
+; high-byte bits 0x2000.. reserved.
+
+CAP_ALL         equ 0xFFFF
 
 ; --- Cap-mask authenticator (time-of-check capability cache) ----------------
 ; slot_cap_mask[] is plain kernel data, so any kernel-write bug could flip a
@@ -98,7 +117,10 @@ CAP_AUDIT_OTHER     equ 0x00               ; unattributed write (e.g. boot seed)
 
 MANIFEST_EXPLORER       equ CAP_CORE | CAP_GUI | CAP_FS | CAP_APP_CTRL
 MANIFEST_TERMINAL       equ CAP_CORE | CAP_GUI | CAP_FS | CAP_APP_CTRL | CAP_NET
-MANIFEST_NOTEPAD        equ CAP_CORE | CAP_GUI | CAP_FS
+; Notepad reads and writes files but must never delete one — now expressible
+; directly in the manifest (CAP_FS minus CAP_FS_DELETE). The SYS_FS_DELETE deny
+; in app_syscall_deny_table stays as defense-in-depth.
+MANIFEST_NOTEPAD        equ CAP_CORE | CAP_GUI | CAP_FS_READ | CAP_FS_WRITE
 MANIFEST_SETTINGS       equ CAP_CORE | CAP_GUI | CAP_FS
 MANIFEST_PAINT          equ CAP_CORE | CAP_GUI | CAP_FS
 MANIFEST_ABOUT          equ CAP_CORE | CAP_GUI

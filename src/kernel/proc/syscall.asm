@@ -51,14 +51,14 @@ SYSCALL_ARGC_OFF    equ 8
 SYSCALL_KIND_OFF    equ 9
 ; Single-byte cap mask packed into what used to be a padding byte.
 SYSCALL_CAP_OFF     equ 13
-; Single-byte per-entry flags packed into a former padding byte (offset 14).
+; Single-byte per-entry flags packed after the 16-bit cap word (offset 15).
 ; SC_FLAG_STRICT (security_todo.md §2, "Mandatory non-zero arg_desc for every
 ; PTR arg") opts a row into deny-on-unmigrated: any FN_KIND_PTR arg whose
 ; arg_desc nibble is still 0 (never migrated to a sibling-length descriptor)
 ; is rejected by the validator instead of falling back to the legacy 1-byte
 ; probe. Lets rows be flipped to strict one at a time as their descriptors
 ; land; un-flagged rows keep the legacy probe.
-SYSCALL_FLAGS_OFF   equ 14
+SYSCALL_FLAGS_OFF   equ 15
 SC_FLAG_STRICT      equ 0x01
 ; Optional per-arg descriptor qword. 4 bits per arg (6 args = 24 bits used);
 ; nibble N != 0 means "byte length of this PTR arg lives in scalar arg

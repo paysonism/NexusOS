@@ -4,4 +4,4 @@ statement=A hypervisor module may sign a measurement only for its own domain.
 compromised=one hypervisor module
 denied_authority=AUTH_SIGN_MEASUREMENT for an unrelated domain
 predicate=inv_hypervisor_no_foreign_measurement
-status=modeled
+status=proven

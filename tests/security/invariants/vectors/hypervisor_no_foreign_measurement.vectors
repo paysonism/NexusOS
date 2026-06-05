@@ -1,0 +1,12 @@
+# INV-HV-NO-FOREIGN-MEASURE vectors —
+#   predicate inv_hypervisor_no_foreign_measurement(
+#       signer_domain, measured_domain, signs_measurement).
+# A hypervisor module may sign a measurement only for its own domain.
+invariant=INV-HV-NO-FOREIGN-MEASURE
+predicate=inv_hypervisor_no_foreign_measurement
+# signs a measurement for its own domain (3 == 3) -> ok
+case=accept | 3, 3, 1
+# does not sign any measurement -> vacuously ok even across domains
+case=accept | 3, 7, 0
+# signs a measurement for a FOREIGN domain (3 != 7) -> violation
+case=reject | 3, 7, 1

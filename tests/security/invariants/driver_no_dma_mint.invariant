@@ -4,4 +4,4 @@ statement=A driver may use AUTH_DMA_MAP only via an explicit DMA grant, never se
 compromised=device driver domain
 denied_authority=AUTH_DMA_MAP without an explicit grant
 predicate=inv_driver_no_dma_mint
-status=modeled
+status=proven

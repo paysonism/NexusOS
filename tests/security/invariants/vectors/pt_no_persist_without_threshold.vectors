@@ -1,0 +1,13 @@
+# INV-PT-NO-PERSIST vectors —
+#   predicate inv_pt_no_persist_without_threshold(pt_auth, threshold_met).
+# A page-table manager may exercise AUTH_PERSIST only with threshold approval.
+invariant=INV-PT-NO-PERSIST
+predicate=inv_pt_no_persist_without_threshold
+# persist bit present AND threshold met -> ok
+case=accept | AUTH_PERSIST, 1
+# no persist bit -> ok regardless of threshold
+case=accept | 0, 0
+# persist bit but NO threshold approval -> violation
+case=reject | AUTH_PERSIST, 0
+# persist bit among other bits, no threshold -> violation
+case=reject | 9, 0

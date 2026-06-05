@@ -1,0 +1,6 @@
+checker=fme_memory_encryption_check
+expect=fail
+case=tme_supported_but_disabled_reports_failed
+cpuid7_ecx=0x2000
+tme_activate_lo=0x01
+expected_status=SECST_FAILED

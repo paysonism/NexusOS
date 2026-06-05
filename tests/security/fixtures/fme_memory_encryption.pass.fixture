@@ -1,0 +1,6 @@
+checker=fme_memory_encryption_check
+expect=pass
+case=tme_enabled_reports_active
+cpuid7_ecx=0x2000
+tme_activate_lo=0x03
+expected_status=SECST_ACTIVE

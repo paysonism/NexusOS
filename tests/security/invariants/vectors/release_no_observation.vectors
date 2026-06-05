@@ -1,0 +1,9 @@
+# INV-RELEASE-NO-OBSERVE vectors —
+#   predicate inv_release_no_observation(telemetry_present).
+# A release build must expose no telemetry/observation sink.
+invariant=INV-RELEASE-NO-OBSERVE
+predicate=inv_release_no_observation
+# no telemetry sink in release -> ok
+case=accept | 0
+# telemetry sink present in release -> violation
+case=reject | 1

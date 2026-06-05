@@ -7,6 +7,11 @@ milestones in flight, and what is parked vs. active. Memory files
 under `~/.claude/projects/.../memory/` index into here; do not
 duplicate detail there.
 
+> **New here? Read `docs/TODO-INDEX.md` first.** It maps every TODO/spec/roadmap
+> doc, says which is authoritative for what, snapshots current state, and lists
+> the known false-alarm gotchas (e.g. the stray `worktrees/` guard noise). It
+> exists so the doc sprawl doesn't trip you up.
+
 ---
 
 ## TL;DR
@@ -47,6 +52,15 @@ catalogued in `docs/audit-checklist.md`.
 ---
 
 ## Active focus: GPU-accelerated rendering
+
+> **SUPERSEDED IN PART (2026-05-26).** This section predates the
+> "widely-compatible interfaces only" decision (see MEMORY.md /
+> `deprecated/README.md`). Per-vendor iGPU MMIO bring-up is discontinued, which
+> **retires Tier 2 (DCN flip queue) and Tier 3 (GFX11)** below — they overlap
+> the parked `deprecated/780M_IGPU/` work and are no longer an active goal.
+> Only **Tier 1** survives, because it is vendor-neutral CPU/SMP work (SSE2/AVX2
+> blit, dirty-rect, AP-core offload) that needs no per-vendor MMIO. The current
+> project thrust is zero-asm + beyond-zero-trust security, not GPU rendering.
 
 **Goal:** stop being CPU-bound for redraws. Today every visible
 pixel is `rep movsq` from a backbuffer into the framebuffer, on the
@@ -186,6 +200,34 @@ before an all-core claim.
 on the USB stick, or attach a debugger to DRAM can already replace the whole
 software stack — there is no silicon to stop them, and we do not pretend to.
 A fused, hardware-verified boot chain is a non-goal for this project.
+
+**Refinement (2026-06-04): a one-shot RAM-dump / snapshot attacker is now a
+BEST-EFFORT in-scope goal** (Track 4, `docs/track4-ram-anti-forensic-todo.md`).
+NexusOS is moving to RAM-only / amnesiac operation with three layers:
+  - **Software at-rest encryption** of stored DRAM (FS cache, app blobs, idle slot
+    arenas, kernel secrets) under a per-boot ephemeral key — protects *stored*
+    data; the only software residual is the on-die/cache state and the single
+    granule currently decrypted for use.
+  - **Hardware full-memory encryption when present** (Intel TME / AMD SME —
+    detected + opportunistically used, no-op if absent): the memory controller
+    makes *all* DRAM ciphertext at the DIMM, so even stored `.text` and page
+    tables are AES-XTS ciphertext in a cold-boot / DMA-of-DRAM capture. This is
+    detection + opportunistic enable of a standard architectural feature (like
+    CET/SMAP/KPTI), not per-vendor MMIO bring-up, so it fits the portable stance;
+    a *fused/anchored* boot chain remains the non-goal.
+  - **Leak ≠ elevation** (the load-bearing claim): even if a dump is fully
+    reversed (qrng seed, canary, `l3_slot_key[]`, blob key, files), elevation on a
+    fresh boot must still fail for ≥8 independent reasons — per-boot ephemeral
+    secrets, per-slot keys, heterogeneous syscall numbering, per-slot ASLR, CPI
+    tags, cap-mask HMAC, W^X + nk-monitor, measured boot + blob MAC, KPTI/SMAP,
+    anomaly+strike teardown, default-deny caps, shadow stack (Track 4 Part D).
+
+This does NOT contradict the line above: a **sustained** attacker who reads DRAM
+repeatedly or single-steps the CPU still wins (they read on-die plaintext), and is
+out of scope. Earlier wording said this was "impossible in software" — that
+overstated it: software protects *stored* data and hardware FME extends that to
+all DRAM; only on-die transient state is irreducible. Every claim is bounded by
+Track 4's `pmemsave` test and the Part D planted-leak negative test.
 
 **What IS in scope** (the things a software root of trust can and must
 defend against):
