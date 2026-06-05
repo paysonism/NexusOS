@@ -89,10 +89,14 @@ and simple diagrams. Full SVG is intentionally out of scope.
 
 ### XML (text view)
 
-Any file beginning with `'<?'` that isn't recognised as SVG is shown as
+Any file beginning with '<?' that isn't recognised as SVG is shown as
 plain top-aligned text. Useful as a quick viewer for config files and
-manifests without launching Notepad. No scrolling yet — content past
-the bottom of the client area is clipped (TODO in §6).
+manifests without launching Notepad. Keyboard scrolling is scaffolded
+through the NexusHL Media Player state (`mp_text_scroll_line`) and
+Up/Down/PageUp/PageDown update that requested first visible line for
+XML/text previews. The current kernel-side XML renderer still owns the
+line walk and draw origin; the remaining renderer step is to consume that
+state while drawing.
 
 ## Architecture: where each piece lives
 
@@ -167,6 +171,7 @@ state {
     mp_no_loop: 4;
     mp_seek_to: 4;
     mp_dragging: 4;
+    mp_text_scroll_line: 4;
 }
 
 fn click(win, cx, cy) {

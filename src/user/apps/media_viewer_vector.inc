@@ -2,7 +2,7 @@
 ; §6  Vector codecs — SVG (subset) and XML text view
 ;
 ; Scope (mirrored in docs/media-formats.md):
-;   * XML: rendered as plain top-aligned text. No scrolling (TODO).
+;   * XML: rendered as plain text with keyboard-controlled line scrolling.
 ;   * SVG: static preview. The real NexusHL SVG2 renderer supports the
 ;     wallpaper sources; this asm draw path paints a recognisable dark
 ;     ribbon preview instead of opening SVGs as blank/white text.
@@ -42,6 +42,23 @@ nx_media_blit_xml:
     call nx_media_fill_rect
 
     mov r14, r12                             ; line start cursor
+    mov rax, [r13 + WIN_OFF_APPDATA]         ; slot base
+    mov ecx, [rax + app_hl_media_mp_text_scroll_line - app_blob_start]
+    test ecx, ecx
+    jle .xml_scroll_done
+.xml_scroll_line:
+    cmp byte [r14], 0
+    je .xml_scroll_done
+.xml_scroll_scan:
+    mov al, [r14]
+    test al, al
+    jz .xml_scroll_done
+    inc r14
+    cmp al, 0x0A
+    jne .xml_scroll_scan
+    dec ecx
+    jg .xml_scroll_line
+.xml_scroll_done:
     mov r15d, [r13 + WIN_OFF_Y]
     add r15d, TITLEBAR_HEIGHT + 4            ; current text y
 

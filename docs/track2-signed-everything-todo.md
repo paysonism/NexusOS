@@ -28,17 +28,17 @@ Spec: `docs/signed-artifact-envelope.md`.
 
 ## P0 — complete the envelope
 
-- [ ] The presence bitmask currently encodes the *mandatory* fields; add the
+- [x] The presence bitmask currently encodes the *mandatory* fields; add the
       `TARGET_DEVICE` semantics to `signed_artifact_check` (device / device-class
       match) so cross-device replay is rejected, not just structurally required.
-- [ ] Add a canonical-serialization predicate set so the *signed bytes* are
+- [x] Add a canonical-serialization predicate set so the *signed bytes* are
       unambiguous (tie envelope ↔ `schema_canonical_check`): reject non-minimal
       widths, duplicate TLV ids (already via ordering), and trailing garbage.
-- [ ] Add `security_envelope_payload_region_ok` to assert payload + signature
+- [x] Add `security_envelope_payload_region_ok` to assert payload + signature
       block exactly tile `[header_len, total_len]` with no gaps/overlap.
-- [ ] Add a streaming/bounded verification contract: max envelope size, max
+- [x] Add a streaming/bounded verification contract: max envelope size, max
       field_count (have 64), max payload — all checked before allocation.
-- [ ] Constant-time comparison helper for hash/MAC equality (P1 crypto rule).
+- [x] Constant-time comparison helper for hash/MAC equality (P1 crypto rule).
 
 ## P0 — threshold signing on top of the envelope
 

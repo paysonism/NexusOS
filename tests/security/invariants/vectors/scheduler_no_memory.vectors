@@ -1,0 +1,12 @@
+# INV-SCHED-NO-MEMORY vectors — predicate inv_scheduler_no_memory_grant(auth).
+# The scheduler domain must never hold AUTH_MEMORY_GRANT.
+invariant=INV-SCHED-NO-MEMORY
+predicate=inv_scheduler_no_memory_grant
+# scheduler with no memory-grant authority -> ok
+case=accept | 0
+# scheduler holding other unrelated bits but not MEMORY_GRANT -> ok
+case=accept | AUTH_MINT_IDENTITY
+# scheduler holding AUTH_MEMORY_GRANT -> violation
+case=reject | AUTH_MEMORY_GRANT
+# scheduler holding MEMORY_GRANT among other bits -> still a violation
+case=reject | 5

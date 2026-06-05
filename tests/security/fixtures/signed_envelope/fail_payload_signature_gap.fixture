@@ -1,0 +1,3 @@
+checker=signed_envelope
+expect=fail
+case=envelope payload and signature regions must tile header_len through total_len with no gap

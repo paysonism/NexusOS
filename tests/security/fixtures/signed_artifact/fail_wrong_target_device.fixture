@@ -1,0 +1,3 @@
+checker=signed_artifact_check
+expect=fail
+case=artifact target-device exact binding rejects a different current device id

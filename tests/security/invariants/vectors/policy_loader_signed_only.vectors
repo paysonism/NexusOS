@@ -1,0 +1,9 @@
+# INV-POLICY-SIGNED-ONLY vectors —
+#   predicate inv_policy_loader_signed_only(policy_signed).
+# Policy is installable only if it carries a valid signature.
+invariant=INV-POLICY-SIGNED-ONLY
+predicate=inv_policy_loader_signed_only
+# signed policy -> ok
+case=accept | 1
+# unsigned policy -> violation
+case=reject | 0

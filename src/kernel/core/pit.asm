@@ -6,9 +6,10 @@ bits 64
 
 extern fb_addr, main_loop_stage, main_loop_stage_done, gui_initialized
 extern scr_pitch_q, scr_width, scr_height
-; Per-slot syscall rate-limit token bucket, defined in syscall.asm. Refilled to
-; SC_BUDGET_PER_TICK once per timer tick (security_todo.md §2).
+; Per-slot syscall rate-limit token buckets, defined in syscall_data.nxh.
+; Refilled once per timer tick (security_todo.md §2).
 extern slot_sc_budget
+extern slot_gui_budget
 ; Code-range integrity re-verify (security_todo.md §12), defined in
 ; usermode.asm. Re-hashes each slot's executable code range against its
 ; install-time baseline; panics on mismatch. Called on a tick cadence below.
@@ -206,6 +207,15 @@ pit_handler:
     add rdi, 2
     dec ecx
     jnz .sc_budget_refill
+
+    lea rdi, [rel slot_gui_budget]
+    mov ecx, MAX_WINDOWS
+    mov ax, SC_GUI_BUDGET_PER_TICK
+.sc_gui_budget_refill:
+    mov [rdi], ax
+    add rdi, 2
+    dec ecx
+    jnz .sc_gui_budget_refill
 
     ; App-slot integrity work is only meaningful after the GUI/app slots are
     ; initialized. During the boot splash, PIT IRQs are already enabled for

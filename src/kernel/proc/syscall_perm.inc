@@ -51,7 +51,7 @@ sc_build_allow_bitmap:
     imul eax, eax, SC_ALLOW_BYTES
     lea r11, [rel slot_syscall_allow]
     add r11, rax
-    mov r10b, sil                       ; r10b = cap_mask (sil dies in pass 2 setup)
+    movzx r10d, si                      ; r10w = 16-bit cap_mask (si dies in pass 2 setup)
     ; Pass 0: clear the slot's bitmap bytes.
     xor ecx, ecx
 .sba_zero:
@@ -67,10 +67,10 @@ sc_build_allow_bitmap:
 .sba_set:
     cmp ecx, syscall_table_count
     jae .sba_set_done
-    movzx eax, byte [rbx + SYSCALL_CAP_OFF]   ; row.cap
-    mov r8b, al
-    and r8b, r10b                       ; row.cap & mask
-    cmp r8b, al
+    movzx eax, word [rbx + SYSCALL_CAP_OFF]   ; row.cap (16-bit)
+    mov r8d, eax
+    and r8d, r10d                       ; row.cap & mask (16-bit)
+    cmp r8d, eax
     jne .sba_set_next                   ; not fully covered -> leave bit clear
     ; set bit ecx: byte = ecx>>3, bit = ecx&7
     mov eax, ecx
@@ -453,7 +453,7 @@ FN_BEGIN kernel_apply_app_manifest, 2, SC_KIND2(FN_KIND_SCALAR, FN_KIND_SCALAR),
     push rsi                          ; stash original app_id for the audit record
     sub rsi, APP_MIN_ID
     lea rcx, [rel app_manifest_table]
-    movzx esi, byte [rcx + rsi]       ; new mask = manifest(app_id)
+    movzx esi, word [rcx + rsi*2]     ; new mask = manifest(app_id) (16-bit, dw table)
     ; Audit this capability transition (security_todo.md §4) before persisting.
     ; cap_audit_log(dil=slot, sil=old, dl=new, cl=reason, r8d=app_id); it
     ; preserves all caller regs, so rdi (slot) and rsi (new mask) survive.
@@ -504,18 +504,19 @@ section .data
 ; app_id -> capability mask. Indexed by (app_id - APP_MIN_ID). Keep in sync
 ; with the MANIFEST_* defines in syscall_caps.inc; the indirection here keeps
 ; the table dense and lets the dispatcher resolve a manifest in one load.
+; 16-bit entries (dw) since the cap mask widened to 2 bytes for the CAP_FS split.
 align 8
 app_manifest_table:
-    db MANIFEST_EXPLORER                ; APP_EXPLORER         (2)
-    db MANIFEST_TERMINAL                ; APP_TERMINAL         (3)
-    db MANIFEST_NOTEPAD                 ; APP_NOTEPAD          (4)
-    db MANIFEST_SETTINGS                ; APP_SETTINGS         (5)
-    db MANIFEST_PAINT                   ; APP_PAINT            (6)
-    db MANIFEST_ABOUT                   ; APP_ABOUT            (7)
-    db MANIFEST_SECURITY_PROBE          ; APP_SECURITY_PROBE   (8)
-    db MANIFEST_TASKMGR                 ; APP_TASKMGR          (9)
-    db MANIFEST_PING                    ; APP_PING            (10)
-    db MANIFEST_MEDIA                   ; APP_MEDIA           (11)
+    dw MANIFEST_EXPLORER                ; APP_EXPLORER         (2)
+    dw MANIFEST_TERMINAL                ; APP_TERMINAL         (3)
+    dw MANIFEST_NOTEPAD                 ; APP_NOTEPAD          (4)
+    dw MANIFEST_SETTINGS                ; APP_SETTINGS         (5)
+    dw MANIFEST_PAINT                   ; APP_PAINT            (6)
+    dw MANIFEST_ABOUT                   ; APP_ABOUT            (7)
+    dw MANIFEST_SECURITY_PROBE          ; APP_SECURITY_PROBE   (8)
+    dw MANIFEST_TASKMGR                 ; APP_TASKMGR          (9)
+    dw MANIFEST_PING                    ; APP_PING            (10)
+    dw MANIFEST_MEDIA                   ; APP_MEDIA           (11)
 
 ; Per-app syscall deny lists (security_todo.md §2). Each list is a run of
 ; syscall numbers terminated by SC_DENY_LIST_END (0xFF); sc_build_allow_bitmap

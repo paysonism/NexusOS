@@ -15,6 +15,7 @@ $SecurityModuleDir = Join-Path $Root 'src\tools\security'
 
 $ExpectedSecurityModules = @(
     'compatibility_check.nxh',
+    'fme_memory_encryption_check.nxh',
     'invariant_check.nxh',
     'no_asm_guard.nxh',
     'policy_graph_check.nxh',

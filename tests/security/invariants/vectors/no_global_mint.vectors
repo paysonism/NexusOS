@@ -1,0 +1,12 @@
+# INV-NO-GLOBAL-MINT vectors —
+#   predicate inv_requires_threshold(domain_auth, sensitive_bit, threshold_met).
+# Sensitive bit is AUTH_GLOBAL. A domain holding GLOBAL is only valid WITH
+# threshold approval; holding it alone (no threshold) is a violation.
+invariant=INV-NO-GLOBAL-MINT
+predicate=inv_requires_threshold
+# holds AUTH_GLOBAL and threshold met -> ok
+case=accept | AUTH_GLOBAL, AUTH_GLOBAL, 1
+# does not hold AUTH_GLOBAL at all -> vacuously ok regardless of threshold
+case=accept | 0, AUTH_GLOBAL, 0
+# holds AUTH_GLOBAL but NO threshold approval -> single-domain global mint
+case=reject | AUTH_GLOBAL, AUTH_GLOBAL, 0

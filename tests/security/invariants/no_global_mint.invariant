@@ -4,4 +4,4 @@ statement=Global/root authority requires threshold approval; no domain holds it 
 compromised=any single domain
 denied_authority=AUTH_GLOBAL without threshold approval
 predicate=inv_requires_threshold
-status=modeled
+status=proven

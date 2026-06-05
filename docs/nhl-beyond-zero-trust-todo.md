@@ -1,5 +1,9 @@
 # NHL Beyond-Zero-Trust TODO
 
+> **Map of all docs: `docs/TODO-INDEX.md` (read it first).** This master list
+> LAGS the `trackN-*.md` docs where they overlap — on a conflict the track doc
+> wins. See TODO-INDEX for the authority hierarchy and current state.
+
 This is the master TODO for the new NHL-only security architecture. "NHL" here
 means NexusHL/NexusHLK source and toolchain work only. This plan intentionally
 does not accept new `.asm`, `.inc`, generated assembly include files, or inline
@@ -17,10 +21,18 @@ Per-track working plans (with their own granular TODOs and verified increments):
 - `docs/track1-repo-enforcement-todo.md` — P0 repository enforcement.
 - `docs/track2-signed-everything-todo.md` — P0 signed-everything keystone.
 - `docs/track3-sel4-validity-todo.md` — P2 seL4 validity / invariants.
+- `docs/track4-ram-anti-forensic-todo.md` — RAM-only / amnesiac execution +
+  best-effort anti-forensic memory (threat-model expansion: snapshot/RAM-dump
+  attacker, with the irreducible software residual documented).
 
 Single verification entry point for all of the above:
 `scripts/test/test_nhl_security_guards.ps1` (privacy + no-asm + inventory +
 policy-module compile + checker fixtures + seL4 invariants).
+
+The "Extended Hardening" sections at the bottom of this file capture work that
+goes *beyond* the original program (toolchain trust, proof depth, TCB reduction,
+transparency/attestation, crypto agility/PQC, side-channel, continuous assurance,
+data-at-rest). They are not yet split into their own track docs.
 
 ## Global Non-Negotiables
 
@@ -531,6 +543,136 @@ policy-module compile + checker fixtures + seL4 invariants).
 - [x] Add a single verification entry point for the trusted NHL path.
 - [x] Add clear output that separates legacy migration debt from trusted-path
       failures.
+
+## Extended Hardening (Beyond The Original Program)
+
+Additions that push past the original tracks. Grouped by theme; priority noted
+per section. None started unless marked.
+
+### P0/P1: Toolchain Trust (defeat "trusting trust")
+The whole posture assumes the compiler and build tools are honest; nothing yet
+verifies that. Largest unaddressed surface.
+
+- [ ] Bootstrappable build: compile the NHL toolchain from a minimal auditable
+      seed so a backdoored binary compiler cannot silently persist.
+- [ ] Diverse double-compilation (DDC): build via two independent toolchains/
+      paths and prove the outputs converge.
+- [ ] Bit-for-bit reproducible full images a third party can independently
+      rebuild and confirm against a published digest (extend the A/B ORG passes).
+- [ ] Pin + hash every build input (the assembler, the NHL toolchain
+      interpreter, build scripts); verify before use.
+- [ ] Emit a machine-readable SBOM for the OS image.
+- [ ] Proof-carrying codegen / translation validation: prove emitted NASM
+      preserves NHL source semantics for security-critical modules.
+
+### P2: Proof Depth (beyond authority-bitmask invariants)
+- [ ] Non-interference / information-flow proof: no data flows between app slots
+      except through an explicit shared handle (proven, not modeled).
+- [ ] Constant-time verification as a CI gate over secret-handling asm
+      (kernel_canary, l3_slot_key[], blob-signing key, HMAC paths) — make CT a
+      checked property, not a hand-applied one.
+- [ ] Bounded model-check the syscall dispatch state machine for any path that
+      dispatches without all gates (cap -> allowlist -> rate -> validate -> perm).
+- [ ] Mutation-test the security regression suite: prove it fails when a
+      mitigation is broken.
+
+### P1: TCB Reduction / True Partitioning
+- [ ] Privilege-separate drivers / net / fs into ring-3 partitions with
+      capability IPC (not ambient kernel calls).
+- [ ] Measure and publish the TCB size; CI fails on TCB growth.
+- [ ] User-space reference monitor for policy decisions, outside the monolith.
+
+### P1: Transparency & Attestation
+- [ ] Binary transparency log (append-only Merkle / Rekor-style) for releases.
+- [ ] Remote attestation protocol over mb_digest: nonce challenge -> signed quote.
+- [ ] Hash-chain the cap_audit_ring so the §4 capability-transition log is
+      tamper-evident (cannot be silently truncated/rewritten).
+
+### P1: Crypto Agility & Post-Quantum
+- [ ] PQC artifact-signature option (SPHINCS+ / ML-DSA) in the signed envelope —
+      leverages the existing quantum entropy seed (qrng_seed).
+- [ ] Key hierarchy + rotation + forward secrecy; per-boot ephemeral keys.
+- [ ] Threshold / Shamir-split signing keys (key material never fully assembled).
+- [ ] RNG health checks before every key/nonce draw (enforce the P1 rule on
+      kernel_canary_init / l3_boot_nonce).
+
+### P1: Side-Channel & Micro-Architectural
+- [ ] Audit every indirect branch for Spectre-v2 coverage (prove the lfence set
+      is complete); consider retpoline-style thunks.
+- [ ] Cross-slot cache/timing isolation (flush or partition on slot switch).
+- [ ] SSB / MDS mitigations where portable.
+- [ ] Timer-driven ASLR re-randomization (shrink the leak-then-exploit window).
+
+### P1: Continuous Adversarial Assurance
+- [ ] Coverage-guided fuzzing of the envelope decoder, policy parser, syscall
+      validators, and XML/SVG parsers, wired into CI (not one-shot).
+- [ ] Symbolic execution of sc_validate_from_table and the path canonicalizer.
+- [ ] One fail-closed PoC per landed mitigation in -SecurityRegression.
+
+### P1: Data-at-Rest & Secret Hygiene
+- [ ] Per-install keyed FS encryption (l3_slot_key) so a copied DATA.IMG is not
+      plaintext (within the non-physical threat model).
+- [ ] Zeroize transient secrets after use everywhere (HMAC scratch, key
+      derivation buffers, decrypted pages).
+- [ ] Secure-delete semantics for the FS.
+- See `docs/track4-ram-anti-forensic-todo.md` for the in-RAM (not at-rest)
+  variant of this work.
+
+### P1: Hardware Memory Encryption (opportunistic — detect + enable, no-op if absent)
+Transparent memory-controller AES so a cold-boot / physical-DIMM / DMA-of-DRAM
+capture is ciphertext. Same scaffold pattern as CET/SMAP/KPTI (detect always
+compiled, enable gated, status via SYS_SYSINFO). Full detail + MSR/CPUID specifics
+in `docs/track4-ram-anti-forensic-todo.md` Part C.
+
+- [x] **Intel TME** detect (CPUID.7.0.ECX[13]; IA32_TME_ACTIVATE MSR 0x982 bit 1
+      = enabled / bit 0 = locked) — OS detects + asserts (BIOS enables+locks).
+- [ ] **Intel TME-MK** per-KeyID separation → maps onto the per-slot key model.
+- [~] **AMD SME** detect (CPUID 0x8000001F EAX[0]; C-bit = EBX[5:0]; enable via
+      SYSCFG MSR 0xC0010010 bit 23) + opportunistic per-page C-bit on
+      kernel-secret / slot / FS-cache pages.
+- [ ] **AMD SEV / SEV-ES / SEV-SNP** + **Intel TDX** detect — confidential-VM
+      tier; only if NexusOS runs as a guest or hosts VMs. Decide whether to target
+      running as a confidential guest (cheapest path to true whole-memory opacity
+      on cloud hardware).
+- [x] Caveat doc: QEMU TCG does NOT emulate TME/SME — verifiable only on real
+      silicon (or KVM+SEV); the software at-rest layer is what TCG `pmemsave` tests.
+
+### P0/P1: Kill-Chain Defense (make iOS-class chains unreachable AND unusable)
+Canonical design + per-stage matrix in `docs/architecture-defense-in-depth.md`.
+Core invariant: every kill-chain stage is gated by a DIFFERENT, smaller, lower
+component the attacker has not compromised and cannot reach. Stratify enforcers so
+compromise of stage N yields nothing for N+1.
+
+Stage gates to build (net-new beyond today's software floor):
+- [ ] **User-space drivers**: move drivers out of the kernel into sandboxed
+      processes with default-deny caps (drivers are in-kernel today). A driver
+      holds NO direct I/O / kernel R/W.
+- [ ] **Safe-proxy reference-monitor layer**: a driver/app reaches I/O, kernel
+      R/W, or the monitor ONLY via a capability-bound request to a minimal proxy
+      that re-derives authority from the CALLER's identity (no confused deputy).
+- [ ] **One-shot ephemeral parser workers**: every untrusted-input decode
+      (image/font/XML/SVG/packet) runs in a fresh near-zero-authority worker
+      killed after one operation (kills the long-lived-daemon corruption class).
+- [ ] **Opportunistic separation-monitor / hypervisor tier** above the always-on
+      nk_monitor floor: VT-x/AMD-V + IOMMU when present for raw memory/IO/DMA
+      gating; nk_monitor + mmio_bounds.inc when absent (detect+enable pattern).
+- [ ] **Monitor-checked attested request trail**: privileged actions carry a
+      provenance chain the monitor re-validates; a subverted kernel partition
+      cannot forge it (it lacks the monitor key), so its grant is refused.
+- [ ] **Threshold authority for dangerous runtime ops** (make-page-executable,
+      grant-DMA, load-policy): no single partition authorizes — runtime
+      co-approval (Track 2 threshold applied to operations, not just artifacts).
+- [ ] **Information-flow labels**: no flow from a secret region to an exfil sink
+      without a declassifier (extends the Track 3 non-interference invariant).
+- [ ] **Shared-memory attested descriptor rings** for hot driver paths (validate
+      the batch once; session-bound MACs after one-time setup; no per-op crypto)
+      so the user-space-driver model keeps NIC/xHCI/framebuffer throughput.
+- [ ] **Quarantine-and-restart** (MINIX-3-style) for any failed/over-budget/
+      crashed component, with recovery authority in a separate partition, so
+      fail-closed never means system-wedged.
+- [ ] **Per-stage negative tests**: for each kill-chain row, a test that performs
+      the stage-N compromise and proves stage N+1 is still independently blocked
+      (the concrete proof that the chain cannot progress).
 
 ## Done Definition For This Program
 

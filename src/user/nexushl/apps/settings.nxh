@@ -63,6 +63,7 @@ const SEC_SI_DEBUG   = 200
 const SEC_SI_COUNT   = 201
 const SEC_SI_ANYFAIL = 202
 const SEC_SI_READY   = 203
+const SEC_SI_FME_MODE = 204
 const SEC_SI_FEAT0   = 210
 
 # Per-feature status codes (mirror security_status.asm).
@@ -71,6 +72,9 @@ const SECST_ACTIVE   = 1
 const SECST_SOFTWARE = 2
 const SECST_UNSUPP   = 3
 const SECST_FAILED   = 4
+const SEC_FME_MODE_NONE = 0
+const SEC_FME_MODE_TME  = 1
+const SEC_FME_MODE_SME  = 2
 
 # --- fbperf selectors used by the Debug tab ----------------------------------
 const FB_SI_FLIPS_TOTAL  = 100
@@ -159,6 +163,9 @@ str st_software   = "Software";
 str st_unsupp     = "No HW";
 str st_failed     = "FAILED";
 str st_off        = "Off";
+str st_tme_on     = "TME on";
+str st_sme_on     = "SME on";
+str st_sw_only    = "SW only";
 str sf0           = "SMEP / SMAP";
 str sf1           = "CET shadow stack";
 str sf2           = "Page-table isolation";
@@ -169,6 +176,8 @@ str sf6           = "Page-table monitor";
 str sf7           = "Measured boot";
 str sf8           = "Read-only kernel";
 str sf9           = "Signed app blob";
+str sf10          = "RAM encryption";
+str sf11          = "Confidential guest";
 str sf_unknown    = "Feature";
 
 # Debug tab strings.
@@ -560,6 +569,8 @@ fn sec_feat_name(i) {
     if i == 7 { return &sf7; }
     if i == 8 { return &sf8; }
     if i == 9 { return &sf9; }
+    if i == 10 { return &sf10; }
+    if i == 11 { return &sf11; }
     return &sf_unknown;
 }
 
@@ -569,6 +580,16 @@ fn sec_status_text(code) {
     if code == SECST_UNSUPP   { return &st_unsupp; }
     if code == SECST_FAILED   { return &st_failed; }
     return &st_off;
+}
+
+fn sec_feature_status_text(i, code) {
+    if i == 10 {
+        let mode = sec_si(SEC_SI_FME_MODE);
+        if mode == SEC_FME_MODE_TME { return &st_tme_on; }
+        if mode == SEC_FME_MODE_SME { return &st_sme_on; }
+        if code == SECST_SOFTWARE { return &st_sw_only; }
+    }
+    return sec_status_text(code);
 }
 
 fn sec_status_color(code) {
@@ -608,7 +629,7 @@ fn draw_security(win) {
         ui_text_at(win, PAD, y + 2, sec_feat_name(i), UI_COL_TEXT, UI_COL_BG_BASE);
         let col = sec_status_color(code);
         ui_rect_at(win, pill_x, y, PILL_W, 16, col);
-        ui_text_at(win, pill_x + 6, y + 2, sec_status_text(code), UI_COL_TEXT_INVERT, col);
+        ui_text_at(win, pill_x + 6, y + 2, sec_feature_status_text(i, code), UI_COL_TEXT_INVERT, col);
         y = y + SEC_ROW_H;
         i = i + 1;
     }

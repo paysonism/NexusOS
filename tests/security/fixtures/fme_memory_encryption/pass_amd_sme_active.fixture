@@ -1,0 +1,6 @@
+checker=fme_memory_encryption_check
+expect=pass
+case=amd_sme_enabled_reports_active
+cpuid_8000001f_eax=0x01
+msr_amd64_syscfg_lo=0x800000
+expected_status=SECST_ACTIVE

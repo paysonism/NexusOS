@@ -10,6 +10,7 @@ $ExpectedCheckers = @(
     'signed_artifact_check',
     'signed_envelope',
     'policy_graph_check',
+    'fme_memory_encryption_check',
     'threshold_check',
     'schema_canonical_check',
     'revocation_check',
