@@ -53,6 +53,10 @@ DIR_ENTRY_SIZE      equ 32
 ; Layout per slot: name+ext[11] | first_cluster_lo (u16) | size (u32) = 17 bytes.
 FAT16_SNAP_STRIDE   equ 17
 
+; Per-slot cwd ownership sentinel for fat16_cache_owner (see the BSS block):
+; "no slot owns the live cache" — forces the next FS syscall to re-materialize.
+FAT16_CACHE_OWNER_NONE equ 0xFFFFFFFF
+
 ; Attributes
 ATTR_READ_ONLY      equ 0x01
 ATTR_HIDDEN         equ 0x02
@@ -1388,6 +1392,12 @@ FN_BEGIN fat16_change_dir, 0, 0, FN_RET_SCALAR
     xor eax, eax
 
 .cd_done:
+    ; The live cache no longer matches any slot's recorded view: this raw load
+    ; may have come from the launcher/shell (kernel context, no valid slot) or
+    ; from fat16_switch_to/.sc_fs_chdir which re-stamp ownership themselves.
+    ; Invalidate here so a non-syscall reload always forces the next ring-3 FS
+    ; syscall to re-materialize its own cwd.
+    mov dword [rel fat16_cache_owner], FAT16_CACHE_OWNER_NONE
     pop r11
     pop r10
 
@@ -1403,6 +1413,40 @@ FN_BEGIN fat16_change_dir, 0, 0, FN_RET_SCALAR
 .cd_fail:
     mov eax, -1
     jmp .cd_done
+
+; ----------------------------------------------------------------------------
+; fat16_switch_to — ensure FAT16_ROOT_CACHE holds the calling slot's (r15) cwd.
+; No-op when the slot already owns the live cache. Otherwise reloads the slot's
+; recorded cwd cluster via fat16_change_dir and claims ownership. Preserves ALL
+; caller registers (called as the first instruction of every FS syscall
+; handler, where r15 = the calling slot).
+;
+; Internal plain label (no FN_BEGIN / not global) — like the FS internal
+; helpers, so check_coverage.py requires no FN gate.
+; ----------------------------------------------------------------------------
+global fat16_switch_to
+fat16_switch_to:
+    push rax
+    push rcx
+    movzx ecx, r15b
+    cmp ecx, APP_SLOT_COUNT
+    jae .fsw_slot0                      ; out-of-range -> treat as slot 0
+    jmp .fsw_have_slot
+.fsw_slot0:
+    xor ecx, ecx
+.fsw_have_slot:
+    cmp [rel fat16_cache_owner], ecx
+    je .fsw_ret                         ; this slot already owns the live cache
+    ; Reload the slot's recorded cwd cluster into the live cache.
+    movzx eax, word [rel fat16_slot_cwd + rcx*2]
+    push rcx
+    call fat16_change_dir               ; ax = cluster; sets owner = NONE
+    pop rcx
+    mov [rel fat16_cache_owner], ecx    ; claim ownership for this slot
+.fsw_ret:
+    pop rcx
+    pop rax
+    ret
 
 ; ============================================================================
 ; fat16_get_file_size - Get file size from directory entry
@@ -1448,23 +1492,19 @@ FN_BEGIN fat16_sync_root, 0, 0, FN_RET_SCALAR
 ; before (non-breaking). The 17-byte identity = name[11] | cluster[2] |
 ; size[4].
 ;
-; DISPATCHER WIRING (deferred — syscall.asm is owned by another change):
-;   * In .sc_fs_entry_info, AFTER sc_resolve_dir_entry_arg succeeds and RDI
-;     holds the kernel entry pointer:
-;         mov   esi, r15d            ; slot id
-;         mov   rdi, <kernel entry>  ; (already in RDI before the copy-out)
-;         call  fat16_entry_info_snapshot
-;   * In .sc_fs_read, AFTER sc_resolve_dir_entry_arg rewrites RDI to the kernel
-;     entry pointer and BEFORE fat16_read_file:
-;         mov   esi, r15d
-;         ; RDI = kernel entry ptr
-;         call  fat16_entry_snapshot_verify
-;         test  eax, eax
-;         jz    .sc_fs_read_reject
-;   Both register conventions below are chosen to drop straight into those two
-;   sites (RDI = entry ptr, ESI = slot) without disturbing the surrounding
-;   saved-arg frame. Until the wiring lands, the snapshot is never armed, so
-;   reads behave exactly as today.
+; DISPATCHER WIRING (LANDED — now live):
+;   * .sc_fs_entry_info (syscall_handlers_sys_fs.inc) arms the snapshot AFTER
+;     sc_resolve_dir_entry_arg succeeds: push rsi / mov esi,r15d /
+;     call fat16_entry_info_snapshot / pop rsi (RDI = entry, preserved).
+;   * .sc_fs_read (syscall_handlers_gui_wm.inc) verifies AFTER the resolve +
+;     range check and BEFORE fat16_read_file: mov esi,r15d /
+;     call fat16_entry_snapshot_verify / test eax,eax / jz .sc_fs_read_reject.
+;   * l3_copy_app_blob_to_slot (usermode_slot_install.inc) calls
+;     fat16_entry_snapshot_clear on slot recycle so a new tenant is never
+;     checked against the prior tenant's identity.
+;   Register conventions below (RDI = entry ptr, ESI = slot) were chosen to drop
+;   straight into those sites without disturbing the saved-arg frame. A slot that
+;   never calls SYS_FS_ENTRY_INFO is never armed, so reads behave as before.
 ; ============================================================================
 
 ; fat16_entry_info_snapshot — capture the identity of a resolved dir entry.
@@ -1732,3 +1772,19 @@ alignb 16
 fat16_entry_snap_armed: resb APP_SLOT_COUNT
 alignb 16
 fat16_entry_snap:       resb (FAT16_SNAP_STRIDE * APP_SLOT_COUNT)
+
+; --- Per-slot current directory (security: cwd + dir-cache view is per slot) -
+; The directory cache (FAT16_ROOT_CACHE) holds the entries a DIR_ENTRY handle's
+; index payload refers to. With a single global cwd, one app's chdir reloads
+; that cache out from under another app, so an index issued to app A would
+; silently mean a different file once app B navigated away. Each slot now owns
+; a cwd cluster; fat16_switch_to reloads the live cache to the calling slot's
+; cwd whenever ownership differs, making dir-entry handle identities stable
+; per slot. BSS-zero default = cluster 0 = root, matching the boot cache load.
+fat16_slot_cwd:   resw APP_SLOT_COUNT          ; per-slot current-dir cluster
+alignb 4
+; Slot whose directory is currently materialized in FAT16_ROOT_CACHE.
+; BSS-zero = slot 0 (which owns the root cache loaded by fat16_init).
+; fat16_change_dir stamps FAT16_CACHE_OWNER_NONE here so any raw (launcher /
+; shell, non-syscall) reload forces the next syscall to re-materialize.
+fat16_cache_owner: resd 1

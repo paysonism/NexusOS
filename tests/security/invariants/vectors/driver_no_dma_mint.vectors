@@ -1,0 +1,13 @@
+# INV-DRIVER-NO-DMA-MINT vectors —
+#   predicate inv_driver_no_dma_mint(driver_auth, dma_grant_present).
+# A driver may exercise AUTH_DMA_MAP only via an explicit DMA grant.
+invariant=INV-DRIVER-NO-DMA-MINT
+predicate=inv_driver_no_dma_mint
+# DMA bit present AND an explicit grant present -> ok
+case=accept | AUTH_DMA_MAP, 1
+# no DMA bit at all -> ok regardless of grant
+case=accept | 0, 0
+# DMA bit set but NO grant -> self-minted DMA, violation
+case=reject | AUTH_DMA_MAP, 0
+# DMA bit among other bits, still no grant -> violation
+case=reject | 5, 0

@@ -21,7 +21,9 @@ DNS_PORT        equ 53
 DNS_SRC_PORT    equ 49153
 DNS_PORT_NET    equ 0x3500
 DNS_SRC_PORT_NET equ 0x01C0
-DNS_MAX_NAME    equ 253
+DNS_MAX_WIRE_NAME         equ 255
+DNS_MAX_PRESENTATION_NAME equ 253
+DNS_MAX_NAME              equ DNS_MAX_PRESENTATION_NAME
 DNS_QUERY_CAP   equ 512
 
 ; Per-slot destination policy (security_todo.md §7). Provides
@@ -44,7 +46,7 @@ net_dns_query_a:
     mov [rel net_dns_name_ptr], rdi
 
     ; Kill switch: reject pathological host names BEFORE touching the wire.
-    ; Fail closed (return 0) on a name over DNS_MAX_NAME (253) bytes or
+    ; Fail closed (return 0) on a presentation name over DNS_MAX_NAME (253) bytes or
     ; containing any non-LDH byte (anything outside letters/digits/hyphen/dot).
     ; net_dns_build_query enforces the same rules per label, but this explicit
     ; up-front gate keeps the policy auditable in one place and guarantees no
@@ -102,9 +104,11 @@ net_dns_query_a:
     ret
 
 ; RDI = hostname C-string. Returns EAX=1 if the name is acceptable, 0 if it is
-; over DNS_MAX_NAME bytes, empty/NULL, or contains a non-LDH byte. Pure scan —
-; no wire I/O. LDH = letters (A-Z/a-z), digits (0-9), hyphen, plus the label
-; separator dot. Fails closed.
+; over DNS_MAX_PRESENTATION_NAME bytes, empty/NULL, or contains a non-LDH byte.
+; Pure scan - no wire I/O. LDH = letters (A-Z/a-z), digits (0-9), hyphen, plus
+; the label separator dot. A 253-byte presentation name encodes to the DNS
+; wire-format maximum of 255 octets including label-length bytes and root zero.
+; Fails closed.
 net_dns_validate_name:
     push rcx
     push rdi

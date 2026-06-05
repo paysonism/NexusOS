@@ -27,21 +27,21 @@
 ; CURRENT-SLOT CONTEXT (deferred dispatcher wiring)
 ; --------------------------------------------------------------------------
 ; Enforcement must know which slot is making the call. The syscall dispatcher
-; already holds that in r15, but syscall.asm is owned by another change, so the
-; one-line wiring is DEFERRED here per repo convention (land the primitive,
-; defer the contended-dispatcher edit). The hook the dispatcher must add, once,
-; on the .sc_net_* paths (and ideally generally on entry):
+; holds that in r15; the wiring is now LANDED — both enforced net paths publish
+; the calling slot before invoking the gated function:
 ;
 ;       mov   [rel sec_net_active_slot], r15b
 ;
-; Likewise a manifest-setter syscall (e.g. SYS_NET_SET_POLICY) would call
-; sec_net_set_port_range / sec_net_set_suffix below; that also lives in the
-; contended dispatcher and is deferred. Until both land, sec_net_active_slot
-; reads its BSS-zero default (slot 0) and every slot's policy is the
-; no-restriction default, so the net paths behave exactly as before — the gate
-; is inert but present, ready to enforce the instant the slot is wired and a
-; policy is declared. The KERNEL-SIDE primitives (storage + setters + the two
-; enforcement checks) all land here and in dns.asm/tcp.asm.
+; at the top of .sc_net_tcp_connect4 (→ net_tcp_connect_ipv4 port check) and
+; .sc_net_dns_a (→ net_dns_query_a suffix check) in
+; syscall_handlers_wx_net.inc. STILL DEFERRED: a manifest-setter syscall (e.g.
+; SYS_NET_SET_POLICY) that calls sec_net_set_port_range / sec_net_set_suffix to
+; declare a slot's policy — until that lands, no slot has an active policy, so
+; sec_net_active_slot is now set correctly but every slot's policy is still the
+; BSS-zero no-restriction default and the net paths behave exactly as before.
+; The gate is wired and inert, ready to enforce the instant a policy is declared.
+; The KERNEL-SIDE primitives (storage + setters + the two enforcement checks)
+; all land here and in dns.asm/tcp.asm.
 ; ============================================================================
 
 %ifndef NET_SLOT_POLICY_INC
@@ -59,9 +59,9 @@ SEC_NET_POLICY_SUFFIX  equ 0x02   ; DNS-suffix allowlist active for this slot
 SEC_NET_SUFFIX_MAX     equ 63
 SEC_NET_SUFFIX_STRIDE  equ (SEC_NET_SUFFIX_MAX + 1)   ; 64, NUL-terminated slot
 
-; Upper bound on a hostname scan (matches dns.asm's DNS_MAX_NAME). Defined here
-; (guarded) so this include is self-contained whether pulled by dns.asm (which
-; also defines DNS_MAX_NAME = 253) or tcp.asm (which does not).
+; Upper bound on a hostname presentation scan (matches dns.asm's DNS_MAX_NAME).
+; Defined here (guarded) so this include is self-contained whether pulled by
+; dns.asm (which also defines DNS_MAX_NAME = 253) or tcp.asm (which does not).
 %ifndef DNS_MAX_NAME
 DNS_MAX_NAME    equ 253
 %endif

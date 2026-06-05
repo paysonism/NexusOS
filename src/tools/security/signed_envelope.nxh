@@ -28,8 +28,15 @@ module "security_signed_envelope";
 global security_envelope_magic_ok;
 global security_envelope_field_order_ok;
 global security_envelope_offset_ok;
+global security_envelope_canonical_u32_ok;
+global security_envelope_tlv_canonical_ok;
+global security_envelope_payload_region_ok;
+global security_envelope_stream_bounds_ok;
+global security_envelope_ct_equal4;
+global security_envelope_ct_equal8;
 global security_envelope_required_present;
 global security_envelope_accept;
+global security_envelope_accept_checked;
 
 const ENVELOPE_SCHEMA_VERSION = 1;
 
@@ -78,6 +85,10 @@ const REQUIRED_RUNNABLE = 8191;
 
 const MIN_FIELDS = 12;
 const MAX_FIELDS = 64;
+const MIN_ENVELOPE_HEADER_LEN = 14;
+const MAX_ENVELOPE_TOTAL_LEN = 16777216;
+const MAX_ENVELOPE_PAYLOAD_LEN = 8388608;
+const MAX_ENVELOPE_SIGNATURE_LEN = 4096;
 
 fn security_envelope_magic_ok(b0, b1, b2, b3) {
     if b0 != MAGIC_N { return 0; }
@@ -105,6 +116,86 @@ fn security_envelope_offset_ok(field_off, field_len, header_len, total_len) {
     if field_len > total_len { return 0; }
     if field_off + field_len > total_len { return 0; }
     return 1;
+}
+
+# Canonical scalar encoding for envelope TLV ids, lengths, and u32 values.
+# Widths must be minimal; wider encodings of small values are rejected.
+fn security_envelope_canonical_u32_ok(encoded_width, value) {
+    if encoded_width == 1 {
+        if value <= 255 { return 1; }
+        return 0;
+    }
+    if encoded_width == 2 {
+        if value <= 255 { return 0; }
+        if value <= 65535 { return 1; }
+        return 0;
+    }
+    if encoded_width == 4 {
+        if value <= 65535 { return 0; }
+        return 1;
+    }
+    return 0;
+}
+
+# Per-TLV canonicality summary: caller supplies decoded scalar widths and the
+# strict-order check. This ties the envelope contract to canonical serialization
+# without making the byte walker part of this policy kernel.
+fn security_envelope_tlv_canonical_ok(prev_id, field_id, id_width, len_width, field_len) {
+    if security_envelope_field_order_ok(prev_id, field_id) == 0 { return 0; }
+    if security_envelope_canonical_u32_ok(id_width, field_id) == 0 { return 0; }
+    if security_envelope_canonical_u32_ok(len_width, field_len) == 0 { return 0; }
+    return 1;
+}
+
+# Payload and detached signature must exactly tile [header_len,total_len] with no
+# gap, no overlap, and no arithmetic overflow.
+fn security_envelope_payload_region_ok(header_len, payload_len, signature_len, total_len) {
+    if header_len < MIN_ENVELOPE_HEADER_LEN { return 0; }
+    if header_len > total_len { return 0; }
+    if payload_len > MAX_ENVELOPE_PAYLOAD_LEN { return 0; }
+    if signature_len == 0 { return 0; }
+    if signature_len > MAX_ENVELOPE_SIGNATURE_LEN { return 0; }
+    if payload_len > total_len { return 0; }
+    if signature_len > total_len { return 0; }
+    if header_len + payload_len > total_len { return 0; }
+    if header_len + payload_len + signature_len != total_len { return 0; }
+    return 1;
+}
+
+# Streaming readers must check all public bounds before allocation or traversal.
+fn security_envelope_stream_bounds_ok(total_len, header_len, field_count, payload_len, signature_len) {
+    if total_len < MIN_ENVELOPE_HEADER_LEN { return 0; }
+    if total_len > MAX_ENVELOPE_TOTAL_LEN { return 0; }
+    if field_count < MIN_FIELDS { return 0; }
+    if field_count > MAX_FIELDS { return 0; }
+    if security_envelope_payload_region_ok(header_len, payload_len, signature_len, total_len) == 0 { return 0; }
+    return 1;
+}
+
+# Constant-control-flow equality helpers for decoded hash/MAC words. The caller
+# still owns byte loading; these helpers avoid early return on secret mismatch.
+fn security_envelope_ct_equal4(a0, a1, a2, a3, b0, b1, b2, b3) {
+    let diff = 0;
+    if a0 != b0 { diff = diff | 1; }
+    if a1 != b1 { diff = diff | 1; }
+    if a2 != b2 { diff = diff | 1; }
+    if a3 != b3 { diff = diff | 1; }
+    if diff == 0 { return 1; }
+    return 0;
+}
+
+fn security_envelope_ct_equal8(a0, a1, a2, a3, a4, a5, a6, a7, b0, b1, b2, b3, b4, b5, b6, b7) {
+    let diff = 0;
+    if a0 != b0 { diff = diff | 1; }
+    if a1 != b1 { diff = diff | 1; }
+    if a2 != b2 { diff = diff | 1; }
+    if a3 != b3 { diff = diff | 1; }
+    if a4 != b4 { diff = diff | 1; }
+    if a5 != b5 { diff = diff | 1; }
+    if a6 != b6 { diff = diff | 1; }
+    if a7 != b7 { diff = diff | 1; }
+    if diff == 0 { return 1; }
+    return 0;
 }
 
 # All required fields for the artifact class must be present.
@@ -138,5 +229,14 @@ fn security_envelope_accept(magic_ok, schema, kind, domain, field_count, present
     if ordered_ok == 0 { return 0; }
     if offsets_ok == 0 { return 0; }
     if security_envelope_required_present(present_mask, kind) == 0 { return 0; }
+    return 1;
+}
+
+# Stronger structural acceptance for real readers: includes canonical TLVs,
+# exact payload/signature tiling, and streaming allocation bounds.
+fn security_envelope_accept_checked(magic_ok, schema, kind, domain, field_count, present_mask, ordered_ok, offsets_ok, canonical_ok, total_len, header_len, payload_len, signature_len) {
+    if security_envelope_accept(magic_ok, schema, kind, domain, field_count, present_mask, ordered_ok, offsets_ok) == 0 { return 0; }
+    if canonical_ok == 0 { return 0; }
+    if security_envelope_stream_bounds_ok(total_len, header_len, field_count, payload_len, signature_len) == 0 { return 0; }
     return 1;
 }

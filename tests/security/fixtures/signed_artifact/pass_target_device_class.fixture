@@ -1,0 +1,3 @@
+checker=signed_artifact_check
+expect=pass
+case=artifact target-device class binding accepts a matching current device class

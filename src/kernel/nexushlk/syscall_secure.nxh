@@ -197,8 +197,12 @@ fn cpi_verify_callback(rax result, rdi stored, rsi win, rdx off)
 fn cap_mask_sign(rax result, rdi slot, rsi mask)
         preserves(rdi, rsi, rcx, r8) {
     let s = slot & 0xFF;
-    let m = mask & 0xFF;
-    result = (lq(&kernel_canary) ^ s ^ m ^ KDOM_CAP_MASK) & CAP_TAG_MASK;
+    let m = mask & 0xFFFF;
+    # Fold the high byte into the low byte so the 8-bit authenticator covers all
+    # 16 mask bits — a tamper of CAP_FS_* (high byte) is detected just like a
+    # low-byte flip. The dispatcher gate recomputes the identical fold.
+    let mf = (m ^ (m >> 8)) & 0xFF;
+    result = (lq(&kernel_canary) ^ s ^ mf ^ KDOM_CAP_MASK) & CAP_TAG_MASK;
 }
 
 # ----------------------------------------------------------------------------
@@ -219,11 +223,13 @@ fn cap_mask_sign(rax result, rdi slot, rsi mask)
 fn cap_mask_store(rdi slot, rsi mask)
         preserves(rdi, rsi, rcx, r8) {
     let s = slot & 0xFF;
-    let m = mask & 0xFF;
+    let m = mask & 0xFFFF;
     if s < MAX_WINDOWS {
-        let auth = (lq(&kernel_canary) ^ s ^ m ^ KDOM_CAP_MASK) & CAP_TAG_MASK;
-        sb(&slot_cap_mask + s, m);          # mask byte
-        sb(&slot_cap_hmac + s, auth);       # matching authenticator
+        let mf = (m ^ (m >> 8)) & 0xFF;     # fold high byte into the authenticator
+        let auth = (lq(&kernel_canary) ^ s ^ mf ^ KDOM_CAP_MASK) & CAP_TAG_MASK;
+        sb(&slot_cap_mask + s, m & 0xFF);          # mask low byte
+        sb(&slot_cap_mask_hi + s, (m >> 8) & 0xFF);# mask high byte (CAP_FS_* etc.)
+        sb(&slot_cap_hmac + s, auth);              # matching authenticator
     }
 }
 
@@ -239,8 +245,10 @@ fn cap_mask_store(rdi slot, rsi mask)
 fn slot_cap_hmac_init() {
     let slot = 0;
     while slot < MAX_WINDOWS {
-        let mask = lb(&slot_cap_mask + slot);        # current mask for this slot
-        let auth = (lq(&kernel_canary) ^ slot ^ mask ^ KDOM_CAP_MASK) & CAP_TAG_MASK;
+        let lo = lb(&slot_cap_mask + slot);          # mask low byte
+        let hi = lb(&slot_cap_mask_hi + slot);       # mask high byte
+        let mf = (lo ^ hi) & 0xFF;                   # same fold as cap_mask_sign
+        let auth = (lq(&kernel_canary) ^ slot ^ mf ^ KDOM_CAP_MASK) & CAP_TAG_MASK;
         sb(&slot_cap_hmac + slot, auth);
         slot = slot + 1;
     }

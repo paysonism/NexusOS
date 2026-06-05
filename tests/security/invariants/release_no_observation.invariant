@@ -4,4 +4,4 @@ statement=A release build exposes no telemetry, logging, or stable identifier si
 compromised=release image privacy posture
 denied_authority=any telemetry/observation sink in a release build
 predicate=inv_release_no_observation
-status=modeled
+status=proven

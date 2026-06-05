@@ -4,4 +4,4 @@ statement=A policy is installable only if it carries a valid signature.
 compromised=policy loader domain
 denied_authority=installing policy with no valid signature
 predicate=inv_policy_loader_signed_only
-status=modeled
+status=proven

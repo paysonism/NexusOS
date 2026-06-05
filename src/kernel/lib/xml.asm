@@ -38,6 +38,14 @@ N_PEND    equ 28      ; offset just past the whole element
 
 section .bss
 alignb 16
+; --- Per-slot parser state (security: XML DOM is isolated per app slot) ------
+; The whole DOM + parse-time scratch below forms ONE contiguous "live" context
+; that the parser code operates on directly (unchanged). To make this per-slot,
+; the live block is swapped against a per-slot save area (xml_state_pool) at
+; every public entry point, keyed off the calling slot (r15) via xml_switch_to.
+; Effect: each app slot keeps its own persistent DOM ??? one app re-parsing can
+; never clobber or disclose another app's parsed tree.
+xml_state_begin:
 xml_nodes:    resb XML_MAX_NODES * XML_NODE_SIZE
 xml_node_n:   resq 1
 xml_root_idx: resd 1
@@ -55,10 +63,70 @@ xml_ent_val_off:  resd XML_MAX_ENT
 xml_ent_val_len:  resd XML_MAX_ENT
 xml_ent_n:        resd 1
 xml_ns_scratch:   resb 64
+xml_state_end:
+XML_STATE_SIZE equ xml_state_end - xml_state_begin
+
+alignb 16
+; One save area per slot. BSS-zero = "doc_live==0" = empty DOM, the correct
+; initial state for a slot that has never parsed (xml_root reports none).
+xml_state_pool: resb XML_STATE_SIZE * APP_SLOT_COUNT
+; Slot whose context is currently live. BSS-zero = slot 0, which matches the
+; zeroed (empty) live block at boot, so no separate "uninitialized" sentinel is
+; needed: the very first switch saves slot 0's empty context and loads the
+; target's (also empty) one.
+xml_active_slot: resd 1
 
 section .text
 
+; ----------------------------------------------------------------------------
+; xml_switch_to ??? make the live parser state belong to the calling slot (r15).
+; If the live context already belongs to r15, no-op. Otherwise the live block
+; is saved back to the previous owner's pool entry and the target slot's saved
+; context is loaded in. Preserves ALL caller registers (called as the first
+; instruction of every public entry, before args in rdi/rsi are touched).
+; ----------------------------------------------------------------------------
+xml_switch_to:
+    push rax
+    push rcx
+    push rsi
+    push rdi
+    push r8
+    movzx r8d, r15b
+    cmp r8d, APP_SLOT_COUNT
+    jb .ok
+    xor r8d, r8d                 ; out-of-range -> slot 0 (fail-safe)
+.ok:
+    mov eax, [rel xml_active_slot]
+    cmp eax, r8d
+    je .ret                      ; already live for this slot
+    ; Save current live block back to the previous owner's pool entry.
+    mov ecx, eax
+    imul ecx, ecx, XML_STATE_SIZE
+    lea rdi, [rel xml_state_pool]
+    add rdi, rcx
+    lea rsi, [rel xml_state_begin]
+    mov ecx, XML_STATE_SIZE
+    rep movsb
+.load:
+    mov ecx, r8d
+    imul ecx, ecx, XML_STATE_SIZE
+    lea rsi, [rel xml_state_pool]
+    add rsi, rcx
+    lea rdi, [rel xml_state_begin]
+    mov ecx, XML_STATE_SIZE
+    rep movsb
+    mov [rel xml_active_slot], r8d
+.ret:
+    pop r8
+    pop rdi
+    pop rsi
+    pop rcx
+    pop rax
+    ret
+
 xml_free:
+    call xml_switch_to
+xml_free_inner:                  ; internal callers (already on the right slot)
     xor eax, eax
     mov [xml_node_n], rax
     mov [xml_err], eax
@@ -70,11 +138,13 @@ xml_free:
     ret
 
 xml_last_error:
+    call xml_switch_to
     mov eax, [xml_err]
     mov rdx, [xml_err_off]
     ret
 
 xml_node_count:
+    call xml_switch_to
     mov rax, [xml_node_n]
     ret
 
@@ -88,6 +158,7 @@ xml_set_error:
     ret
 
 xml_root:
+    call xml_switch_to
     cmp dword [xml_doc_live], 0
     je .none
     mov eax, [xml_root_idx]
@@ -116,6 +187,7 @@ xml_node_ptr:
     ret
 
 xml_tag:
+    call xml_switch_to
     call xml_chk_node
     jc .bad
     ; Stable enough for in-document comparisons: first matching node index + 1.
@@ -157,6 +229,7 @@ xml_tag:
     ret
 
 xml_first_child:
+    call xml_switch_to
     call xml_chk_node
     jc .bad
     call xml_node_ptr
@@ -169,6 +242,7 @@ xml_first_child:
     ret
 
 xml_next_sibling:
+    call xml_switch_to
     call xml_chk_node
     jc .bad
     call xml_node_ptr
@@ -181,6 +255,8 @@ xml_next_sibling:
     ret
 
 xml_parent:
+    call xml_switch_to
+xml_parent_inner:                ; internal callers (already on the right slot)
     call xml_chk_node
     jc .bad
     call xml_node_ptr
@@ -193,6 +269,7 @@ xml_parent:
     ret
 
 xml_tag_name:
+    call xml_switch_to
     push rbx
     push r12
     push r13
@@ -228,6 +305,7 @@ xml_tag_name:
 
 xml_text:
     ; rdi=node, rsi=out, rdx=max
+    call xml_switch_to
     push rbx
     push r12
     push r13
@@ -390,6 +468,8 @@ xml_user_name_eq:
 
 xml_attr:
     ; rdi=node, rsi=name, rdx=nlen, rcx=out, r8=omax
+    call xml_switch_to
+xml_attr_inner:                  ; internal callers (already on the right slot)
     push rbx
     push r12
     push r13
@@ -563,12 +643,13 @@ xml_link_node:
     ret
 
 xml_parse:
+    call xml_switch_to
     push rbx
     push r12
     push r13
     push r14
     push r15
-    call xml_free
+    call xml_free_inner
     mov [xml_base], rdi
     lea rax, [rdi + rsi]
     mov [xml_end], rax
@@ -1185,6 +1266,7 @@ xml_parse:
 ;   rdi=node -> rax = run count (childcount+1), 0 if empty, -1 if bad node.
 ; ----------------------------------------------------------------------------
 xml_text_runs:
+    call xml_switch_to
     call xml_chk_node
     jc .bad
     call xml_node_ptr
@@ -1223,6 +1305,7 @@ xml_text_runs:
 ;   A run that is a single CDATA section is returned unwrapped.
 ; ----------------------------------------------------------------------------
 xml_text_run:
+    call xml_switch_to
     push rbx
     push r12
     push r13
@@ -1344,6 +1427,8 @@ xml_text_run:
 ;   r8=omax -> rax = URI length, -1 if unbound.
 ; ----------------------------------------------------------------------------
 xml_namespace:
+    call xml_switch_to
+xml_namespace_inner:             ; internal callers (already on the right slot)
     push rbx
     push r12
     push r13
@@ -1387,12 +1472,12 @@ xml_namespace:
     mov rcx, r13
     mov r8, r14
     push r9
-    call xml_attr
+    call xml_attr_inner
     pop r9
     cmp rax, 0
     jge .done
     mov rdi, r9
-    call xml_parent
+    call xml_parent_inner
     mov r9, rax
     jmp .nwalk
 .nf:
@@ -1410,6 +1495,7 @@ xml_namespace:
 ;   rdi=node, rcx=out, r8=omax -> rax = URI length, -1 if unbound/bad.
 ; ----------------------------------------------------------------------------
 xml_node_namespace:
+    call xml_switch_to
     push rbx
     push r12
     push r13
@@ -1443,7 +1529,7 @@ xml_node_namespace:
     mov rdi, r12
     mov rcx, r13
     mov r8, r14
-    call xml_namespace
+    call xml_namespace_inner
     jmp .done
 .bad:
     mov rax, -1
@@ -1460,6 +1546,7 @@ xml_node_namespace:
 ;   -1 if no such entity.
 ; ----------------------------------------------------------------------------
 xml_entity_value:
+    call xml_switch_to
     push rbx
     push r12
     push r13
@@ -1517,3 +1604,5 @@ xml_entity_value:
     ret
 
 %include "src/kernel/lib/xml_selftest.inc"
+
+

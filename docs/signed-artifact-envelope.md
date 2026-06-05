@@ -76,6 +76,13 @@ Bit | Field              | Why it must be signed
 
 Any failure ⇒ reject. There is no "warn and continue" path.
 
+For real readers, `security_envelope_accept_checked` is the stricter composed
+entry point: it keeps the original structural acceptance gate and additionally
+requires canonical TLV scalar predicates, exact payload/signature tiling, and
+streaming allocation bounds. Semantic verification also includes
+`security_artifact_target_device_ok`, so a present TARGET_DEVICE field must match
+the current device id or device class.
+
 ## Non-goals for v1
 
 - Field encryption (the envelope is integrity/authenticity, not confidentiality).

@@ -319,25 +319,35 @@
     ; can't even probe pointer behaviour of a forbidden syscall. R15 is the
     ; current slot id; slot_cap_mask[] defaults to CAP_ALL for every slot
     ; until the app declares its manifest.
-    movzx eax, byte [r12 + SYSCALL_CAP_OFF]
-    test al, al
+    movzx eax, word [r12 + SYSCALL_CAP_OFF]   ; 16-bit required cap tag
+    test ax, ax
     jz .sc_cap_reject               ; untagged entry = misconfiguration; deny
-    lea rcx, [rel slot_cap_mask]
-    movzx edx, r15b
-    mov dl, [rcx + rdx]
-    ; Time-of-check authentication of the cap mask. slot_cap_mask[] is plain
+    ; Load this slot's 16-bit cap mask: low byte from slot_cap_mask, high byte
+    ; from the parallel slot_cap_mask_hi (CAP_FS_READ/WRITE/DELETE live there).
+    ; dx = full mask.
+    movzx ecx, r15b
+    lea rdx, [rel slot_cap_mask]
+    movzx edx, byte [rdx + rcx]     ; mask low byte -> dl
+    lea r8, [rel slot_cap_mask_hi]
+    movzx r8d, byte [r8 + rcx]
+    shl r8d, 8
+    or edx, r8d                     ; dx = 16-bit mask (dh = high byte)
+    ; Time-of-check authentication of the cap mask. slot_cap_mask[*] are plain
     ; kernel data; any kernel-write bug that flips a bit there would silently
-    ; widen this slot's capabilities. Before trusting dl we recompute the
-    ; per-slot HMAC (low8(kernel_canary ^ slot ^ mask ^ KDOM_CAP_MASK)) and
-    ; compare it against the authenticator stamped alongside the mask. A
-    ; mismatch means the mask was tampered with after the last legitimate
-    ; write, so we panic on the same CANARY path as CPI corruption rather than
-    ; dispatch on a forged mask. Done before the cap AND so a widened mask is
-    ; never even consulted. Clobbers r8/r9 only (rax=cap bit, rcx/rdx live).
-    movzx r8d, r15b                 ; slot id
-    movzx eax, dl                   ; claimed mask byte (rax scratch, reloaded below)
-    ; low8(kernel_canary ^ slot ^ mask ^ KDOM_CAP_MASK); same primitive and same
-    ; domain (0x5C) as cap_mask_sign, so the comparison stays value-identical (§13).
+    ; widen this slot's capabilities. Before trusting dx we recompute the
+    ; per-slot HMAC (low8(kernel_canary ^ slot ^ fold(mask) ^ KDOM_CAP_MASK))
+    ; — folding high^low so a high-byte (CAP_FS_*) flip is caught — and compare
+    ; it against the authenticator stamped alongside the mask. A mismatch means
+    ; the mask was tampered with after the last legitimate write, so we panic on
+    ; the same CANARY path as CPI corruption rather than dispatch on a forged
+    ; mask. Done before the cap AND so a widened mask is never even consulted.
+    ; Clobbers r8/r9/rax (rcx/rdx=mask live).
+    movzx r8d, r15b                 ; slot id (HMAC in0)
+    movzx eax, dl                   ; mask low byte
+    mov r9d, edx
+    shr r9d, 8
+    and r9d, 0xFF                   ; mask high byte (avoid dh: no REX high-byte)
+    xor eax, r9d                    ; folded mask byte (HMAC in1) — matches cap_mask_sign
     KHMAC_TAG r9, r9d, r9b, r8, rax, KDOM_CAP_MASK
     lea r8, [rel slot_cap_hmac]
     movzx eax, r15b                 ; reload slot into a scratch index reg
@@ -345,9 +355,9 @@
     movzx eax, byte [r8]            ; stored authenticator for this slot
     cmp r9b, al
     jne .sc_cap_tamper
-    movzx eax, byte [r12 + SYSCALL_CAP_OFF]   ; restore cap bit (al was scratch)
-    and dl, al
-    cmp dl, al
+    movzx eax, word [r12 + SYSCALL_CAP_OFF]   ; restore required cap word
+    and dx, ax
+    cmp dx, ax                      ; every required bit present in the mask?
     jne .sc_cap_reject
     ; Per-syscall allowlist gate (security_todo.md §2, "Manifest declares
     ; syscall set, not just cap bits"). The coarse cap mask above only proves
@@ -378,16 +388,19 @@
     ; so a forbidden syscall is still rejected for the right reason, but before
     ; argument validation so a throttled slot can't probe pointer behaviour.
     ;
-    ; GUI rendering syscalls are exempt from the budget. A single desktop/window
-    ; redraw issues thousands of draw calls, and continuous content (video
-    ; playback) redraws every frame, so charging them drains the bucket and the
-    ; rejected draw calls leave the window painted as a blank/white frame. GUI
-    ; calls are not the fuzzing/side-channel oracle the budget defends against
-    ; (those are the FS/probe/WX surfaces) — their worst-case abuse is spamming
-    ; the screen, which is visible and vsync-bounded, not a hidden oracle. See
-    ; security_todo.md §2.
-    test byte [r12 + SYSCALL_CAP_OFF], CAP_GUI
-    jnz .sc_rate_ok
+    ; GUI-heavy redraw paths use a separate per-frame/tick bucket. They no
+    ; longer drain the general syscall budget, but they are bounded.
+    test word [r12 + SYSCALL_CAP_OFF], CAP_GUI
+    jz .sc_rate_non_gui
+    movzx ecx, r15b
+    lea rdx, [rel slot_gui_budget]
+    movzx eax, word [rdx + rcx*2]
+    test eax, eax
+    jz .sc_rate_reject
+    dec eax
+    mov [rdx + rcx*2], ax
+    jmp .sc_rate_ok
+.sc_rate_non_gui:
     movzx ecx, r15b
     lea rdx, [rel slot_sc_budget]
     movzx eax, word [rdx + rcx*2]

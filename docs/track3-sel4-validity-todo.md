@@ -30,9 +30,18 @@ Maps to `docs/nhl-beyond-zero-trust-todo.md` → "P2: seL4 Validity Track" and
       loader, hypervisor measurement, release observation). Compiles
       `--forbid-asm --deny-unsafe`.
 - [x] 9 machine-checkable invariant files under `tests/security/invariants/`,
-      each binding a compromised component + denied authority to a predicate.
+      each binding a compromised component + denied authority to a predicate
+      and marked `proven` after exhaustive bounded checking.
 - [x] Runner `scripts/test/test_nhl_invariants.ps1`: validates files, asserts
-      every referenced predicate is exported by the kernel, compiles the kernel.
+      every referenced predicate is exported by the kernel, compiles the kernel,
+      and now EVALUATES positive/negative vectors against the real predicate
+      source (via `scripts/test/eval_invariants.py`, which parses
+      `invariant_check.nxh` with the production compiler's own lexer/parser and
+      interprets each predicate as a pure integer fn — no re-implementation).
+- [x] Exhaustive bounded checker for the current 9 invariants: `eval_invariants.py
+      --exhaustive` enumerates the full 7-bit authority/domain space (0..127)
+      plus boolean side conditions for each theorem and compares the real
+      predicate result to the theorem table before the runner passes.
 - [x] Wired into the verification entry point.
 
 ## P2 — define the property set precisely (status: modeled → none yet tested)
@@ -54,19 +63,29 @@ Maps to `docs/nhl-beyond-zero-trust-todo.md` → "P2: seL4 Validity Track" and
 
 For EVERY invariant add positive + negative test vectors that call the predicate:
 
-- [ ] Build a tiny NHL test harness (or host harness) that invokes each predicate
+- [x] Build a tiny NHL test harness (or host harness) that invokes each predicate
       with a passing input (returns 1) and a violating input (returns 0).
-- [ ] INV-CAP-DERIVATION: child⊆parent passes; child with an extra bit fails.
-- [ ] INV-NO-GLOBAL-MINT: AUTH_GLOBAL with threshold passes; without fails.
-- [ ] INV-SCHED-NO-MEMORY: scheduler without AUTH_MEMORY_GRANT passes; with fails.
-- [ ] INV-IPC-NO-FORGE: ipc without AUTH_MINT_IDENTITY passes; with fails.
-- [ ] INV-DRIVER-NO-DMA-MINT: DMA bit + grant passes; DMA bit no grant fails.
-- [ ] INV-PT-NO-PERSIST: persist + threshold passes; persist no threshold fails.
-- [ ] INV-POLICY-SIGNED-ONLY: signed passes; unsigned fails.
-- [ ] INV-HV-NO-FOREIGN-MEASURE: same-domain measure passes; foreign fails.
-- [ ] INV-RELEASE-NO-OBSERVE: telemetry=0 passes; telemetry=1 fails.
-- [ ] Add the negative vectors as `.invariant` companions or a vector file the
+      Done as a host harness (`scripts/test/eval_invariants.py`) that interprets
+      the real NHL predicate source — see note below.
+- [x] INV-CAP-DERIVATION: child⊆parent passes; child with an extra bit fails.
+- [x] INV-NO-GLOBAL-MINT: AUTH_GLOBAL with threshold passes; without fails.
+- [x] INV-SCHED-NO-MEMORY: scheduler without AUTH_MEMORY_GRANT passes; with fails.
+- [x] INV-IPC-NO-FORGE: ipc without AUTH_MINT_IDENTITY passes; with fails.
+- [x] INV-DRIVER-NO-DMA-MINT: DMA bit + grant passes; DMA bit no grant fails.
+- [x] INV-PT-NO-PERSIST: persist + threshold passes; persist no threshold fails.
+- [x] INV-POLICY-SIGNED-ONLY: signed passes; unsigned fails.
+- [x] INV-HV-NO-FOREIGN-MEASURE: same-domain measure passes; foreign fails.
+- [x] INV-RELEASE-NO-OBSERVE: telemetry=0 passes; telemetry=1 fails.
+- [x] Add the negative vectors as `.invariant` companions or a vector file the
       runner executes (extend runner to actually evaluate, not just type-check).
+      Done as a vector file per invariant under
+      `tests/security/invariants/vectors/*.vectors` (declarative `case = accept|
+      reject | <args>` lines). The runner cross-checks every invariant has a
+      vector file whose id+predicate agree with its `.invariant`, then runs
+      `eval_invariants.py` which EXECUTES the real predicate against each vector
+      and asserts accept→1 / reject→0. A deliberately-flipped negative vector
+      makes the runner fail (verified). All 9 `.invariant` files are now `proven`
+      after the bounded exhaustive checker runs.
 
 ## P2 — map the model onto the real system (the hard part)
 
@@ -81,10 +100,10 @@ For EVERY invariant add positive + negative test vectors that call the predicate
 
 ## P2 — promote `tested` → `proven` (long horizon, do not overclaim)
 
-- [ ] Decide the proof vehicle (exhaustive enumeration over the bounded bitmask
+- [x] Decide the proof vehicle (exhaustive enumeration over the bounded bitmask
       space is tractable: 7 authority bits ⇒ 128 domain states — small enough to
       check ALL states per invariant by brute force).
-- [ ] Add an exhaustive checker that proves each invariant holds over the full
+- [x] Add an exhaustive checker that proves each invariant holds over the full
       bounded state space (this is a real, if modest, machine-checked result).
 - [ ] Write proof-oriented docs per P0 invariant stating the theorem, the bound,
       and the checked state count.

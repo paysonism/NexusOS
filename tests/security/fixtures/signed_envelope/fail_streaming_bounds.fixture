@@ -1,0 +1,3 @@
+checker=signed_envelope
+expect=fail
+case=envelope streaming reader rejects oversized total payload or signature lengths before allocation

@@ -276,11 +276,7 @@
 
 .sc_wm_set_user_arg:
     ; rdi = win_id, rsi = up-to-48-bit opaque value to stash at
-    ; WIN_OFF_USER_ARG. Bounds check win_id and require ACTIVE. Allowed iff:
-    ;   (a) caller's slot owns the target window (same-slot writer), OR
-    ;   (b) the field is still zero — first-write by the window's creator,
-    ;       which lives in a different slot than the freshly-allocated one.
-    ; Without (a)/(b) any app can clobber any active window's user_arg.
+    ; WIN_OFF_USER_ARG. Bounds check win_id and require ACTIVE. Only the caller's slot may write its own window's user_arg.
     ;
     ; Tagged poisoning: the stored qword is (value | (tag << 48)), where tag
     ; is a per-window secret = low16(kernel_canary ^ &window). On read via
@@ -304,10 +300,7 @@
     imul rcx, APP_SLOT_SIZE
     add rcx, [rel l3_app_arena_base_v]
     cmp [rax + WIN_OFF_APPDATA], rcx
-    je .sc_wm_set_user_arg_ok
-    cmp qword [rax + 160], 0          ; WIN_OFF_USER_ARG
     jne .sc_wm_set_user_arg_reject
-.sc_wm_set_user_arg_ok:
     ; Preserve the "zero == no selection" sentinel: don't stamp a tag onto
     ; a zero value, otherwise readers couldn't distinguish "never set" from
     ; "explicitly set to zero" — and the tag verifier would reject 0 too.
@@ -339,6 +332,11 @@
     add rax, WINDOW_POOL_ADDR
     test qword [rax + WIN_OFF_FLAGS], WF_ACTIVE
     jz .sc_wm_get_user_arg_reject
+    mov rdx, r15
+    imul rdx, APP_SLOT_SIZE
+    add rdx, [rel l3_app_arena_base_v]
+    cmp [rax + WIN_OFF_APPDATA], rdx
+    jne .sc_wm_get_user_arg_reject
     mov rcx, [rax + 160]              ; stored qword
     test rcx, rcx
     jz .sc_wm_get_user_arg_zero

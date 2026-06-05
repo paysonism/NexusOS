@@ -129,6 +129,9 @@ COLOR_START_HOVER    equ COLOR_SURFACE_2
 ; legitimate GUI apps. Stored as a word per slot (slot_sc_budget in syscall.asm)
 ; so values up to 65535 are valid. 4096/tick @100Hz ~= 409600 calls/s ceiling.
 SC_BUDGET_PER_TICK  equ 4096
+; GUI syscalls use a separate frame/tick bucket so rendering does not drain the
+; general syscall budget, but is still bounded.
+SC_GUI_BUDGET_PER_TICK equ 8192
 
 ; --- Slot teardown on suspect syscall return (security_todo.md §12) ---
 ; Number of security-reason -1 returns (cap mismatch, validator reject, rate
