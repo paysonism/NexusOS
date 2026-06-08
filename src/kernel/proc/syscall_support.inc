@@ -362,6 +362,11 @@ syscall_table:
     ; companion to SYS_WM_SET_USER_ARG; required so user-mode draw fns no
     ; longer dereference window-pool memory directly to fetch their arg.
     SYSCALL_ENTRY syscall_entry.sc_wm_get_user_arg,  1, SC_KIND1(FN_KIND_SCALAR), CAP_GUI_DRAW
+    ; SYS_MOUSE_SENSE() -> packed per-axis pointer sensitivity (tenths):
+    ;   x in bits[15:0], y in bits[31:16]. SYS_SET_MOUSE_SENSE(packed) writes it,
+    ;   each axis clamped to [1,50] = 0.1x..5.0x. Settings Mouse tab uses these.
+    SYSCALL_ENTRY syscall_entry.sc_mouse_sense,      0, 0,                          CAP_GUI_DISPLAY
+    SYSCALL_ENTRY syscall_entry.sc_set_mouse_sense,  1, SC_KIND1(FN_KIND_SCALAR),   CAP_GUI_DISPLAY
 syscall_table_end:
 syscall_table_count equ (syscall_table_end - syscall_table) / SYSCALL_ENTRY_SIZE
 

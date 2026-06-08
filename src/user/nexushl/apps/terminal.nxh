@@ -53,6 +53,7 @@ state {
     ping_pending:    8;     # remaining echo replies (0 = idle)
     ping_target:     8;     # A.B.C.D-packed target while in flight
     ping_next_tick:  8;     # ui_ticks() value the next echo fires at
+    dns_pending:     8;     # 1 while an async DNS lookup for ping_host is in flight
     seeded:          8;     # 0 until the welcome banner has been seeded once
 }
 
@@ -243,35 +244,59 @@ fn do_ping(p) {
         push_hist(&ping_busy);
         return;
     }
+    if lq(&dns_pending) != 0 {
+        push_hist(&ping_busy);
+        return;
+    }
     let ip = parse_ipv4(p);
     if ip >= 0 {
         sb(&ping_host, 0);
-    } else {
-        # Snapshot the hostname (stop at space/CR/LF/NUL) for DNS + echo.
-        let i = 0;
-        let c = lb(p);
-        while c != 0 {
-            if c == 32 { break; }
-            if c == 10 { break; }
-            if c == 13 { break; }
-            if i >= 63 { break; }
-            sb(&ping_host + i, c);
-            i = i + 1;
-            p = p + 1;
-            c = lb(p);
-        }
-        sb(&ping_host + i, 0);
-        if lb(&ping_host) == 0 {
-            push_hist(&ping_bad_ip);
-            return;
-        }
-        ip = net_dns_a(&ping_host);
-        if ip <= 0 {
-            push_hist(&ping_dns_fail);
-            return;
-        }
+        start_ping(ip);
+        return;
     }
 
+    # Snapshot the hostname (stop at space/CR/LF/NUL) for DNS + echo.
+    let i = 0;
+    let c = lb(p);
+    while c != 0 {
+        if c == 32 { break; }
+        if c == 10 { break; }
+        if c == 13 { break; }
+        if i >= 63 { break; }
+        sb(&ping_host + i, c);
+        i = i + 1;
+        p = p + 1;
+        c = lb(p);
+    }
+    sb(&ping_host + i, 0);
+    if lb(&ping_host) == 0 {
+        push_hist(&ping_bad_ip);
+        return;
+    }
+    # Async DNS: arm dns_pump(), which resolves over the next frames without
+    # blocking the window manager (the old net_dns_a was a synchronous lookup
+    # that halted the kernel for up to ~1.3s). The ping header + echoes are
+    # emitted once the IP comes back.
+    sq(&dns_pending, 1);
+}
+
+# Resolve the armed hostname one step per frame; hand off to start_ping once the
+# kernel returns an address (or report failure).
+fn dns_pump() {
+    if lq(&dns_pending) == 0 { return; }
+    let ip = net_dns_a(&ping_host);
+    if ip == 0 { return; }              # still resolving; scene stays dirty
+    sq(&dns_pending, 0);
+    if ip < 0 {
+        push_hist(&ping_dns_fail);
+        return;
+    }
+    start_ping(ip);
+}
+
+# Emit the "Pinging ..." header and arm the per-frame echo pump. ping_host is
+# already set (empty for a bare IP, the hostname otherwise).
+fn start_ping(ip) {
     format_ip(ip);
 
     # Header — "Pinging <host> [<ip>] with 32 bytes of data:" or the bare-IP form.
@@ -322,6 +347,7 @@ fn ping_pump() {
 
 fn abort_ping() {
     sq(&ping_pending, 0);
+    sq(&dns_pending, 0);
     push_hist(&ping_aborted);
 }
 
@@ -378,6 +404,7 @@ fn on_enter() {
 # ----------------------------------------------------------------------------
 fn draw(win) {
     ensure_seeded();
+    dns_pump();
     ping_pump();
 
     ui_fill_client_below(win, 0, TERM_COL_BG);

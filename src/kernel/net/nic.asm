@@ -32,6 +32,7 @@ extern rtl8156_net_poll_rx
 extern rtl8156_net_mac
 extern rtl8156_net_info
 extern rtl8156_ping_start_tsc
+extern rtl8156_ping_reply_tsc
 extern rtl8156_active
 extern rtl8156_dhcp_bound
 extern rtl8156_dhcp_state
@@ -354,53 +355,12 @@ net_info:
     pop rbx
     ret
 
-; Synchronous lease acquisition. Returns EAX=1 when bound.
-global net_dhcp_configure
-net_dhcp_configure:
-    cmp byte [rtl8156_active], 1
-    je .r8156_config
-    cmp byte [rtl_active], 1
-    je .r8139_config
-    call rtl8156_init
-    test eax, eax
-    jnz .r8156_config
-    call rtl8139_init
-    test eax, eax
-    jz .fail
-.r8139_config:
-    call rtl8139_dhcp_configure
-    ret
-.r8156_config:
-    call rtl8156_dhcp_configure
-    ret
-.fail:
-    xor eax, eax
-    ret
-
-; Async where available. Returns EAX=1 if a backend accepted the request.
-global net_dhcp_start
-net_dhcp_start:
-    cmp byte [rtl8156_active], 1
-    je .r8156_start
-    cmp byte [rtl_active], 1
-    je .r8139_sync_start
-    xor eax, eax
-    ret
-.r8156_start:
-    cmp byte [rtl8156_dhcp_bound], 1
-    jne .kick
-    mov byte [rtl8156_dhcp_state], 3
-    mov eax, 1
-    ret
-.kick:
-    call rtl8156_dhcp_start
-    mov eax, 1
-    ret
-.r8139_sync_start:
-    ; RTL8139 is still polling/synchronous; treat start as immediate configure
-    ; until its DHCP pump is lifted into net/dhcp.asm.
-    call rtl8139_dhcp_configure
-    ret
+; net_dhcp_configure (synchronous lease acquisition, EAX=1 when bound) and
+; net_dhcp_start (async kick, EAX=1 if a backend accepted) were ported to the
+; zero-asm NHLK module src/kernel/nexushlk/net_dhcp_dispatch.nxh. net_dhcp_start
+; there is fully non-blocking (the renew button no longer freezes the UI) and
+; forces a fresh DISCOVER even on an already-bound lease. Both remain externs
+; here; the symbols resolve at link/include time from the NHLK module.
 
 ; EDI = IPv4 address in A.B.C.D packed order, e.g. 8.8.8.8 = 0x08080808.
 ; Returns RAX = approximate RTT in microseconds, or -1 on timeout/failure.
@@ -417,7 +377,8 @@ net_ping_ipv4:
     test eax, eax
     jz .rtl8156_failed
     mov rbx, [rtl8156_ping_start_tsc]
-    call net_tsc_delta_to_us
+    mov rax, [rtl8156_ping_reply_tsc]
+    call net_tsc_span_to_us
     pop rdi
     pop rbx
     ret
@@ -456,7 +417,20 @@ net_ping4_tick:
     mov rax, -1
     ret
 
-; RBX = start TSC. Returns RAX = elapsed microseconds.
+; RAX = end TSC, RBX = start TSC. Returns RAX = elapsed microseconds. Used by the
+; ping path so the RTT is measured against the TSC captured WHEN the ICMP reply was
+; parsed (rtl8156_ping_reply_tsc), not the rdtsc at the moment userspace happens to
+; poll net_ping4_tick — otherwise the reported time tracks the app's frame/poll
+; cadence instead of the actual round-trip.
+global net_tsc_span_to_us
+net_tsc_span_to_us:
+    push rcx
+    push rdx
+    push r8
+    sub rax, rbx
+    jmp net_tsc_us_finish
+
+; RBX = start TSC (end = now). Returns RAX = elapsed microseconds.
 net_tsc_delta_to_us:
     push rcx
     push rdx
@@ -465,6 +439,7 @@ net_tsc_delta_to_us:
     shl rdx, 32
     or rax, rdx
     sub rax, rbx
+net_tsc_us_finish:
     mov rcx, [cpu_tsc_per_tick]
     test rcx, rcx
     jz .no_calib

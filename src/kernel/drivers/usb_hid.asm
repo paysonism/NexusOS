@@ -44,6 +44,33 @@ extern xhci_port_num
 extern xhci_port_speed
 extern xhci_op_base
 extern xhci_max_ports
+
+; --- MMIO bounds gate (security_todo.md §8) ---------------------------------
+; usb_hid reaches the controller exclusively through xhci_op_base (an offset
+; inside the xHCI BAR registered as MMIO_DRV_XHCI by mmio_drv_caps_init), so its
+; PORTSC pokes are gated under that same id. mmio_bounds_assert preserves caller
+; regs but reads rdi/rsi/edx; the macro saves/restores those three. Skipped when
+; base==0 so a no-USB boot that never registered the BAR doesn't spuriously panic.
+extern mmio_bounds_assert
+%macro USBHID_MMIO_ASSERT 2        ; %1 = access addr/base reg, %2 = window (legacy, unused)
+    push rdi
+    push rsi
+    push rdx
+    mov rdi, %1
+    test rdi, rdi
+    jz %%skip
+    ; 8-byte probe at the base (a PORTSC reg = xhci_op_base+0x400+...), NOT the
+    ; whole window: the base is an offset inside the xHCI BAR, so a full-window
+    ; span from here overshoots the registered region. Validates the base is in
+    ; the BAR; offsets are < window. %2 kept for call-site compatibility.
+    mov esi, 8
+    mov edx, MMIO_DRV_XHCI
+    call mmio_bounds_assert
+%%skip:
+    pop rdx
+    pop rsi
+    pop rdi
+%endmacro
 extern xhci_port1_num
 extern debug_print
 extern fat16_write_file
@@ -180,6 +207,7 @@ usb_hid_init_body:
     ; This handles the case where a boot USB drive is on port 0 and
     ; the mouse is on a subsequent port of the same xHCI controller.
     mov rsi, [xhci_op_base]
+    USBHID_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     add rsi, 0x400                      ; Port register base
     movzx ecx, byte [xhci_max_ports]
     movzx edx, byte [xhci_port_num]     ; 1-based last tried → 0-based next to check
@@ -210,6 +238,7 @@ usb_hid_init_body:
     ; Reset the port so device can be enumerated
     push rax                            ; save port byte offset across reload
     mov rsi, [xhci_op_base]
+    USBHID_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     add rsi, 0x400
     pop rax
     mov ebx, [rsi + rax + XHCI_PORTSC]
@@ -227,6 +256,7 @@ usb_hid_init_body:
     dec eax
     shl eax, 4
     mov rsi, [xhci_op_base]
+    USBHID_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     add rsi, 0x400
     mov edx, [rsi + rax + XHCI_PORTSC]
     test edx, XHCI_PORTSC_PRC
@@ -247,6 +277,7 @@ usb_hid_init_body:
     dec eax
     shl eax, 4
     mov rsi, [xhci_op_base]
+    USBHID_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     add rsi, 0x400
     mov ebx, [rsi + rax + XHCI_PORTSC]
     and ebx, ~XHCI_PORTSC_CHANGE_BITS
@@ -294,9 +325,14 @@ usb_hid_init_body:
     call usb_log_str
     call usb_log_crlf
 
-    ; Wait for device to settle after port reset.
+    ; Wait briefly for device settle. Release boot is marker-budgeted; the
+    ; xhci_find_port reset path below still performs the required port waits.
+%ifdef RELEASE_BUILD
+    mov ecx, 1
+%else
     ; USB spec: 100ms, but 50ms is enough for QEMU/most real devices.
     mov ecx, 50
+%endif
     call usb_delay
 
     mov rsi, szUsbFindPort
@@ -856,6 +892,7 @@ FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
 .process_relative:
     ; Update X
     movsx eax, byte [rsi + 1]
+    call mouse_apply_sense_x
     add [mouse_x], eax
 
     ; Clamp X
@@ -872,6 +909,7 @@ FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
 
     ; Update Y
     movsx eax, byte [rsi + 2]
+    call mouse_apply_sense_y
     add [mouse_y], eax
 
     ; Scroll wheel: byte 3 present when MPS >= 4
@@ -919,8 +957,10 @@ FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
     mov al, [rsi]
     mov [mouse_buttons], al
     movsx eax, byte [rsi + 1]
+    call mouse_apply_sense_x
     add [mouse_x], eax
     movsx eax, byte [rsi + 2]
+    call mouse_apply_sense_y
     add [mouse_y], eax
     ; Clamp X
     cmp dword [mouse_x], 0
@@ -974,6 +1014,7 @@ FN_BEGIN usb_poll_mouse, 0, 0, FN_RET_SCALAR
     dec eax                              ; 0-based index
     shl eax, 4                           ; * 16 bytes per port
     mov rsi, [xhci_op_base]
+    USBHID_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     add rsi, 0x400
     mov ebx, [rsi + rax + XHCI_PORTSC]
     and ebx, ~XHCI_PORTSC_PED            ; PED is RW1C — don't disable port

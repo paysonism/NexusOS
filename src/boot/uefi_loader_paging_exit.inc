@@ -165,6 +165,93 @@ setup_paging:
     dec rcx
     jnz .loop_guard_pt
 
+    ; ----------------------------------------------------------------------
+    ; Framebuffer overrun guard page. The linear framebuffer sits inside a
+    ; 1 GiB large page (PDPT0[fb>>30]); a runaway display blit walking off the
+    ; top of the framebuffer silently scribbles into the adjacent device MMIO
+    ; (e.g. QEMU std-vga's Bochs VBE register window) with NO fault, because
+    ; the entire 1 GiB is mapped present+writable. Split that 1 GiB page down
+    ; to 4 KiB around fb_end and clear PRESENT on the first page past the
+    ; visible framebuffer, so any overrun takes an immediate #PF (caught and
+    ; register/counter-dumped by isr_common_stub) instead of corrupting the
+    ; screen. Nothing legitimate accesses [fb_end, next BAR), so the single
+    ; unmapped page is safe. See memory fb_stripe_vbe_mmio_overrun.
+    mov rax, [abs VBE_INFO + VBE_FB_ADDR_OFF]
+    test rax, rax
+    jz .fb_guard_done                  ; no GOP framebuffer -> nothing to guard
+    mov r8, rax                        ; r8 = fb_base
+    mov ecx, [abs VBE_INFO + VBE_PITCH_OFF]   ; bytes per scanline
+    mov eax, [abs VBE_INFO + VBE_HEIGHT_OFF]  ; native height in lines
+    imul rax, rcx                      ; rax = framebuffer byte size
+    test rax, rax
+    jz .fb_guard_done                  ; degenerate geometry -> skip
+    add rax, r8                        ; rax = fb_end (first byte past LFB)
+    add rax, PAGE_SIZE_4K - 1
+    shr rax, 12
+    shl rax, 12                        ; rax = guard page VA (4 KiB aligned)
+    mov r9, rax                        ; r9 = guard page
+
+    ; pdpt index = guard >> 30. Only split a 1 GiB large page (index >= 1;
+    ; index 0 is PD0, already 4 KiB-granular and handled above).
+    mov rax, r9
+    shr rax, 30
+    test rax, rax
+    jz .fb_guard_done
+    cmp rax, 512
+    jae .fb_guard_done
+    ; PDPT0[idx] (was a 1 GiB large page) -> UEFI_FB_PD_PHYS.
+    lea rdi, [UEFI_PDPT0_PHYS + rax*8]
+    mov qword [rdi], UEFI_FB_PD_PHYS | (UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE)
+
+    ; Fill UEFI_FB_PD_PHYS: 512 * 2 MiB pages identity-mapping that 1 GiB,
+    ; NX + supervisor + writable (same attributes as the 1 GiB page replaced).
+    mov rdi, UEFI_FB_PD_PHYS
+    mov rdx, r9
+    shr rdx, 30
+    shl rdx, 30                        ; 1 GiB-aligned physical base
+    or  rdx, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE | UEFI_PAGE_LARGE
+    bts rdx, 63                        ; NX
+    mov ecx, 512
+.fb_guard_pd_loop:
+    mov [rdi], rdx
+    add rdi, 8
+    add rdx, PAGE_SIZE_2M
+    dec ecx
+    jnz .fb_guard_pd_loop
+
+    ; PD[(guard>>21)&0x1FF] (the 2 MiB page holding fb_end) -> UEFI_FB_PT_PHYS.
+    mov rax, r9
+    shr rax, 21
+    and rax, 0x1FF
+    lea rdi, [UEFI_FB_PD_PHYS + rax*8]
+    mov qword [rdi], UEFI_FB_PT_PHYS | (UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE)
+
+    ; Fill UEFI_FB_PT_PHYS: 512 * 4 KiB pages identity-mapping that 2 MiB,
+    ; NX + supervisor + writable.
+    mov rdi, UEFI_FB_PT_PHYS
+    mov rdx, r9
+    shr rdx, 21
+    shl rdx, 21                        ; 2 MiB-aligned physical base
+    or  rdx, UEFI_PAGE_PRESENT | UEFI_PAGE_WRITABLE
+    bts rdx, 63                        ; NX
+    mov ecx, 512
+.fb_guard_pt_loop:
+    mov [rdi], rdx
+    add rdi, 8
+    add rdx, PAGE_SIZE_4K
+    dec ecx
+    jnz .fb_guard_pt_loop
+
+    ; Clear PRESENT on the guard PTE = (guard >> 12) & 0x1FF.
+    mov rax, r9
+    shr rax, 12
+    and rax, 0x1FF
+    lea rdi, [UEFI_FB_PT_PHYS + rax*8]
+    mov rax, [rdi]
+    and rax, ~UEFI_PAGE_PRESENT
+    mov [rdi], rax
+.fb_guard_done:
+
     ; PDPT1[0..511]: 1 GB identity pages starting at 512 GB, supervisor-only, NX.
     mov rdi, PT_BASE + 0x2000
     mov rbx, PAGE_SIZE_1G * 512      ; physical base = 512 GB

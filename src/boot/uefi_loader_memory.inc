@@ -21,9 +21,10 @@ claim_pages:
     DO_CLAIM VBE_INFO,   1          ; Boot info block
     DO_CLAIM 0x1000,     1          ; E820 entry count page
     DO_CLAIM E820_MAP_ADDR, 4       ; BIOS-compatible memory map handoff
-    DO_CLAIM PT_BASE,    19         ; PML4+PDPT0+PDPT1+PD0+PT0+12 app PTs (0x70000..0x80FFF)
+    DO_CLAIM PT_BASE,    21         ; PML4+PDPT0+PDPT1+PD0+PT0+12 app PTs (0x70000..0x80FFF)
                                     ; + 1 gap page at 0x81000 (BIOS PD3 slot, unused here)
-                                    ; + syscall-stack PT at 0x82000 = 19 pages total
+                                    ; + syscall-stack PT at 0x82000
+                                    ; + FB-guard PD/PT at 0x83000..0x84000 = 21 pages total
     DO_CLAIM SMP_TRAMPOLINE_ADDR, 1 ; Trampoline
     ; NOTE: Do NOT claim KERN_DEST (0x100000) here — UEFI loaded our own
     ; PE image at ImageBase=0x100000.  Claiming it could corrupt memory

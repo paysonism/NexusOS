@@ -46,6 +46,13 @@ enables that path in both `Default` and `Cache32Max`; BIOS enables it only in
 so app callbacks are routed to each process `home_core` instead of running
 inline on the BSP.
 
+Release builds intentionally keep the timed GUI boot path lean: `smp_ap_startup`
+starts at most one AP synchronously and uses a shorter liveness window. If that
+worker is not alive quickly, `smp_alive_cores` remains BSP-only and the existing
+inline workqueue fallback carries app callbacks until a future asynchronous AP
+fan-out path exists. Debug builds keep the full AP fan-out and workqueue
+self-test coverage.
+
 ## Concurrency design
 
 - **One producer** (the BSP), **N consumers** (the APs).

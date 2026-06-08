@@ -20,6 +20,14 @@ unsafe implicit_extern;  # &<symbol> over the many shared data/app deps
 global render_frame;
 global taskmgr_live_refresh;
 global media_live_refresh;
+global netpanel_live_refresh;
+
+# Runtime feature toggle: FEAT_FRAME_PRESENT_REFRESH gates the whole per-frame
+# present/refresh path. When disabled (BOOTCFG disable=present) render_frame is a
+# no-op after the boot-time first paint — used to bisect the 1664x262 scanout
+# clobber. feat_on() lives in boot_features.nxh (same NASM translation unit).
+extern feat_on;
+const FEAT_FRAME_PRESENT_REFRESH = 2;
 
 # Window pool layout + flags (src/include/window_layout.inc, constants.inc).
 const WINDOW_POOL_ADDR   = extern;
@@ -119,14 +127,26 @@ fn rf_full_path() {
     ctx_menu_draw();
     rf_update_fps();
     rf_draw_fps_text();
-    render_save_backbuffer();
+    let saved = 1;
+    cfg "RELEASE_BUILD" {
+        if lb(&rf_first_frame_defer_save) != 0 {
+            saved = 0;
+            sb(&rf_first_frame_defer_save, 0);
+        }
+    }
+    if saved != 0 { render_save_backbuffer(); }
     sb(&scene_dirty, 0);
-    if lb(&vsync_enabled) == 1 { wait_vsync(); }
+    # Frame timing is owned by the central pacer (frame_pacing.nxh); the old
+    # per-path wait_vsync() busy-spun here AND held the cursor hidden across the
+    # whole wait, which is what made the pointer vanish for whole frames. Keep
+    # the hide->flush->draw window as tight as possible so the cursor is only
+    # absent for the brief flush.
     cursor_hide();
     render_mark_full();
     render_flush();
     cursor_draw(lw(&mouse_x), lw(&mouse_y));
     rf_save_idle_keys();
+    if saved == 0 { sb(&scene_dirty, 1); }
 }
 
 # Compositor-only present while the wallpaper AP rasterizes (no app draw).
@@ -138,7 +158,6 @@ fn rf_wallpaper_busy_present() {
     if lq(&wm_drag_window_id) != NO_DRAG { wm_draw_drag_outline(); }
     rf_update_fps();
     rf_draw_fps_text();
-    if lb(&vsync_enabled) == 1 { wait_vsync(); }
     cursor_hide();
     render_mark_full();
     render_flush();
@@ -152,7 +171,6 @@ fn rf_fast_path() {
     rf_update_fps();
     rf_restore_fps_region();
     rf_draw_fps_text();
-    if lb(&vsync_enabled) == 1 { wait_vsync(); }
     cursor_hide();
     display_flip_rect(FPS_REGION_X, FPS_REGION_Y, FPS_REGION_W, FPS_REGION_H);
     cursor_draw(lw(&mouse_x), lw(&mouse_y));
@@ -166,7 +184,6 @@ fn rf_draw_drag() {
     rf_update_fps();
     rf_draw_fps_text();
     render_mark_dirty(FPS_REGION_X, FPS_REGION_Y, FPS_REGION_W, FPS_REGION_H);
-    if lb(&vsync_enabled) == 1 { wait_vsync(); }
     cursor_hide();
     render_flush();
     cursor_draw(lw(&mouse_x), lw(&mouse_y));
@@ -175,6 +192,11 @@ fn rf_draw_drag() {
 # ---- render_frame ----
 
 fn render_frame() {
+    # Runtime gate: suppress all per-frame present/refresh work when disabled.
+    # The boot-time first paint (kmain's initial render_frame) is also gated, so
+    # with present=off the desktop is whatever display_init/display_flip left.
+    if feat_on(FEAT_FRAME_PRESENT_REFRESH) == 0 { return; }
+
     # F12 klog overlay owns the whole screen: draw it, full-flush, cursor, done.
     if lb(&klog_visible) != 0 {
         klog_render_overlay();
@@ -195,6 +217,7 @@ fn render_frame() {
 
     taskmgr_live_refresh();
     media_live_refresh();
+    netpanel_live_refresh();
 
     # Track caret blink phase but do NOT dirty the scene (idle-CPU fix).
     sb(&ui_blink_phase, (lq(&tick_count) / BLINK_DIV) & 1);
@@ -246,6 +269,8 @@ fn taskmgr_live_refresh() {
         i = i + 1;
     }
 }
+
+data rf_first_frame_defer_save: 1 x 1 = 1;
 
 # ---- Media Player live refresh ----
 
@@ -320,6 +345,56 @@ fn media_live_refresh() {
                     cursor_draw(lw(&mouse_x), lw(&mouse_y));
                     return;
                 }
+            }
+        }
+        win = win + WINDOW_STRUCT_SIZE;
+        i = i + 1;
+    }
+}
+
+# ---- Network panel (ping app) live refresh ----
+
+# Repaint a focused, open ping window when an *in-app* async net event resolves
+# — a DHCP lease binds or an ICMP reply arrives — instead of waiting for the
+# next user click. Two triggers, both kernel-visible without touching the slot:
+#   * in-flight: DHCP DISCOVER/REQUEST (state 1/2) or ping awaiting reply
+#     (async 1). Repaint each frame so the app's draw() re-pumps the FSM and the
+#     "pinging…/acquiring…" UI stays live.
+#   * resolved: the dhcp/ping state byte changed since we last looked (BOUND/
+#     FAILED, reply-ready/idle). Repaint the one frame that shows the result.
+# Idle (no in-flight op, no state change) costs nothing — we fall through.
+fn netpanel_live_refresh() {
+    let dhcp = lb(&rtl8156_dhcp_state);
+    let png  = lb(&rtl8156_ping_async_state);
+    let busy = 0;
+    if dhcp == 1 { busy = 1; }
+    if dhcp == 2 { busy = 1; }
+    if png == 1 { busy = 1; }
+    let changed = 0;
+    if dhcp != lb(&netpanel_last_dhcp) { changed = 1; }
+    if png != lb(&netpanel_last_ping) { changed = 1; }
+    sb(&netpanel_last_dhcp, dhcp);
+    sb(&netpanel_last_ping, png);
+    if busy == 0 { if changed == 0 { return; } }
+
+    let win = WINDOW_POOL_ADDR;
+    let i = 0;
+    while i < MAX_WINDOWS {
+        let fl = lq(win + WIN_OFF_FLAGS);
+        if (fl & WF_ACTIVE) != 0 && (fl & WF_VISIBLE) != 0 && (fl & WF_MINIMIZED) == 0 {
+            if lq(win + WIN_OFF_DRAWFN) == &app_hl_ping_draw {
+                if (fl & WF_FOCUSED) != 0 {
+                    cursor_hide();
+                    wm_draw_window(lq(win + WIN_OFF_ID));
+                    render_mark_dirty(lw(win + WIN_OFF_X), lw(win + WIN_OFF_Y),
+                                      lw(win + WIN_OFF_W), lw(win + WIN_OFF_H));
+                    render_save_dirty_backbuffer();
+                    render_flush();
+                    cursor_draw(lw(&mouse_x), lw(&mouse_y));
+                    return;
+                }
+                sb(&scene_dirty, 1);
+                return;
             }
         }
         win = win + WINDOW_STRUCT_SIZE;

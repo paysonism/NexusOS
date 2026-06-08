@@ -612,13 +612,16 @@
 ; Cap-mask authenticator mismatch: slot_cap_mask[r15] no longer matches its
 ; HMAC, so the mask was corrupted after the last legitimate (re-stamped)
 ; write. This is a security-fatal condition (a deny is not enough — the mask
-; the kernel can see is untrustworthy), so route it to the existing CANARY
-; panic path. rdi = observed (unauthenticated) mask byte, rsi = detection RIP.
+; the kernel can see is untrustworthy. This is ATTRIBUTABLE to the current slot
+; (r15) on the syscall path, so instead of halting the whole machine via
+; kernel_panic_canary (which would let one tenant DoS every tenant) we kill
+; ONLY this slot and take the normal -1/.done exit. Fail-closed: the slot's
+; window/handles are reclaimed so it can't continue on the forged mask.
 .sc_cap_tamper:
-    movzx edi, dl
-    lea rsi, [rel .sc_cap_tamper]
     mov edx, 0x43415054                  ; CAPT: slot capability HMAC tamper
-    jmp kernel_panic_canary
+    call sc_slot_integrity_kill          ; per-slot teardown (not global halt)
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
 
 .sc_rate_reject:
     push rax

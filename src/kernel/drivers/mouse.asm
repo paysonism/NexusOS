@@ -29,6 +29,30 @@ mouse_init:
     mov dword [mouse_evt_tail], 0
     mov byte [mouse_irq_count], 0
 
+%ifdef RELEASE_BUILD
+    ; USB HID / UEFI pointer polling cover release input. The legacy PS/2 init
+    ; below can spend tens of milliseconds in 8042 waits on machines without a
+    ; responsive AUX port, so defer it out of the boot-critical path.
+    mov dx, 0x3F8
+    mov al, 'M'
+    out dx, al
+    mov al, '1'
+    out dx, al
+    mov al, '2'
+    out dx, al
+    mov al, 'F'
+    out dx, al
+    mov al, '!'
+    out dx, al
+    mov byte [abs 0x500], 0xAA
+    mov byte [mouse_init_status], 0x01
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+%endif
+
     ; Serial: 'M' = mouse init start
     mov dx, 0x3F8
     mov al, 'M'
@@ -927,8 +951,45 @@ mouse_debug_dump:
 .s_pic  db " PIC:", 0
 .s_raw  db " Raw:", 0
 
+; ----------------------------------------------------------------------------
+; mouse_apply_sense_x / _y - scale a signed relative delta by the per-axis
+; pointer sensitivity (mouse_sense_* tenths): eax = eax * sense / 10.
+; Preserves all registers except eax (saves rcx/rdx). Used by the USB-HID and
+; I2C-HID relative-pointer paths so the Settings Mouse tab affects every device.
+; ----------------------------------------------------------------------------
+global mouse_apply_sense_x, mouse_apply_sense_y
+mouse_apply_sense_x:
+    push rcx
+    push rdx
+    imul eax, [mouse_sense_x]
+    cdq
+    mov ecx, 10
+    idiv ecx
+    pop rdx
+    pop rcx
+    ret
+mouse_apply_sense_y:
+    push rcx
+    push rdx
+    imul eax, [mouse_sense_y]
+    cdq
+    mov ecx, 10
+    idiv ecx
+    pop rdx
+    pop rcx
+    ret
+
 section .data
 global mouse_x, mouse_y, mouse_buttons, mouse_moved
+global mouse_sense_x, mouse_sense_y
+
+; Per-axis pointer sensitivity, fixed-point in tenths (10 = 1.0x). The Settings
+; Mouse tab adjusts these over [1, 50] = 0.1x .. 5.0x via SYS_SET_MOUSE_SENSE.
+; Applied to every relative pointer delta (USB mouse + I2C touchpad):
+;   out_delta = in_delta * sense / 10  (see mouse_apply_sense_* below).
+; Default 15 (1.5x): real-HW I2C touchpad deltas are smaller than PS/2 counts.
+mouse_sense_x:      dd 15
+mouse_sense_y:      dd 15
 
 global mouse_init_status
 mouse_init_status:  db 0

@@ -20,12 +20,12 @@ reduce maintenance risk.
 
 ## P0: Test And Guard Staleness
 
-- [ ] Fix `scripts\test\test_security_probe.ps1` F2 static guard: it expects literal `fat16_read_file:` but `src/kernel/fs/fat16.asm` now uses `FN_BEGIN fat16_read_file`.
-- [ ] Re-run `.\scripts\test\test_security_probe.ps1` after updating the regex.
-- [ ] Keep the F2 guard checking the real property: read cluster into `FAT16_FILE_BUF`, then copy bounded length to caller buffer.
-- [ ] Add a runtime F2 assertion if possible, so the security probe does not rely only on source regex shape.
-- [ ] Check all static regex guards for macro-era drift: `FN_BEGIN`, `FN_DECL`, generated labels, auto-wrapped globals.
-- [ ] Make security probe failures distinguish "pattern stale" from "property absent".
+- [x] Fix `scripts\test\test_security_probe.ps1` F2 static guard: it expects literal `fat16_read_file:` but `src/kernel/fs/fat16.asm` now uses `FN_BEGIN fat16_read_file`.
+- [x] Re-run `.\scripts\test\test_security_probe.ps1` after updating the regex.
+- [x] Keep the F2 guard checking the real property: read cluster into `FAT16_FILE_BUF`, then copy bounded length to caller buffer.
+- [x] Add a runtime F2 assertion if possible, so the security probe does not rely only on source regex shape.
+- [x] Check all static regex guards for macro-era drift: `FN_BEGIN`, `FN_DECL`, generated labels, auto-wrapped globals.
+- [x] Make security probe failures distinguish "pattern stale" from "property absent".
 
 ## P0/P1: L3 Correctness
 
@@ -170,7 +170,7 @@ reduce maintenance risk.
 - [ ] Decide whether generated build artifacts should be tracked or ignored.
 - [x] Clean up accidental `NUL`/`null` files if they are not intentional.
 - [x] Separate `Unrelated` Kinect files from the OS repo or document why they live here.
-- [ ] Add a script that reports dirty generated files separately from dirty source files.
+- [x] Add a script that reports dirty generated files separately from dirty source files.
 - [ ] Normalize line endings for source and generated files.
 - [ ] Consider putting QEMU logs under a dedicated ignored `build/logs` folder.
 - [ ] Add a short before-commit checklist: full verify, security probe, screenshot sanity, git diff source-only.

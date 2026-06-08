@@ -277,6 +277,44 @@ fbperf_init:
     push r10
     push r11
 
+%ifdef RELEASE_BUILD
+    ; Release boot only needs the WC plan and clean counters. The full CPUID /
+    ; MSR / MTRR / page-table diagnostic snapshot is preserved for debug builds
+    ; and for SYS_SYSINFO-triggered investigation, but it is not part of the
+    ; visible desktop boot path.
+    mov  dword [fbperf_wc_plan_pat],     0x00070106
+    mov  dword [fbperf_wc_plan_pat + 4], 0x00070106
+    mov  qword [fbperf_flips_total], 0
+    mov  qword [fbperf_full_flips], 0
+    mov  qword [fbperf_rect_flips], 0
+    mov  qword [fbperf_bytes_total], 0
+    mov  qword [fbperf_full_bytes], 0
+    mov  qword [fbperf_rect_bytes], 0
+    mov  qword [fbperf_tsc_total], 0
+    mov  qword [fbperf_tsc_min], 0
+    mov  qword [fbperf_tsc_max], 0
+    mov  qword [fbperf_tsc_last], 0
+    mov  qword [fbperf_dirty_rect_sum], 0
+    mov  qword [fbperf_tsc_at_begin], 0
+    cmp  byte [fbperf_init_done], 0
+    jne  .release_skip_wc_clear
+    mov  byte [fbperf_wc_armed], 0
+    mov  byte [fbperf_wc_activated], 0
+.release_skip_wc_clear:
+    mov  byte [fbperf_init_done], 1
+    pop  r11
+    pop  r10
+    pop  r9
+    pop  r8
+    pop  rsi
+    pop  rdi
+    pop  rdx
+    pop  rcx
+    pop  rbx
+    pop  rax
+    ret
+%endif
+
     ; --- CPUID.01H -> EDX bit12=MTRR, bit16=PAT ---
     mov  eax, 1
     xor  ecx, ecx
@@ -795,6 +833,9 @@ fbperf_get:
 ; fbperf_serial_dump -- emit a large [FBPERF] block over COM1
 ; ---------------------------------------------------------------------------
 fbperf_serial_dump:
+%ifdef RELEASE_BUILD
+    ret
+%else
     push rax
     push rcx
     push rdx
@@ -962,6 +1003,7 @@ fbperf_serial_dump:
     pop  rcx
     pop  rax
     ret
+%endif
 
 ; ---------------------------------------------------------------------------
 ; fbperf_arm_wc -- set the arming flag. Activation still requires explicit

@@ -64,10 +64,11 @@ NK_PAGE_WRITABLE    equ (1 << 1); RW bit in a PTE/PDE
 
 ; Physical extent of the page-table region to self-protect (Phase 2). The
 ; loader lays the tables out contiguously: PML4 0x70000, PDPT0 0x71000,
-; PDPT1 0x72000, PD0 0x73000, PT0 0x74000, app PTs 0x75000..0x80FFF, and the
-; syscall-stack PT at SYSCALL_STACK_PT_BASE (0x82000). [LO, HI) is exclusive.
+; PDPT1 0x72000, PD0 0x73000, PT0 0x74000, app PTs 0x75000..0x80FFF, the
+; syscall-stack PT at SYSCALL_STACK_PT_BASE (0x82000), and the framebuffer
+; overrun-guard PD/PT at 0x83000..0x84FFF. [LO, HI) is exclusive.
 NK_PT_REGION_LO     equ PAGE_TABLE_ADDR              ; 0x70000
-NK_PT_REGION_HI     equ (SYSCALL_STACK_PT_BASE + 0x1000)  ; 0x83000
+NK_PT_REGION_HI     equ (SYSCALL_STACK_PT_BASE + 0x3000)  ; 0x85000
 
 section .text
 

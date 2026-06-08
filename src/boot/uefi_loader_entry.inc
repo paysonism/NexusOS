@@ -68,6 +68,13 @@ _start:
     ; finds no usable volume (same as today).
     call load_data_img
 
+    ; === S2b2b: Load OPTIONAL BOOTCFG.TXT (runtime feature-toggle config) ===
+    ; Read \EFI\BOOT\BOOTCFG.TXT into firmware RAM and publish (base,size) in
+    ; VBE_INFO. The kernel's boot_features.nxh parses it into the feat_mask
+    ; that gates subsystem init / per-frame work / individual syscalls. Absent
+    ; file leaves the fields zero -> kernel defaults everything ON (byte-compat).
+    call load_bootcfg
+
     ; === S2b3: Phase 1b - resolve DATA.IMG physical LBA extents on the ESP
     ; via EFI_BLOCK_IO_PROTOCOL while firmware services are still alive.
     ; Captured in VBE_INFO + STORAGE_EXTENTS_ADDR for ramdisk_flush in the

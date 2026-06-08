@@ -773,6 +773,7 @@ rtl8139_dhcp_configure:
     pop rbx
     ret
 
+global rtl8139_send_dhcp_discover
 rtl8139_send_dhcp_discover:
     push rax
     push rcx
@@ -799,6 +800,7 @@ rtl8139_send_dhcp_discover:
     pop rax
     ret
 
+global rtl8139_send_dhcp_request
 rtl8139_send_dhcp_request:
     push rax
     push rcx
@@ -1122,9 +1124,12 @@ rtl_target_ip:    resd 1
 global rtl_ping_start_tick
 rtl_ping_start_tick: resq 1
 rtl_dhcp_bound:          resb 1
+global rtl_dhcp_offer_seen
 rtl_dhcp_offer_seen:     resb 1
+global rtl_dhcp_ack_seen
 rtl_dhcp_ack_seen:       resb 1
 rtl_dhcp_msg_type:       resb 1
+global rtl_dhcp_xid
 rtl_dhcp_xid:            resd 1
 rtl_dhcp_state:          resb 1
 rtl_dhcp_ip:             resd 1

@@ -21,10 +21,37 @@ bits 64
 extern debug_print
 extern pci_read_conf_dword
 
+; --- MMIO bounds gate (security_todo.md §8) ---------------------------------
+; mmio_register_i2c declares i2c_base_addr's register page as the MMIO_DRV_I2C
+; capability at probe-commit time; I2C_MMIO_ASSERT proves a [base+off] access
+; stays inside it before the access issues. mmio_bounds_assert preserves all
+; caller registers per its ABI, but takes its inputs in rdi/rsi/edx — this macro
+; saves/restores those three so the surrounding [rsi+off] code is unperturbed.
+extern mmio_bounds_assert
+extern mmio_register_i2c
+%macro I2C_MMIO_ASSERT 2          ; %1 = base addr reg, %2 = window (legacy, unused)
+    push rdi
+    push rsi
+    push rdx
+    mov rdi, %1
+    ; 8-byte probe at the base, not the whole window: a full-window span ends
+    ; exactly at the registered region end (boundary-fragile) and any offset
+    ; base would overshoot. Validates the base lies in the registered I2C block.
+    ; %2 kept for call-site compatibility (documentation).
+    mov esi, 8
+    mov edx, MMIO_DRV_I2C
+    call mmio_bounds_assert
+    pop rdx
+    pop rsi
+    pop rdi
+%endmacro
+
 extern mouse_x, mouse_y, mouse_buttons, mouse_moved
+extern mouse_sense_x, mouse_sense_y
 extern mouse_scroll_y
 extern scr_width, scr_height
 extern tick_count
+extern cpu_tsc_per_tick    ; qword: calibrated TSC cycles per 10ms PIT tick (frame_pacing)
 
 ; HID parser
 extern hid_parse_report_desc
@@ -76,12 +103,16 @@ IC_CMD_READ         equ (1 << 8)
 IC_CMD_STOP         equ (1 << 9)
 IC_CMD_RESTART      equ (1 << 10)
 
-; Known AMD FCH I2C base addresses
-I2C_BASE_0  equ 0xFEDC2000
-I2C_BASE_1  equ 0xFEDC3000
-I2C_BASE_2  equ 0xFEDC5000   ; was 0xFEDC4000 (nonexistent); real HW has 0xFEDC5000
-I2C_BASE_3  equ 0xFEDC6000   ; was 0xFEDC5000; real HW also has 0xFEDC6000
-I2C_BASE_4  equ 0xFEDC0000   ; additional block seen on Strix Point
+; AMD FCH DesignWare I2C base addresses.
+; Authoritative: decoded from this machine's DSDT (Memory32Fixed under each
+; AMDI0010 controller). Exactly four blocks exist; FEDC6000/FEDC0000 do NOT.
+;   I2CA = FEDC2000   I2CB = FEDC3000   I2CC = FEDC4000   I2CD = FEDC5000
+; The touchpad (Synaptics SYNA1B92, slave 0x2C, HID desc reg 0x0020) hangs off
+; I2CD = FEDC5000 (ACPI parent AMDI0010 instance 3). Probe I2CD first.
+I2C_BASE_A  equ 0xFEDC2000   ; I2CA
+I2C_BASE_B  equ 0xFEDC3000   ; I2CB
+I2C_BASE_C  equ 0xFEDC4000   ; I2CC
+I2C_BASE_D  equ 0xFEDC5000   ; I2CD  <- touchpad controller
 
 ; Touchpad HID addresses to probe
 TP_ADDR_ELAN        equ 0x15
@@ -126,7 +157,7 @@ i2c_hid_init:
     xor r13d, r13d              ; Controller index
 
 .try_amd_controller:
-    cmp r13d, 5
+    cmp r13d, I2C_AMD_BASE_COUNT
     jge .try_intel
 
     mov rsi, [r12 + r13 * 8]   ; Load base address
@@ -142,6 +173,20 @@ i2c_hid_init:
 
     mov [i2c_base_addr], rsi
     mov byte [i2c_dbg_init_code], 0x20
+
+    ; §8: declare this AMD FCH I2C register page as the MMIO_DRV_I2C capability.
+    push rsi
+    push rdi
+    push rax
+    push rcx
+    push rdx
+    mov rdi, rsi
+    call mmio_register_i2c
+    pop rdx
+    pop rcx
+    pop rax
+    pop rdi
+    pop rsi
 
     push rsi
     mov rsi, szI2cProbing
@@ -234,6 +279,20 @@ i2c_hid_init:
     mov [i2c_base_addr], rsi
     mov byte [i2c_is_intel], 1
     mov byte [i2c_dbg_init_code], 0x31
+
+    ; §8: declare this Intel LPSS I2C BAR0 page as the MMIO_DRV_I2C capability.
+    push rsi
+    push rdi
+    push rax
+    push rcx
+    push rdx
+    mov rdi, rsi
+    call mmio_register_i2c
+    pop rdx
+    pop rcx
+    pop rax
+    pop rdi
+    pop rsi
 
     push rsi
     mov rsi, szI2cIntelFound
@@ -383,6 +442,9 @@ i2c_try_all_addresses:
 ; ============================================================================
 i2c_init_controller:
     push rcx
+
+    ; §8: gate the init-path register window before the first [rsi+off] store.
+    I2C_MMIO_ASSERT rsi, MMIO_I2C_WINDOW
 
     ; Disable controller first
     mov dword [rsi + DW_IC_ENABLE], 0
@@ -927,6 +989,12 @@ i2c_hid_bus_reset:
     mov byte [i2c_poll_state], 0
     mov dword [i2c_error_count], 0
 
+    ; Re-initialize the HID device: the I2C bus reset killed the device's
+    ; session state.  Without SET_POWER + RESET the touchpad stays confused
+    ; and the next reads time out, causing cascading errors for several seconds.
+    call i2c_hid_set_power_on
+    call i2c_hid_reset
+
     pop rcx
     ret
 
@@ -951,6 +1019,9 @@ i2c_hid_poll:
     mov byte [i2c_poll_busy], 1
 
     mov rsi, [i2c_base_addr]
+    ; §8: prove the whole DW_IC register window (every [rsi+off] below, off<=0xF4)
+    ; lies inside this driver's registered MMIO page before any poll-path access.
+    I2C_MMIO_ASSERT rsi, MMIO_I2C_WINDOW
     inc dword [i2c_dbg_polls]           ; DEBUG: count poll entries
 
     ; Check for TX abort (non-blocking)
@@ -1094,13 +1165,62 @@ i2c_hid_poll:
     cmp eax, ecx
     jge .state1_ready
 
-    ; Burst not fully in yet - check the deadline
+    ; Burst not fully in yet.  If the hardware still has TX commands queued,
+    ; spin up to ~2ms (TSC-based) waiting for bytes to arrive.  This converts
+    ; what was a 4-frame sequence (one 16-byte FIFO-load per 16.7ms frame at
+    ; 60 fps) into a single-call read: a 64-byte report at 400kHz I2C finishes
+    ; in ~1.4ms, well within the 2ms budget.
+    mov eax, [rsi + DW_IC_TXFLR]
+    test eax, eax
+    jz .state1_deadline_check       ; TX empty -> no outstanding reads; skip spin
+
+    mov rcx, [cpu_tsc_per_tick]
+    test rcx, rcx
+    jz .state1_deadline_check       ; TSC not calibrated yet; skip spin
+
+    rdtsc
+    shl rdx, 32
+    or rax, rdx                     ; rax = 64-bit TSC now
+    mov rcx, [cpu_tsc_per_tick]
+    shr rcx, 2                      ; /4 => ~2.5ms at 100Hz (10ms/tick)
+    add rax, rcx
+    mov [i2c_spin_tsc_deadline], rax
+
+.state1_rx_spin:
+    pause
+    ; Abort check inside spin so a bus error doesn't waste the full 2ms budget.
+    mov eax, [rsi + DW_IC_RAW_INTR_STAT]
+    test eax, (1 << 6)              ; TX_ABRT
+    jnz .state1_spin_abort
+    mov eax, [rsi + DW_IC_RXFLR]
+    test eax, eax
+    jnz .state1_drain               ; bytes arrived -> drain and queue more
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    cmp rax, [i2c_spin_tsc_deadline]
+    jb .state1_rx_spin              ; still within spin budget
+
+.state1_deadline_check:
+    ; Spin exhausted (or skipped). Fall back to the slow tick-based deadline so
+    ; very large reports can span at most ~100ms before an error is declared.
     mov eax, [tick_count]
     cmp eax, [i2c_poll_deadline]
-    jb .poll_ret                ; still within deadline, keep waiting
-    ; Timed out - the transaction aborted. Recover for the next frame.
+    jb .poll_ret                    ; still within deadline, keep waiting
+    ; Tick deadline expired -> abort and recover.
     inc dword [i2c_error_count]
     mov eax, [rsi + DW_IC_CLR_TX_ABRT]
+    call i2c_flush_rx
+    mov byte [i2c_poll_state], 0
+    mov byte [i2c_poll_busy], 0
+    pop rbx
+    ret
+
+.state1_spin_abort:
+    ; TX abort detected during spin: clear state and let next poll retry.
+    inc dword [i2c_dbg_aborts]
+    mov eax, [rsi + DW_IC_CLR_TX_ABRT]
+    inc dword [i2c_error_count]
     call i2c_flush_rx
     mov byte [i2c_poll_state], 0
     mov byte [i2c_poll_busy], 0
@@ -1110,6 +1230,68 @@ i2c_hid_poll:
 .state1_ready:
     mov byte [i2c_poll_state], 0
     mov dword [i2c_error_count], 0  ; Reset error count on success
+
+    ; --- Serial latency stamp: "P<4-hex-delta>\r" where delta = TSC>>16 between
+    ; consecutive processed reports.  At 3GHz: 1 unit ≈ 21.8 μs.
+    ; Target for 125Hz touchpad: ~8ms inter-report = ~0x016E units at 3GHz.
+    ; Connect a serial terminal and observe the printed values to confirm rate.
+    push rbx
+    push rcx
+    push rdx
+    rdtsc
+    shl rdx, 32
+    or rax, rdx                     ; rax = 64-bit TSC now
+    mov rcx, rax                    ; rcx = current TSC (saved before computing delta)
+    sub rax, [i2c_last_report_tsc]  ; rax = delta since last report
+    shr rax, 16                     ; scale: ~21μs/unit at 3GHz
+    mov [i2c_last_report_tsc], rcx  ; update last timestamp (rcx = current TSC)
+    mov rbx, rax                    ; rbx = scaled delta (nibble source, rax can now be clobbered)
+    mov dx, 0x3F8
+    mov al, 'P'
+    out dx, al
+    ; nibble 3 (bits 15:12)
+    mov al, bh
+    shr al, 4
+    and al, 0xF
+    add al, 0x30
+    cmp al, 0x3A
+    jb .lat0
+    add al, 7
+.lat0:
+    out dx, al
+    ; nibble 2 (bits 11:8)
+    mov al, bh
+    and al, 0xF
+    add al, 0x30
+    cmp al, 0x3A
+    jb .lat1
+    add al, 7
+.lat1:
+    out dx, al
+    ; nibble 1 (bits 7:4)
+    mov al, bl
+    shr al, 4
+    and al, 0xF
+    add al, 0x30
+    cmp al, 0x3A
+    jb .lat2
+    add al, 7
+.lat2:
+    out dx, al
+    ; nibble 0 (bits 3:0)
+    mov al, bl
+    and al, 0xF
+    add al, 0x30
+    cmp al, 0x3A
+    jb .lat3
+    add al, 7
+.lat3:
+    out dx, al
+    mov al, 13
+    out dx, al
+    pop rdx
+    pop rcx
+    pop rbx
 
     ; --- DEBUG: capture raw report (count, length, first 8 bytes) ---
     inc dword [i2c_dbg_rpts]
@@ -1207,8 +1389,39 @@ i2c_hid_poll:
     jmp .poll_ret
 
 .parsed_report_id_mismatch:
+    ; The Synaptics SYNA1B92 defaults to its RELATIVE MOUSE collection until a
+    ; host switches it into PTP absolute mode. That collection is Report ID 0x02,
+    ; a 4-byte report (incl ID): [ID][buttons][dX:s8][dY:s8] (confirmed from the
+    ; device's own HID caps: UsagePage 0x1/Usage 0x2 Mouse, X/Y relative 8-bit).
+    ; The parsed layout targets the ABSOLUTE collection, so its report ID never
+    ; matches and every real motion report was being dropped here -> dead cursor.
+    ; Consume the relative mouse report directly so the pointer moves.
+    ; On entry rdi -> report ID byte; ecx (restored below) = data length (no hdr).
     pop rcx
-    jmp .poll_ret
+    cmp ecx, 8
+    ja .poll_ret                 ; long report -> not the relative mouse packet
+    cmp ecx, 4
+    jl .poll_ret                 ; too short to carry buttons + dX + dY
+    movzx eax, byte [rdi + 1]    ; buttons
+    and al, 0x07
+    mov [mouse_buttons], al
+    movsx eax, byte [rdi + 2]    ; dX, signed 8-bit relative delta
+    imul eax, [mouse_sense_x]    ; * sensitivity (tenths)
+    cdq
+    mov ecx, 10
+    idiv ecx                     ; / 10
+    shl eax, 1                   ; 2x I2C-path boost: compensates ~60Hz polling
+                                 ; vs 125Hz native rate (each read captures 2
+                                 ; reports' worth of motion, but we only see 1)
+    add [mouse_x], eax
+    movsx eax, byte [rdi + 3]    ; dY, signed 8-bit relative delta
+    imul eax, [mouse_sense_y]
+    cdq
+    mov ecx, 10
+    idiv ecx
+    shl eax, 1                   ; same 2x boost for Y
+    add [mouse_y], eax
+    jmp .poll_clamp              ; clamp to screen + set mouse_moved
 
 .poll_clamp:
     ; Clamp coordinates
@@ -1523,20 +1736,22 @@ i2c_hid_debug_dump_line:
 ; ============================================================================
 section .data
 
-; AMD FCH I2C base addresses - all blocks seen on Strix Point real hardware
-; Order: higher indices first (I2CD = instance 3 likely at 0xFEDC5000 or 0xFEDC6000)
+; AMD FCH I2C base addresses - the four real DesignWare blocks from the DSDT.
+; Touchpad lives on I2CD (FEDC5000), so probe it first; the rest are fallbacks
+; for other boards. FEDC6000/FEDC0000 were removed - they do not exist on HW
+; and probing absent MMIO reads garbage. Keep I2C_AMD_BASE_COUNT in sync.
 i2c_amd_bases:
-    dq I2C_BASE_2               ; 0xFEDC5000 - most likely I2CD on Strix Point
-    dq I2C_BASE_3               ; 0xFEDC6000 - fallback I2CD candidate
-    dq I2C_BASE_1               ; 0xFEDC3000 - I2CB
-    dq I2C_BASE_0               ; 0xFEDC2000 - I2CA
-    dq I2C_BASE_4               ; 0xFEDC0000 - additional FCH block
+    dq I2C_BASE_D               ; 0xFEDC5000 - I2CD <- touchpad (SYNA1B92 @ 0x2C)
+    dq I2C_BASE_C               ; 0xFEDC4000 - I2CC
+    dq I2C_BASE_B               ; 0xFEDC3000 - I2CB
+    dq I2C_BASE_A               ; 0xFEDC2000 - I2CA
+I2C_AMD_BASE_COUNT  equ (($ - i2c_amd_bases) / 8)
 
 ; Touchpad I2C addresses to probe (most-common first)
 i2c_tp_addrs:
+    db 0x2C             ; Synaptics SYNA1B92 (THIS laptop - DSDT-confirmed) / ALPS
     db 0x15             ; ELAN primary (Acer Nitro / AMD Ryzen)
     db 0x17             ; ELAN variant (Nitro V16 AI / Strix Point)
-    db 0x2C             ; Synaptics / ALPS
     db 0x38             ; ELAN variant
     db 0x10             ; ELAN alt
     db 0x14             ; Goodix
@@ -1575,6 +1790,10 @@ i2c_poll_deadline:  dd 0        ; tick_count deadline for the current burst
 i2c_poll_busy:      db 0        ; prevents IRQ/main-loop reentry
 i2c_tx_fifo_depth:  db 16       ; decoded from DW_IC_COMP_PARAM_1 when available
 i2c_rx_fifo_depth:  db 16       ; decoded from DW_IC_COMP_PARAM_1 when available
+
+; TSC-spin deadline + per-report latency stamp
+i2c_spin_tsc_deadline: dq 0    ; TSC deadline for the in-spin busy-wait
+i2c_last_report_tsc:   dq 0    ; TSC at which the previous report was processed
 
 ; DEBUG: raw touchpad report capture
 i2c_dbg_rpts:       dd 0        ; count of input reports processed

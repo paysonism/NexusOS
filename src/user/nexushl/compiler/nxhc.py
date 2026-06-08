@@ -59,6 +59,14 @@ def _build_reg_table():
 
 REG_TABLE=_build_reg_table()
 
+# SSE2 XMM register names. The XMM data path (display non-temporal blits, dword
+# broadcast fills) is expressed with statement-form intrinsics that take a BARE
+# xmm register name — the same explicit-register discipline as push_reg/set_reg.
+# XMM lifetimes are the author's responsibility: the structured stack machine
+# keeps live values only in GP rbp slots, so it never relies on an XMM register
+# surviving across statements (consistent with set_reg semantics).
+XMM_REGS=frozenset(f"xmm{i}" for i in range(16))
+
 def _reg_at_width(canon, bits):
     # Return the register spelling for canonical 64-bit reg `canon` at `bits`.
     for spell,(c,w) in REG_TABLE.items():
@@ -779,6 +787,700 @@ def _peephole(lines):
         i += 1
     return out
 
+# -------------------- function-level optimizer (lossless) --------------------
+# The peephole above collapses push/pop arg staging but leaves the per-function
+# scaffolding the naive emitter always emits: a full rbp frame, a memory "home
+# slot" spill of every register parameter (immediately reloaded), an
+# unconditional push/pop of the rbx/r12 callee-saved pair the user-mode body
+# almost never touches, and a `jmp .fn_end` to the very next line. On the thin
+# syscall-wrapper functions that dominate an app these turn a 3-instruction body
+# into ~17 instructions. This pass removes that scaffolding when — and ONLY
+# when — it can prove the removal changes nothing observable. It is allowlist
+# based exactly like _operand_safe_for_target: any function or pattern it cannot
+# prove safe is passed through verbatim, so it can never make code wrong, only
+# decline to shrink it. Set with -O1 (default); -O0 reproduces the verbose
+# output for debugging / byte-diffing.
+#
+# Safety is also a security win: fewer spills means fewer copies of argument
+# values (tokens/keys passed as args) left sitting in the writable stack frame,
+# and ~3-4x less .text per app means a smaller W^X code window to hash and
+# protect.
+#
+# Runtime note: this pass is intentionally disabled for default user builds
+# until the full app/kernel callback and syscall register contract is tightened.
+# The peephole pass above remains enabled; it is local and matches the stable
+# --O0 boot behavior. The broader frame/spill cleanup can corrupt control flow
+# in slot-1 app callbacks when older helpers/syscalls violate the strict SysV
+# assumptions it needs.
+_ENABLE_USER_FUNCTION_OPT = False
+
+# A memory operand that is a plain, constant rbp-relative slot: [rbp-8], [rbp+16].
+_RBP_SLOT_RE = re.compile(r"\[rbp([+-]\d+)\]")
+# Exactly one such slot and nothing else inside the brackets (rejects indexed
+# forms like [rbp-8+rax] that we cannot reason about).
+_RBP_SLOT_ONLY_RE = re.compile(r"^\[rbp[+-]\d+\]$")
+_MOV2_RE = re.compile(r"^mov\s+([^,]+),\s*(.+)$")
+_CALLER_SAVED = {"rax","rcx","rdx","rsi","rdi","r8","r9","r10","r11"}
+_SYSCALL_CLOBBERED = _CALLER_SAVED | {"rbx","r12","r13","r14","r15"}
+
+def _canon(tok):
+    e = REG_TABLE.get(tok.strip())
+    return e[0] if e else None
+
+def _fn_segments(lines):
+    # Yield (is_fn, [lines]) segments. A function segment starts at an
+    # `FN_BEGIN ` line and runs up to (not including) the next one; everything
+    # before the first FN_BEGIN and any trailing non-fn lines pass through.
+    out=[]; i=0; n=len(lines)
+    # leading non-fn preamble
+    while i<n and not _code(lines[i]).startswith("FN_BEGIN "):
+        out.append((False,[lines[i]])); i+=1
+    while i<n:
+        j=i+1
+        while j<n and not _code(lines[j]).startswith("FN_BEGIN "):
+            j+=1
+        out.append((True, lines[i:j])); i=j
+    return out
+
+def _opt_fn_uses_addr_of_frame(codes):
+    # Bail conditions for value-forwarding / dead-store / frame removal: if the
+    # function takes the address of a stack slot (lea ...,[rbp...]) or uses an
+    # indexed/odd rbp form, a memory write through a pointer could alias a slot
+    # we are tracking — we cannot prove anything, so disable those passes.
+    for c in codes:
+        if "rbp" not in c:
+            continue
+        if c.startswith(("push rbp","pop rbp","mov rbp, rsp","mov rsp, rbp",
+                         "sub rsp","add rsp")):
+            continue
+        if c.startswith("lea ") and "rbp" in c:
+            return True
+        # every rbp mention in this line must be a plain constant slot
+        # (strip the known-good slot forms; if 'rbp' still remains, it's odd)
+        stripped=_RBP_SLOT_RE.sub("", c)
+        if "rbp" in stripped:
+            return True
+    return False
+
+def _writes_reg_canons(code):
+    # Conservative set of canonical 64-bit registers an instruction writes.
+    # Returns None to mean "clears all tracking" (unknown / control flow).
+    if code.endswith(":"):                      # a label = a jump target
+        return None
+    mnem=code.split(None,1)[0] if code else ""
+    if mnem in ("test","cmp","push","jmp","je","jz","jne","jnz","ja","jae",
+                "jb","jbe","jg","jge","jl","jle","sfence","mfence","lfence",
+                "nop","cld","std","FN_BEGIN","FN_ARG","FN_END"):
+        return set()
+    if mnem=="syscall":
+        # NexusOS syscalls are not a normal System-V call boundary and the
+        # kernel-side dispatcher is free to reuse GPRs. Do not forward or
+        # promote values through it as if any non-frame GPR survived.
+        return set(_SYSCALL_CLOBBERED)
+    if mnem=="APP_SYSNO":
+        return {"rax"}
+    if mnem in ("call","FN_CALL") or code.startswith("call "):
+        return set(_CALLER_SAVED)
+    if mnem in ("cqo","cdq"):
+        return {"rdx"}
+    if mnem in ("idiv","div","mul"):
+        return {"rax","rdx"}
+    if mnem=="pop":
+        c=_canon(code.split(None,1)[1]); return {c} if c else None
+    if mnem in ("mov","movzx","movsx","movsxd","lea","add","sub","and","or",
+                "xor","imul","neg","shl","shr","sar","ror","rol","sete","setne",
+                "setl","setg","setle","setge","seta","setb","movd","pshufd",
+                "movdqu","movdqa","movntdq"):
+        m=_MOV2_RE.match(code) if mnem=="mov" else None
+        # two-operand: dest is text up to first comma
+        rest=code.split(None,1)[1] if " " in code else ""
+        dest=rest.split(",",1)[0].strip()
+        if dest.startswith("[") or dest.startswith("xmm"):
+            return set()                         # memory / xmm dest: no GPR write
+        c=_canon(dest)
+        return {c} if c else None
+    return None                                  # unknown instruction: clear all
+
+def _p_value_forward(seg, codes):
+    # Remove a reload `mov R, [rbp±K]` when R already holds [rbp±K]'s value
+    # because an earlier `mov [rbp±K], R` (same 64-bit reg, no intervening write
+    # to R or the slot) put it there. Tracks reg->slot equalities; clears at any
+    # label or unknown instruction. Only 64-bit GP moves participate.
+    reg_slot={}     # canon reg -> slot string (reg currently equals this slot)
+    drop=set()
+    for idx,c in enumerate(codes):
+        m=_MOV2_RE.match(c)
+        if m:
+            dest=m.group(1).strip(); src=m.group(2).strip()
+            d_can=_canon(dest); s_can=_canon(src)
+            # store: mov [slot], R64
+            if _RBP_SLOT_ONLY_RE.match(dest) and s_can:
+                slot=_RBP_SLOT_RE.match(dest).group(1)
+                # this reg now equals this slot; any other reg equal to slot is
+                # still valid (mem unchanged value), but regs equal to it stay.
+                for r in [r for r,sv in reg_slot.items() if sv==slot and r!=s_can]:
+                    pass
+                reg_slot[s_can]=slot
+                continue
+            # reload: mov R64, [slot]
+            if d_can and _RBP_SLOT_ONLY_RE.match(src):
+                slot=_RBP_SLOT_RE.match(src).group(1)
+                if reg_slot.get(d_can)==slot:
+                    drop.add(idx)                # redundant: R already holds it
+                    continue
+                reg_slot[d_can]=slot
+                continue
+            # plain reg<-reg / reg<-imm move: dest no longer tracks a slot
+            if d_can:
+                reg_slot.pop(d_can,None)
+                # if dest is now an independent value, also it doesn't alias slot
+                continue
+        w=_writes_reg_canons(c)
+        if w is None:
+            reg_slot.clear()
+        else:
+            for r in w:
+                if r: reg_slot.pop(r,None)
+    if not drop:
+        return seg, codes
+    seg2=[ln for k,ln in enumerate(seg) if k not in drop]
+    codes2=[c for k,c in enumerate(codes) if k not in drop]
+    return seg2, codes2
+
+def _p_dead_store(seg, codes):
+    # Remove a param spill `mov [rbp±K], R` whose slot is never read afterwards
+    # (a read = the slot text appears as a source anywhere later in the fn).
+    # Compute, per slot, whether any later line mentions it outside its own
+    # store dest. Conservative: a store to the slot does not count as a read.
+    n=len(codes)
+    drop=set()
+    for idx,c in enumerate(codes):
+        m=_MOV2_RE.match(c)
+        if not m: continue
+        dest=m.group(1).strip(); src=m.group(2).strip()
+        if not (_RBP_SLOT_ONLY_RE.match(dest) and _canon(src)):
+            continue
+        slot_txt=dest                            # e.g. "[rbp-8]"
+        read=False
+        for k in range(idx+1,n):
+            ck=codes[k]
+            if slot_txt in ck:
+                mk=_MOV2_RE.match(ck)
+                # a later store to the SAME slot overwrites it; stop scanning
+                if mk and mk.group(1).strip()==slot_txt:
+                    break
+                read=True; break
+        if not read:
+            drop.add(idx)
+    if not drop:
+        return seg, codes
+    seg2=[ln for k,ln in enumerate(seg) if k not in drop]
+    codes2=[c for k,c in enumerate(codes) if k not in drop]
+    return seg2, codes2
+
+def _body_codes(codes):
+    # Indices of the function body: between the prologue (after the last of
+    # push rbp / mov rbp,rsp / sub rsp / spills / push rbx / push r12) and the
+    # epilogue (the .fn_end label). Returns (lo, hi) exclusive-hi over codes, or
+    # None if the standard shape isn't found.
+    try:
+        p_rbp=codes.index("push rbp")
+    except ValueError:
+        return None
+    lo=p_rbp+1
+    # skip mov rbp,rsp / sub rsp / spills / push rbx / push r12
+    while lo<len(codes) and (codes[lo]=="mov rbp, rsp"
+            or codes[lo].startswith("sub rsp,")
+            or codes[lo] in ("push rbx","push r12")
+            or (_MOV2_RE.match(codes[lo]) and _RBP_SLOT_ONLY_RE.match(
+                    _MOV2_RE.match(codes[lo]).group(1).strip()))):
+        lo+=1
+    # epilogue label = first line ending ':' that starts with '.fn_end'
+    hi=None
+    for k in range(lo,len(codes)):
+        if codes[k].startswith(".fn_end") and codes[k].endswith(":"):
+            hi=k; break
+    if hi is None:
+        return None
+    return (lo,hi)
+
+def _p_dead_callee_save(seg, codes):
+    # Drop `push rbx`/`push r12` (prologue) + matching `pop r12`/`pop rbx`
+    # (epilogue) if the body never names that register at any width.
+    body=_body_codes(codes)
+    if body is None: return seg, codes
+    lo,hi=body
+    bodytext=" ".join(codes[lo:hi])
+    def used(canon):
+        for spell,(c,_w) in REG_TABLE.items():
+            if c==canon and re.search(r"\b"+re.escape(spell)+r"\b", bodytext):
+                return True
+        return False
+    drop=set()
+    if not used("rbx"):
+        for k,c in enumerate(codes):
+            if c in ("push rbx","pop rbx"): drop.add(k)
+    if not used("r12"):
+        for k,c in enumerate(codes):
+            if c in ("push r12","pop r12"): drop.add(k)
+    if not drop: return seg, codes
+    seg2=[ln for k,ln in enumerate(seg) if k not in drop]
+    codes2=[c for k,c in enumerate(codes) if k not in drop]
+    return seg2, codes2
+
+def _p_jmp_to_next(seg, codes):
+    # Drop `jmp L` when the immediately following code line is `L:`.
+    drop=set()
+    for k in range(len(codes)-1):
+        c=codes[k]
+        if c.startswith("jmp ") and codes[k+1].endswith(":"):
+            tgt=c[4:].strip()
+            if codes[k+1][:-1].strip()==tgt:
+                drop.add(k)
+    if not drop: return seg, codes
+    seg2=[ln for k,ln in enumerate(seg) if k not in drop]
+    codes2=[c for k,c in enumerate(codes) if k not in drop]
+    return seg2, codes2
+
+def _p_frame(seg, codes, addr_of_frame):
+    # Two levels of frame trimming, both alignment-safe:
+    #   (1) if no [rbp-…] local/spill slot is referenced anywhere, the `sub rsp,N`
+    #       reserved only dead space -> remove it (rbp frame kept, so any inner
+    #       call stays 16-byte aligned: push rbp made rsp%16==0).
+    #   (2) additionally, if the body has no call / push / pop and no rbp/rsp
+    #       reference at all, the whole frame is dead -> remove push rbp / mov
+    #       rbp,rsp and the epilogue mov rsp,rbp / pop rbp. (No call means no ABI
+    #       alignment obligation; syscall does not require 16-byte alignment.)
+    if addr_of_frame:
+        return seg, codes
+    body=_body_codes(codes)
+    if body is None: return seg, codes
+    lo,hi=body
+    has_neg_slot=any(_RBP_SLOT_RE.search(c) and "[rbp-" in c for c in codes)
+    drop=set()
+    if not has_neg_slot:
+        for k,c in enumerate(codes):
+            if c.startswith("sub rsp,"): drop.add(k)
+    # level 2
+    bodytext=codes[lo:hi]
+    has_call=any(c.startswith(("call ","FN_CALL")) or c=="call" or c.startswith("call_table")
+                 for c in bodytext)
+    has_stack=any(c.startswith(("push ","pop ")) for c in bodytext)
+    has_rbp_any=any("rbp" in c for c in bodytext) or any("rbp" in c for c in
+                    [codes[i] for i in range(hi,len(codes))
+                     if not codes[i].startswith(("mov rsp, rbp","pop rbp"))])
+    if (not has_call) and (not has_stack) and (not has_rbp_any) and (not has_neg_slot):
+        for k,c in enumerate(codes):
+            if c in ("push rbp","mov rbp, rsp","mov rsp, rbp","pop rbp"):
+                drop.add(k)
+    if not drop: return seg, codes
+    seg2=[ln for k,ln in enumerate(seg) if k not in drop]
+    codes2=[c for k,c in enumerate(codes) if k not in drop]
+    return seg2, codes2
+
+def _opt_one_fn(seg):
+    codes=[_code(l).strip() for l in seg]
+    addr_of_frame=_opt_fn_uses_addr_of_frame(codes)
+    # jmp-to-next is local control-flow cleanup. Keep the default rbx/r12 save
+    # pair in user functions: the app/kernel syscall boundary and older shared
+    # app helpers do not form a strict SysV-only call graph, and O0's save pair
+    # is the compatibility bracket that keeps app callbacks from leaking
+    # callee-saved corruption back into the kernel scheduler.
+    seg,codes=_p_jmp_to_next(seg,codes)
+    if not addr_of_frame:
+        seg,codes=_p_value_forward(seg,codes)
+        seg,codes=_p_dead_store(seg,codes)
+    seg,codes=_p_frame(seg,codes,addr_of_frame)
+    return seg
+
+def _optimize_functions(lines, target):
+    # Per-function lossless cleanup. Restricted to the user target, whose
+    # gen_fn shape this matches; kernel/boot codegen (naked fns, custom ABIs)
+    # is left untouched.
+    if target!="user":
+        return lines
+    out=[]
+    for is_fn,chunk in _fn_segments(lines):
+        out.extend(_opt_one_fn(chunk) if is_fn else chunk)
+    return out
+
+# -------------------- Phase 2: register allocator (--O2, lossless) -----------
+# Phase 1 only removes dead scaffolding; the surviving body still round-trips
+# every `let` local and every register-param through its `[rbp-N]` home slot on
+# every read and write (the naive stack-machine emitter). Phase 2 promotes such
+# a home slot into a *callee-saved* GPR for the whole function so the value
+# stays live in a register across its entire range — the real path toward
+# hand-written-asm density on compute-heavy bodies.
+#
+# It is allowlist/conservative exactly like the Phase-1 passes: a slot is
+# promoted ONLY when every property below is PROVEN; anything unproven leaves
+# the slot on its memory home (never a miscompile, only a missed shrink).
+#
+# Safety contract for a promoted negative slot S -> callee-saved reg R:
+#   * USER target only (System-V AMD64 ABI; rbp frame shape from gen_fn).
+#   * Control flow is allowed (if/while/loops/multiple returns): promotion is
+#     WHOLE-FUNCTION and rewrites every access to S 1:1 into R, so R's read/write
+#     trace is identical to S's on every path and the slot's memory is fully
+#     dead — merge points and back-edges cannot make them disagree. The only
+#     control-flow construct rejected is an INDIRECT branch/call (target not a
+#     visible label); see _o2_control_flow_ok. Additionally, a real
+#     definite-assignment dataflow over the function CFG must PROVE every read of
+#     S is preceded by a store on all paths (so the register is never read before
+#     defined); see _o2_build_cfg / _o2_slot_definitely_assigned.
+#   * The function does not take the address of any frame slot, nor use any
+#     indexed/odd rbp form (_opt_fn_uses_addr_of_frame) — no aliasing writer can
+#     touch S through a pointer.
+#   * S is referenced ONLY as a whole, plain `[rbp-K]` operand of a 2-operand
+#     `mov`, paired with a *64-bit canonical* register (or as a `mov` between S
+#     and a 64-bit reg). Never sub-width, never inside lea/test/cmp/arith,
+#     never as part of a larger addressing expression. (gen_fn always spills /
+#     reloads whole 8-byte slots, so this is the common shape.)
+#   * R is a callee-saved GPR (rbx, r12, r13, r14, r15) that the body never
+#     mentions at any width AND that is not already push/pop-saved. Each R we
+#     actually use is push/pop-saved in prologue/epilogue, so the ABI's
+#     callee-saved discipline is preserved.
+#   * Only NEGATIVE slots are eligible. `[rbp+K]` are inbound stack arguments
+#     (params 6+) living in the caller's frame; they are read in place and must
+#     never be turned into a private register.
+#
+# Because R is callee-saved it survives `call`/`syscall`, so a value living in
+# R across a call needs no extra spill. We do NOT change `sub rsp,N` / the rbp
+# frame, so 16-byte call alignment is untouched (push rbp already aligned it,
+# and each added push R is balanced by its pop R before the epilogue).
+
+_O2_CALLEE_SAVED=["rbx","r12","r13","r14","r15"]
+# All register spellings (any width) that map to a given canonical 64-bit reg,
+# for the "body never mentions R" freedom test.
+def _spellings_for_canon(canon):
+    return [sp for sp,(c,_w) in REG_TABLE.items() if c==canon]
+
+_NEG_SLOT_RE=re.compile(r"^\[rbp-\d+\]$")
+
+def _o2_collect_neg_slots(text):
+    return set(re.findall(r"\[rbp-\d+\]", text))
+
+def _o2_slot_only_plain_mov(slot, codes_body):
+    # Prove `slot` appears only as a whole operand of a 2-operand mov, paired
+    # with a 64-bit canonical register. Returns False at the first violation.
+    for c in codes_body:
+        if slot not in c:
+            continue
+        m=_MOV2_RE.match(c)
+        if not m:
+            return False            # appears in non-mov (lea/cmp/add/...) -> bail
+        dest=m.group(1).strip(); src=m.group(2).strip()
+        if dest==slot:
+            # store: mov [slot], R64  — src must be a 64-bit canonical reg
+            if not _canon(src) or REG_TABLE.get(src.strip(),(None,0))[1]!=64:
+                return False
+        elif src==slot:
+            # reload: mov R64, [slot] — dest must be a 64-bit canonical reg
+            if not _canon(dest) or REG_TABLE.get(dest.strip(),(None,0))[1]!=64:
+                return False
+        else:
+            # slot text occurs but not as a whole operand (indexed/substring) -> bail
+            return False
+    return True
+
+_O2_INDIRECT_RE=re.compile(r"^(jmp|call)\s+(\[|r[a-z0-9]+\b|e[a-z]{2}\b)")
+
+def _o2_control_flow_ok(codes, lo, hi):
+    # Cross-basic-block allocation is sound for WHOLE-FUNCTION promotion: every
+    # access to the slot is rewritten 1:1 to the register, so the register's
+    # read/write trace is identical to the slot's on EVERY path — merge points,
+    # loop back-edges and multiple returns cannot make them disagree (the slot's
+    # memory becomes entirely dead). The single thing that genuinely breaks this
+    # is an INDIRECT branch/call (`jmp rax`, `call [rcx]`): its target is not a
+    # visible label, so we cannot bound where control re-enters and the
+    # "register never touched except by our movs" reasoning no longer holds by
+    # inspection. User codegen never emits those (call_table is kernel-only), so
+    # bail conservatively if one appears. Plain `jXX label` / labels are fine.
+    for k in range(lo,hi):
+        if _O2_INDIRECT_RE.match(codes[k]):
+            return False
+    return True
+
+_O2_JUMP_MNEMS={"jmp","je","jz","jne","jnz","ja","jae","jb","jbe","jg","jge",
+                "jl","jle","jc","jnc","jo","jno","js","jns","loop","loope","loopne"}
+
+def _o2_slot_kind(code, slot):
+    # 'store' (mov [slot], R), 'read' (mov R, [slot]), or None. Assumes the slot
+    # has already passed _o2_slot_only_plain_mov so it appears only in these two
+    # whole-operand mov forms.
+    if slot not in code:
+        return None
+    m=_MOV2_RE.match(code)
+    if not m:
+        return None
+    return "store" if m.group(1).strip()==slot else "read"
+
+def _o2_build_cfg(codes):
+    # Build a basic-block CFG over the function's instruction list. Returns
+    # (blocks, idx2blk, preds) where blocks=[(start,end)] index ranges, idx2blk
+    # maps an instruction index to its block id, and preds[bid]=set of predecessor
+    # block ids. Returns None if any jump target label is unresolved (bail).
+    # Leaders: index 0, every label line, and every line after a jump/ret.
+    n=len(codes)
+    if n==0:
+        return None
+    labels={}
+    leader=[False]*n
+    leader[0]=True
+    for i,c in enumerate(codes):
+        if c.endswith(":"):
+            labels[c[:-1].strip()]=i
+            leader[i]=True
+        mnem=c.split(None,1)[0] if c else ""
+        if (mnem in _O2_JUMP_MNEMS or mnem=="ret") and i+1<n:
+            leader[i+1]=True
+    starts=[i for i in range(n) if leader[i]]
+    blocks=[]
+    idx2blk=[0]*n
+    for b,s in enumerate(starts):
+        e=starts[b+1] if b+1<len(starts) else n
+        blocks.append((s,e))
+        for k in range(s,e):
+            idx2blk[k]=b
+    succ=[set() for _ in blocks]
+    for b,(s,e) in enumerate(blocks):
+        term=codes[e-1]
+        mnem=term.split(None,1)[0] if term else ""
+        if mnem=="ret":
+            continue
+        if mnem in _O2_JUMP_MNEMS:
+            parts=term.split(None,1)
+            tgt=parts[1].strip() if len(parts)>1 else ""
+            if tgt not in labels:
+                return None                      # unresolved/indirect target -> bail
+            succ[b].add(idx2blk[labels[tgt]])
+            if mnem!="jmp" and e<n:              # conditional: also fall through
+                succ[b].add(idx2blk[e])
+        else:
+            if e<n:
+                succ[b].add(idx2blk[e])          # straight-line fall-through
+    preds=[set() for _ in blocks]
+    for b in range(len(blocks)):
+        for t in succ[b]:
+            preds[t].add(b)
+    return blocks, idx2blk, preds
+
+def _o2_slot_definitely_assigned(slot, codes, cfg):
+    # Real definite-assignment dataflow: PROVE that on every path from function
+    # entry to each READ of `slot`, a STORE to it executes first. If so, the
+    # promoted register is never read before it is defined and whole-function
+    # promotion is fully sound across arbitrary (reducible) control flow —
+    # top-level `let`s initialised after an earlier branch, and both-branches-
+    # store-then-read-at-merge, both qualify; a genuine use-before-def (a `let`
+    # stored in one branch and read from a sibling) is correctly rejected.
+    #
+    # Forward MUST analysis (AND/intersection over predecessors):
+    #   in[B]  = AND over preds P of out[P]      (in[entry]=False, no preds)
+    #   out[B] = in[B] OR (B contains a store to slot)
+    # A read at index r in block B is definitely assigned iff there is a store in
+    # B strictly before r, OR in[B] is True.
+    blocks, idx2blk, preds = cfg
+    nb=len(blocks)
+    has_store=[False]*nb
+    for b,(s,e) in enumerate(blocks):
+        for k in range(s,e):
+            if _o2_slot_kind(codes[k],slot)=="store":
+                has_store[b]=True; break
+    out=[True]*nb                                # optimistic top for intersection
+    entry=idx2blk[0]
+    changed=True
+    while changed:
+        changed=False
+        for b in range(nb):
+            if b==entry:
+                inb=False
+            elif preds[b]:
+                inb=all(out[p] for p in preds[b])
+            else:
+                inb=False                        # unreachable-from-entry: be safe
+            nout=inb or has_store[b]
+            if nout!=out[b]:
+                out[b]=nout; changed=True
+    # recompute in[] for the read check (cheap, one pass)
+    def in_of(b):
+        if b==entry or not preds[b]:
+            return False
+        return all(out[p] for p in preds[b])
+    for b,(s,e) in enumerate(blocks):
+        stored_before=False
+        for k in range(s,e):
+            kind=_o2_slot_kind(codes[k],slot)
+            if kind=="read" and not (stored_before or in_of(b)):
+                return False                     # read before any store on some path
+            if kind=="store":
+                stored_before=True
+    return True
+
+def _o2_reg_free_in_body(canon, codes, lo, hi):
+    # Body never mentions any width-spelling of `canon`.
+    bodytext=" ".join(codes[lo:hi])
+    for sp in _spellings_for_canon(canon):
+        if re.search(r"\b"+re.escape(sp)+r"\b", bodytext):
+            return False
+    return True
+
+def _regalloc_one_fn(seg):
+    codes=[_code(l).strip() for l in seg]
+    if _opt_fn_uses_addr_of_frame(codes):
+        return seg
+    body=_body_codes(codes)
+    if body is None:
+        return seg
+    lo,hi=body
+    if not _o2_control_flow_ok(codes, lo, hi):
+        return seg
+    # SOUNDNESS GATE (leaf-only promotion): a slot promoted into a callee-saved
+    # GPR is only safe if that register is guaranteed intact across the slot's
+    # whole live range. Two NexusOS realities break the textbook "callee-saved
+    # survives a call" assumption:
+    #   * a `syscall` is NOT a System-V boundary — the kernel dispatcher reuses
+    #     GPRs and clobbers rbx/rbp across the entry (see syscall_entry notes);
+    #   * NHL callees only bracket rbx/r12 (the compatibility save pair); they
+    #     freely clobber r13/r14/r15, and hand-asm helpers may clobber any reg.
+    # Rather than prove per-callee preservation, restrict promotion to LEAF
+    # regions: if the body contains any call/syscall, skip regalloc for this
+    # function. Then no promoted value ever crosses an ABI boundary, so the
+    # promotion is sound regardless of callee register behavior. Compute-heavy
+    # leaf bodies (the intended target) still benefit; call-laden syscall
+    # wrappers are already shrunk by Phase 1.
+    for c in codes[lo:hi]:
+        if (c.startswith(("call ","FN_CALL","call_table")) or c=="call"
+                or c.startswith(("syscall","APP_SYSNO"))):
+            return seg
+    # Promotable negative slots referenced anywhere in the segment. The prologue
+    # spill `mov [rbp-K], <call_reg>` sits before `lo`; include the whole
+    # segment when proving the plain-mov property and when rewriting.
+    whole=codes
+    slots=sorted(_o2_collect_neg_slots(" ".join(whole)),
+                 key=lambda s:int(re.search(r"-(\d+)",s).group(1)))
+    if not slots:
+        return seg
+    # Determine which callee-saved regs are already saved (Phase-1 may have
+    # dropped the default push rbx/r12) so we never double-allocate one.
+    already_saved=set()
+    for c in codes:
+        if c.startswith("push "):
+            r=_canon(c.split(None,1)[1])
+            if r in _O2_CALLEE_SAVED: already_saved.add(r)
+    promote={}                      # slot -> chosen callee-saved reg
+    used_regs=set(already_saved)
+    cfg=_o2_build_cfg(whole)
+    if cfg is None:
+        return seg                  # unresolved control flow: don't risk it
+    for slot in slots:
+        if not _o2_slot_only_plain_mov(slot, whole):
+            continue                # leave this slot on its memory home
+        if not _o2_slot_definitely_assigned(slot, whole, cfg):
+            continue                # read-before-store on some path: keep on memory
+        # find a free callee-saved reg
+        chosen=None
+        for r in _O2_CALLEE_SAVED:
+            if r in used_regs: continue
+            if not _o2_reg_free_in_body(r, codes, lo, hi): continue
+            chosen=r; break
+        if chosen is None:
+            continue                # out of registers -> memory fallback
+        promote[slot]=chosen
+        used_regs.add(chosen)
+    if not promote:
+        return seg
+    new_saves=[r for r in _O2_CALLEE_SAVED if r in used_regs and r not in already_saved]
+    # Locate the prologue boundary in the ORIGINAL segment: the index just past
+    # the last of `mov rbp, rsp` / `sub rsp,N` / existing `push rbx`/`push r12` /
+    # any param-spill store. Everything from `push rbp` up to and including that
+    # is the prologue; the body follows. We need a clean boundary so we can
+    # insert our `push R` BEFORE any rewritten promoted spill (`mov R, <argreg>`)
+    # — otherwise we'd push the parameter value, not the caller's R, and the
+    # epilogue would restore the wrong value.
+    # Walk the prologue from `push rbp` forward, consuming only the recognized
+    # prologue instruction shapes; stop at the first line that isn't one (= body
+    # start). This must NOT keep scanning into the body, or a body store like
+    # `mov [rbp-16], rax` would wrongly extend the prologue.
+    try:
+        p_rbp=[i for i,l in enumerate(seg) if _code(l).strip()=="push rbp"][0]
+    except IndexError:
+        return seg
+    # Split the prologue into two parts so our `push R` lands between them:
+    #   frame_end  = past `push rbp`/`mov rbp,rsp`/`sub rsp,N`/existing push
+    #                rbx/r12  (the callee-save region)
+    #   spill_end  = additionally past any param-spill stores (`mov [rbp-K], R`)
+    # Our `push R` MUST precede any rewritten promoted spill (`mov R, <argreg>`),
+    # or we'd push the parameter value instead of the caller's R and the epilogue
+    # would restore the wrong value into R.
+    frame_end=p_rbp; idx=p_rbp+1
+    while idx<len(seg):
+        c=_code(seg[idx]).strip()
+        if c=="mov rbp, rsp" or c.startswith("sub rsp,") or c in ("push rbx","push r12"):
+            frame_end=idx; idx+=1; continue
+        break
+    spill_end=frame_end
+    while idx<len(seg):
+        c=_code(seg[idx]).strip()
+        m=_MOV2_RE.match(c) if c.startswith("mov ") else None
+        if m and _RBP_SLOT_ONLY_RE.match(m.group(1).strip()):
+            spill_end=idx; idx+=1; continue       # param spill store
+        break
+    # Rewrite the slot movs (store/reload) to register movs everywhere, dropping
+    # any that become `mov R, R`. Provenance comments ride along.
+    def rewrite(ln):
+        c=_code(ln); cmt=_comment(ln); cs=c.strip()
+        m=_MOV2_RE.match(cs)
+        if m:
+            dest=m.group(1).strip(); src=m.group(2).strip()
+            if dest in promote:
+                r=promote[dest]
+                return None if r==src else f"    mov {r}, {src}{cmt}"
+            if src in promote:
+                r=promote[src]
+                return None if dest==r else f"    mov {dest}, {r}{cmt}"
+        return ln
+    def rewrite_all(chunk):
+        out=[]
+        for ln in chunk:
+            rw=rewrite(ln)
+            if rw is not None: out.append(rw)
+        return out
+    frame   = rewrite_all(seg[:frame_end+1])
+    spills  = rewrite_all(seg[frame_end+1:spill_end+1])
+    body    = rewrite_all(seg[spill_end+1:])
+    if not new_saves:
+        return frame+spills+body
+    # Stack discipline: `push R` sits right after the frame's callee-save region
+    # (before the rewritten spills, so caller's R is saved first); the matching
+    # `pop R` goes in the epilogue right before `mov rsp, rbp`. The total number
+    # of callee pushes after `mov rbp, rsp` must stay EVEN so every body-level
+    # `call`/`syscall` is 16-byte aligned (push rbp made rsp%16==0; sub rsp,N
+    # keeps it; an even push count keeps it). Pad with a balanced `sub rsp,8`/
+    # `add rsp,8` when odd — no register cost, alignment preserved.
+    total_callee=len(already_saved)+len(new_saves)
+    odd=(total_callee%2)!=0
+    push_lines=[f"    push {r}" for r in new_saves]
+    if odd: push_lines.append("    sub rsp, 8")
+    pop_lines=[]
+    if odd: pop_lines.append("    add rsp, 8")
+    pop_lines+=[f"    pop {r}" for r in reversed(new_saves)]
+    # find `mov rsp, rbp` in the body to anchor the pops
+    pops_at=None
+    for idx,ln in enumerate(body):
+        if _code(ln).strip()=="mov rsp, rbp":
+            pops_at=idx; break
+    if pops_at is None:
+        return frame+spills+body        # unexpected shape: ship rewrite w/o saves
+    body=body[:pops_at]+pop_lines+body[pops_at:]
+    return frame+push_lines+spills+body
+
+def _regalloc_functions(lines, target):
+    if target!="user":
+        return lines
+    out=[]
+    for is_fn,chunk in _fn_segments(lines):
+        out.extend(_regalloc_one_fn(chunk) if is_fn else chunk)
+    return out
+
 def _contains_asm_stmt(stmts):
     for st in stmts:
         if st.get("k")=="asm":
@@ -819,7 +1521,7 @@ def _require_cap(cg, cap, what):
     if cap not in getattr(cg,"unsafe_caps",set()):
         raise SyntaxError(f"{what} requires `unsafe {cap};`")
 
-def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None,target="user",forbid_asm=False,deny_unsafe=False):
+def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None,target="user",forbid_asm=False,deny_unsafe=False,optimize=True,regalloc=False):
     global LAST_SIGS
     if forbid_asm:
         _enforce_no_asm(decls, "--forbid-asm")
@@ -1035,7 +1737,18 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None,target="user
             out.append(f"global {g}")
     if not embed:
         out.append("section .text")
-    out.extend(_peephole(cg.text))
+    body=_peephole(cg.text)
+    # Phase 1 (function scaffolding cleanup) runs when the global default switch
+    # is on OR when --O2 is requested. --O2 is the explicit opt-in that turns the
+    # whole function optimizer on without disturbing the default (-O0/-O1) builds,
+    # which stay byte-identical to today while the global switch remains off.
+    if optimize and (_ENABLE_USER_FUNCTION_OPT or regalloc):
+        body=_optimize_functions(body, target)
+    # Phase 2 (--O2): register-allocate frame slots into callee-saved GPRs.
+    # Implies Phase 1 (it runs on the Phase-1-cleaned stream). USER target only.
+    if regalloc and optimize:
+        body=_regalloc_functions(body, target)
+    out.extend(body)
     # Strings: emit as inert bytes in current section. In standalone mode put
     # them in .rodata; in embed mode keep them in .text (safe — no code falls
     # through into them since every fn ends with `ret`).
@@ -2273,6 +2986,61 @@ def gen_expr(st,e):
             cg.emit(f"    mov {canon}, rax")
             cg.emit("    xor rax, rax")
             return
+        if name in ("xmm_loadu","xmm_loada","xmm_store","xmm_store_nt","xmm_bcast32") and getattr(cg,"kernel",False):
+            # SSE2 XMM data-path intrinsics (statement form, bare xmm register
+            # operand). These let the display non-temporal blit + dword-broadcast
+            # fill loops be written zero-asm; the loop structure itself is ordinary
+            # NHL while/if. Each emits exactly one (bcast32: two) real SSE2
+            # instruction. The 16-byte memory operand of a movdqa / movntdq store
+            # MUST be 16-byte aligned or the CPU #GP-faults — that alignment is the
+            # author's contract (the same as the hand-written driver). A movntdq
+            # (xmm_store_nt) is a non-temporal store: pair the loop with sfence()
+            # before the data is read back. raw_mem (these touch raw VRAM/buffers).
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"raw_mem",f"kernel intrinsic {name}()")
+            # arg shapes:
+            #   xmm_loadu/loada(XMM, addr)        load  16B [addr] -> XMM
+            #   xmm_store/store_nt(addr, XMM)     store XMM -> 16B [addr]
+            #   xmm_bcast32(XMM, val32)           XMM = [v,v,v,v]
+            if len(args)!=2:
+                raise SyntaxError(f"{name} takes 2 args")
+            if name in ("xmm_loadu","xmm_loada","xmm_bcast32"):
+                xnode,vnode=args[0],args[1]          # (XMM, addr|val)
+            else:
+                vnode,xnode=args[0],args[1]          # (addr, XMM)
+            if xnode.get("k")!="ident" or xnode["name"] not in XMM_REGS:
+                raise SyntaxError(f"{name}: xmm operand must be a bare xmm register (xmm0..xmm15)")
+            xr=xnode["name"]
+            gen_expr(st,vnode)                        # addr or val32 -> rax
+            if name=="xmm_loadu":
+                cg.emit(f"    movdqu {xr}, [rax]")
+            elif name=="xmm_loada":
+                cg.emit(f"    movdqa {xr}, [rax]")
+            elif name=="xmm_store":
+                cg.emit(f"    movdqa [rax], {xr}")
+            elif name=="xmm_store_nt":
+                cg.emit(f"    movntdq [rax], {xr}")
+            else:  # xmm_bcast32: replicate the low dword across all four lanes
+                cg.emit(f"    movd {xr}, eax")
+                cg.emit(f"    pshufd {xr}, {xr}, 0")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="isqrt" and getattr(cg,"kernel",False):
+            # isqrt(n) -> rax = floor(sqrt(n)) for an unsigned 64-bit n via the SSE2
+            # scalar-FP idiom the display fill_circle uses (cvtsi2sd/sqrtsd/
+            # cvttsd2si). Clobbers xmm0 (documented — author owns XMM lifetimes).
+            # Exact for n < 2^52 (the double mantissa); display radii are tiny so
+            # this matches the hand-written behavior. raw_mem not needed (no mem).
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("isqrt() intrinsic requires --target kernel")
+            if len(args)!=1: raise SyntaxError("isqrt takes 1 arg (n)")
+            gen_expr(st,args[0])                      # n -> rax
+            cg.emit("    cvtsi2sd xmm0, rax")
+            cg.emit("    sqrtsd xmm0, xmm0")
+            cg.emit("    cvttsd2si rax, xmm0")
+            return
         if name=="rep_movsq":
             # rep_movsq(dst, src, qcount): copy qcount qwords src->dst (cld; rep
             # movsq), the structured form of the shadow-window block copy. Loads
@@ -2292,6 +3060,49 @@ def gen_expr(st,e):
             cg.emit("    cld")
             cg.emit("    rep movsq")
             cg.emit("    xor rax, rax")
+            return
+        if name in ("rep_stosd","rep_movsd") and getattr(cg,"kernel",False):
+            # rep_stosd(dst, val32, dcount): fill dcount dwords at dst with val32
+            #   (cld; rep stosd). rep_movsd(dst, src, dcount): copy dcount dwords
+            # src->dst (cld; rep movsd). The structured form of the dword block
+            # fill/copy idiom the GUI/display fast paths use. Caller owns any SMAP
+            # bracket when either side is user (PTE.U) memory. kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError(f"{name}() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv",f"kernel intrinsic {name}()")
+            if len(args)!=3: raise SyntaxError(f"{name} takes 3 args (dst, {'val32' if name=='rep_stosd' else 'src'}, dcount)")
+            gen_expr(st,args[0]); cg.emit("    push rax")     # dst
+            gen_expr(st,args[1]); cg.emit("    push rax")     # val32 / src
+            gen_expr(st,args[2]); cg.emit("    mov rcx, rax") # dcount
+            if name=="rep_stosd":
+                cg.emit("    pop rax")                         # val32 -> eax (source)
+                cg.emit("    pop rdi")                         # dst
+                cg.emit("    cld")
+                cg.emit("    rep stosd")
+            else:
+                cg.emit("    pop rsi")                         # src
+                cg.emit("    pop rdi")                         # dst
+                cg.emit("    cld")
+                cg.emit("    rep movsd")
+            cg.emit("    xor rax, rax")
+            return
+        if name=="atomic_xchg" and getattr(cg,"kernel",False):
+            # atomic_xchg(addr, val32) -> rax = old *addr (dword). `xchg` with a
+            # memory operand is implicitly LOCK'd, so this is an atomic
+            # read-modify-write — the primitive behind the driver xchg spinlocks
+            # (e.g. display raster_select_*). addr is evaluated first, then val.
+            # kernel_priv.
+            if not getattr(cg,"kernel",False):
+                raise SyntaxError("atomic_xchg() intrinsic requires --target kernel")
+            if getattr(cg,"target","user")!="boot":
+                _require_cap(cg,"kernel_priv","kernel intrinsic atomic_xchg()")
+            if len(args)!=2: raise SyntaxError("atomic_xchg takes 2 args (addr, val32)")
+            gen_expr(st,args[0]); cg.emit("    push rax")     # addr
+            gen_expr(st,args[1]); cg.emit("    mov ecx, eax") # new value
+            cg.emit("    pop rax")                            # addr -> rax
+            cg.emit("    xchg dword [rax], ecx")              # atomic: ecx <- old *addr
+            cg.emit("    mov eax, ecx")                       # old value -> rax (zero-extended)
             return
         if name=="syscall_raw":
             # syscall_raw(num): issue a syscall with a RAW immediate number — NO
@@ -2315,12 +3126,12 @@ def gen_expr(st,e):
             cg.emit("    xor rax, rax")
             return
         if name in ("rdmsr","write_cr0","write_cr3","write_cr4","invlpg",
-                    "inb","outb","ind","outd","wrmsr","wrmsr_split","lgdt","lidt","ltr",
+                    "inb","outb","inw","outw","ind","outd","wrmsr","wrmsr_split","lgdt","lidt","ltr",
                     "intn","load_ds","load_es","load_fs","load_gs","load_ss"):
             if not getattr(cg,"kernel",False):
                 raise SyntaxError(f"{name}() intrinsic requires --target kernel")
             if getattr(cg,"target","user")!="boot":
-                if name in ("inb","outb","ind","outd"):
+                if name in ("inb","outb","inw","outw","ind","outd"):
                     _require_cap(cg,"kernel_io",f"kernel intrinsic {name}()")
                 elif name=="intn":
                     _require_cap(cg,"kernel_int","kernel intn()")
@@ -2395,6 +3206,19 @@ def gen_expr(st,e):
                 cg.emit("    pop rdx")                                 # port -> dx
                 cg.emit("    mov al, cl"); cg.emit("    out dx, al")
                 cg.emit("    xor rax, rax")
+            elif name=="inw":
+                # inw(port) -> rax = word read. dx = port. Zero-extended into rax.
+                if len(args)!=1: raise SyntaxError("inw takes 1 arg (port)")
+                gen_expr(st,args[0]); cg.emit("    mov dx, ax")
+                cg.emit("    in ax, dx"); cg.emit("    movzx rax, ax")
+            elif name=="outw":
+                # outw(port, val): dx=port, ax=val (16-bit OUT).
+                if len(args)!=2: raise SyntaxError("outw takes 2 args (port, val)")
+                gen_expr(st,args[0]); cg.emit("    push rax")          # port
+                gen_expr(st,args[1]); cg.emit("    mov ecx, eax")      # val -> cx
+                cg.emit("    pop rdx")                                 # port -> dx
+                cg.emit("    mov ax, cx"); cg.emit("    out dx, ax")
+                cg.emit("    xor rax, rax")
             elif name=="ind":
                 # ind(port) -> rax = dword read. dx = port. Zero-extended into rax.
                 if len(args)!=1: raise SyntaxError("ind takes 1 arg (port)")
@@ -2445,7 +3269,8 @@ def resolve_use(name, lib_dir):
     return path
 
 def compile_file(path, lib_dir, app_prefix=None, embed=False, return_sigs=False,
-                 kernel=False, target="user", forbid_asm=False, deny_unsafe=False):
+                 kernel=False, target="user", forbid_asm=False, deny_unsafe=False,
+                 optimize=True, regalloc=False):
     with open(path,"r",encoding="utf-8") as f: src=f.read()
     toks=lex(src,path); decls=parse(toks,path)
     # expand uses: prepend decls from lib files
@@ -2477,7 +3302,8 @@ def compile_file(path, lib_dir, app_prefix=None, embed=False, return_sigs=False,
     unit_prefix = prefix if kernel else "app_hl_"+prefix
     asm=compile_unit(expanded, unit_prefix, embed=embed, kernel=kernel,
                      src=os.path.basename(path), target=target,
-                     forbid_asm=forbid_asm, deny_unsafe=deny_unsafe)
+                     forbid_asm=forbid_asm, deny_unsafe=deny_unsafe,
+                     optimize=optimize, regalloc=regalloc)
     if return_sigs:
         return asm, LAST_SIGS
     return asm
@@ -2502,17 +3328,35 @@ def main():
                     help="reject any inline asm block. Use for new code and migration gates.")
     ap.add_argument("--deny-unsafe",action="store_true",
                     help="reject unsafe capability declarations and unsafe-only operations.")
+    ap.add_argument("--O0","--no-opt",dest="no_opt",action="store_true",
+                    help="disable the lossless function-level optimizer (dead frame / "
+                         "callee-save / spill-reload removal). Reproduces the verbose, "
+                         "unoptimized output for debugging or byte-diffing. The optimizer "
+                         "is on by default (-O1) and is provably semantics-preserving.")
+    ap.add_argument("--O2",dest="o2",action="store_true",
+                    help="enable the Phase-2 register allocator (USER target only): "
+                         "promotes frame home-slots into callee-saved GPRs across their "
+                         "live range so values stay in registers instead of round-tripping "
+                         "through memory. Implies -O1. OFF by default; conservative and "
+                         "signature-preserving (only .text changes).")
     args=ap.parse_args()
+    optimize=not args.no_opt
+    # --O2 is the explicit opt-in for the function optimizer + register allocator.
+    # It no longer depends on the global default switch (which gates -O1 builds);
+    # passing --O2 turns the passes on for that compile.
+    regalloc=args.o2 and optimize
     kernel=(args.target in ("kernel","boot"))
     if args.emit_sigs:
         asm,sigs=compile_file(args.input, os.path.abspath(args.lib), args.prefix,
                               embed=args.embed, return_sigs=True, kernel=kernel,
                               target=args.target, forbid_asm=args.forbid_asm,
-                              deny_unsafe=args.deny_unsafe)
+                              deny_unsafe=args.deny_unsafe, optimize=optimize,
+                              regalloc=regalloc)
     else:
         asm=compile_file(args.input, os.path.abspath(args.lib), args.prefix,
                          embed=args.embed, kernel=kernel, target=args.target,
-                         forbid_asm=args.forbid_asm, deny_unsafe=args.deny_unsafe)
+                         forbid_asm=args.forbid_asm, deny_unsafe=args.deny_unsafe,
+                         optimize=optimize, regalloc=regalloc)
         sigs=[]
     with open(args.output,"w",encoding="utf-8",newline="\n") as f: f.write(asm)
     if args.emit_sigs:

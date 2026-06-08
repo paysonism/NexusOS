@@ -31,6 +31,8 @@ extern l3_app_arena_size_v
 extern l3_syscall_stacks
 extern kernel_canary
 extern kernel_panic_canary
+extern tick_count, frame_count, fps_count, last_fps, start_tick
+extern wm_window_count, klog_count, free_page_count
 
 ; ============================================================================
 ; Exception ISR Stubs (0-31)
@@ -156,6 +158,61 @@ FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
     jmp isr_nested_halt
 .not_stack_guard:
 
+    ; ------------------------------------------------------------------
+    ; Guarded ring-0 fault recovery (kfault longjmp).
+    ; A ring-0 fault used to iretq straight back into the faulting
+    ; instruction (the normal tail below), so a wild write in the display
+    ; flip path re-faulted forever: the main loop never advanced past
+    ; render_frame(), so mouse/keyboard/net were never serviced and the
+    ; whole OS appeared frozen. If a kguard region is armed AND this fault
+    ; came from ring 0, we instead abandon the faulting kernel operation
+    ; and longjmp back to the guard's landing pad (render_frame_guarded),
+    ; which returns to the main loop so input keeps flowing. Ring-3 faults
+    ; ignore the guard and fall through to the normal abort path.
+    cmp qword [rel kfault_armed], 0
+    je .no_kguard
+    mov rax, [rsp + 160]               ; saved CS
+    and rax, 3
+    jnz .no_kguard                     ; ring 3 -> normal slot-abort path
+    ; Compact log so a recovered fault is visible without the full dump:
+    ;   KREC=<faulting RIP> C=<cr2>
+    SER 'K'
+    SER 'R'
+    SER 'E'
+    SER 'C'
+    SER '='
+    mov rdi, [rsp + 152]               ; faulting RIP
+    call ser_print_hex64
+    SER 'C'
+    mov rdi, cr2
+    call ser_print_hex64
+    SER 13
+    SER 10
+    lock inc qword [rel kfault_recovered_count]
+    ; Balance the nested-exc guard this stub incremented on entry, and
+    ; disarm so a fault inside the landing path can't re-enter here.
+    lock dec dword [rel nested_exc_count]
+    mov qword [rel kfault_armed], 0
+    ; Restore callee-saved registers to their guard-entry values.
+    mov rbx, [rel kfault_jmp_rbx]
+    mov rbp, [rel kfault_jmp_rbp]
+    mov r12, [rel kfault_jmp_r12]
+    mov r13, [rel kfault_jmp_r13]
+    mov r14, [rel kfault_jmp_r14]
+    mov r15, [rel kfault_jmp_r15]
+    ; Synthesize an iret frame returning to the landing pad on the guard's
+    ; saved stack with IF=1 (in long mode iretq always pops SS:RSP, even
+    ; for a same-privilege return, so RSP becomes kfault_jmp_rsp).
+    mov rax, [rel kfault_jmp_rsp]
+    mov rsp, rax
+    push qword 0x10                    ; SS  = kernel data
+    push rax                           ; RSP = guard entry stack
+    push qword 0x202                   ; RFLAGS (IF=1)
+    push qword 0x08                    ; CS  = kernel code
+    push qword [rel kfault_jmp_rip]    ; RIP = landing pad
+    iretq
+.no_kguard:
+
     ; Print Info: X<#>[@<RIP>#<CS>!<RSP>]
     SER 'X'
     mov rdi, [rsp + 136]
@@ -250,6 +307,43 @@ FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
     SER 13
     SER 10
 .skip_op_dump:
+
+    ; ------------------------------------------------------------------
+    ; Counter dump: on any fault (notably a display-driver crash) print
+    ; every global counter to serial so the pre-fault state is visible.
+    ; Format: CNT T=<tick> F=<frame> f=<fps> L=<lastfps> S=<starttick>
+    ;             W=<windows> K=<klog> P=<freepages>
+    ; tick/start are 64-bit; the rest are 32-bit (zero-extended).
+    SER 'C'
+    SER 'N'
+    SER 'T'
+    SER ' '
+    SER 'T'
+    mov rdi, [tick_count]
+    call ser_print_hex64
+    SER 'F'
+    mov edi, [frame_count]
+    call ser_print_hex64
+    SER 'f'
+    mov edi, [fps_count]
+    call ser_print_hex64
+    SER 'L'
+    mov edi, [last_fps]
+    call ser_print_hex64
+    SER 'S'
+    mov rdi, [start_tick]
+    call ser_print_hex64
+    SER 'W'
+    mov edi, [wm_window_count]
+    call ser_print_hex64
+    SER 'K'
+    mov edi, [klog_count]
+    call ser_print_hex64
+    SER 'P'
+    mov edi, [free_page_count]
+    call ser_print_hex64
+    SER 13
+    SER 10
 
 %ifdef ENABLE_TRACE
     call trace_dump_serial
@@ -373,9 +467,48 @@ FN_DECL irq_common_stub, 0, 0, FN_RET_SCALAR
     call pit_handler
 
     ; Send EOI to hardware
-    call apic_eoi           
+    call apic_eoi
     call pic_eoi_master
-    jmp .done
+
+    ; Callback deadman: ONLY when the timer interrupted a ring-3 callback
+    ; (CS&3==3) do we consider aborting a runaway. Never abort from ring 0
+    ; (that would kill the kernel). EOI has already happened above, so the
+    ; LAPIC stays healthy regardless of which exit path we take.
+    ;
+    ; IRQ frame layout from rsp here (NO error code, unlike the exc stub):
+    ;   PUSH_ALL = 15*8 = 120, then canary+pad = 16, then int# = 8,
+    ;   then RIP @ 144, CS @ 152, RFLAGS @ 160, user RSP @ 168.
+    mov rax, [rsp + 152]    ; saved CS on the IRQ frame
+    and rax, 3
+    cmp rax, 3
+    jne .done               ; from ring 0: never abort
+    extern cb_deadman_check
+    call cb_deadman_check
+    test eax, eax
+    jz .done                ; no overrun: normal timer exit, byte-identical path
+    ; Abort requested: clean call_app_l3_return unwind on the IRQ frame.
+    POP_ALL
+    mov rax, [rsp]                          ; canary check
+    cmp rax, [rel kernel_canary]
+    jne .irq_r3_canary_bad
+    add rsp, 24             ; Pop canary, pad, int# (NO errcode); RSP now at user RIP.
+    mov rax, [rsp]
+    sub rax, [rel l3_app_arena_base_v]
+    jc .irq_timer_slot_zero
+    cmp rax, [rel l3_app_arena_size_v]
+    jae .irq_timer_slot_zero
+    shr rax, 21
+    jmp .irq_timer_slot_ready
+.irq_timer_slot_zero:
+    xor eax, eax
+.irq_timer_slot_ready:
+    push rax                ; call_app_l3_return expects the app slot at [rsp].
+    jmp call_app_l3_return
+.irq_r3_canary_bad:
+    mov rdi, rax
+    lea rsi, [rel .irq_r3_canary_bad]
+    mov edx, 0x5233434E                  ; R3CN: ring-3 IRQ abort footer canary
+    jmp kernel_panic_canary
 
 
 .irq_keyboard:
@@ -465,7 +598,101 @@ ser_print_hex64:
     ret
 %endif
 
+; ============================================================================
+; kfault guard primitives (setjmp/longjmp-style ring-0 recovery).
+;
+; Any ring-0 kernel section can bracket risky work with a recovery landing pad:
+;
+;       lea  rdi, [rel .my_land]
+;       call kfault_arm                ; rdi = landing-pad RIP
+;       call risky_thing               ; may #PF / #GP at ring 0
+;       call kfault_disarm
+;       ... ; normal completion
+;   .my_land:
+;       call kfault_disarm             ; (idempotent) reached after recovery
+;       ... ; abort/cleanup path
+;
+; On a ring-0 fault while armed, the page-fault/GP stub (above) restores the
+; saved callee-saved regs + RSP and longjmps to the saved landing pad with
+; IF=1, bumping kfault_recovered_count. Ring-3 faults ignore the guard.
+;
+; kfault_arm(rdi = landing-pad RIP):
+;   Captures rbx/rbp/r12-r15, the CALLER's RSP (i.e. rsp as it will be just
+;   after kfault_arm returns), and the landing-pad RIP, then sets armed=1.
+;   On a longjmp the stack is rewound to the caller's frame and execution
+;   resumes at the landing pad, as if kfault_arm had "returned a second time".
+;   Clobbers rax only; preserves all callee-saved regs.
+;
+; kfault_disarm():
+;   Clears armed. Idempotent (safe to call on both the normal and recovery
+;   paths). Clobbers nothing of interest (no register outputs).
+;
+; NOT reentrant: there is a single recovery buffer. A nested kfault_arm
+; overwrites the outer arm's saved state, so the inner landing pad wins and
+; the outer region is no longer protected until it re-arms. Callers must not
+; rely on nested guards; keep armed regions flat (arm -> risky work ->
+; disarm) and avoid arming across calls that themselves arm.
+; ============================================================================
+; auto-wrapped (FN_DECL emits global): global kfault_arm, kfault_disarm
+FN_DECL kfault_arm, 1, 0, FN_RET_SCALAR
+    mov [rel kfault_jmp_rbx], rbx
+    mov [rel kfault_jmp_rbp], rbp
+    mov [rel kfault_jmp_r12], r12
+    mov [rel kfault_jmp_r13], r13
+    mov [rel kfault_jmp_r14], r14
+    mov [rel kfault_jmp_r15], r15
+    ; Record the caller's RSP: our return address sits at [rsp], so after we
+    ; ret the caller's RSP is rsp+8. A longjmp rewinds straight to that frame.
+    lea rax, [rsp + 8]
+    mov [rel kfault_jmp_rsp], rax
+    mov [rel kfault_jmp_rip], rdi      ; landing-pad RIP supplied by caller
+    mov qword [rel kfault_armed], 1
+    ret
+
+FN_DECL kfault_disarm, 0, 0, FN_RET_SCALAR
+    mov qword [rel kfault_armed], 0
+    ret
+
+; ----------------------------------------------------------------------------
+; render_frame_guarded(): the original display-path consumer, now expressed in
+; terms of the primitives above. Behavior is identical: arm with .land as the
+; landing pad, call render_frame, disarm. On a ring-0 fault inside the present
+; path the ISR longjmps to .land (RSP already rewound to this frame), which
+; disarms and returns to the main loop so input keeps flowing.
+; ----------------------------------------------------------------------------
+extern render_frame
+; auto-wrapped (FN_DECL emits global): global render_frame_guarded
+FN_DECL render_frame_guarded, 0, 0, FN_RET_SCALAR
+    lea rdi, [rel .land]
+    call kfault_arm
+    call render_frame
+    call kfault_disarm
+    ret
+.land:
+    ; Reached via the ISR longjmp after a recovered ring-0 fault. Callee-saved
+    ; regs and RSP were already restored by the ISR. Disarm (idempotent: the
+    ; ISR also cleared armed) and return to the main loop.
+    call kfault_disarm
+    ret
+
 section .data
 nested_exc_count: dd 0
+; kfault recovery buffer (setjmp/longjmp-style). armed != 0 means a guard region
+; is live and a ring-0 fault should longjmp instead of returning to the fault.
+kfault_armed:            dq 0
+kfault_jmp_rbx:          dq 0
+kfault_jmp_rbp:          dq 0
+kfault_jmp_r12:          dq 0
+kfault_jmp_r13:          dq 0
+kfault_jmp_r14:          dq 0
+kfault_jmp_r15:          dq 0
+kfault_jmp_rsp:          dq 0
+kfault_jmp_rip:          dq 0
+kfault_recovered_count:  dq 0          ; total ring-0 faults recovered (diag)
+global kfault_recovered_count
+; armed flag exposed so a section can cheaply check "am I (or an outer guard)
+; already armed?" before deciding to arm — the buffer is single-slot / not
+; reentrant (see kfault_arm header).
+global kfault_armed
 
 section .text
