@@ -148,6 +148,18 @@ FN_BEGIN smp_ap_startup, 0, 0, FN_RET_SCALAR
     jbe .target_ok
     mov eax, SMP_MAX_CORES
 .target_ok:
+%ifdef RELEASE_BUILD
+    ; Full AP fan-out is useful for diagnostics, but release boot only needs a
+    ; worker fallback to be available. Starting one AP synchronously avoids
+    ; spending hundreds of milliseconds walking every enabled CPU before GUI.
+    cmp eax, 2
+    jae .release_have_ap
+    mov eax, 1
+    jmp .store_target
+.release_have_ap:
+    mov eax, 2
+    jmp .store_target
+%endif
     cmp eax, 2
     jae .store_target
     mov eax, SMP_MAX_CORES
@@ -235,7 +247,11 @@ smp_start_one:
     ret
 
 smp_wait_alive:
+%ifdef RELEASE_BUILD
+    mov edx, 50000
+%else
     mov edx, 2000000
+%endif
 .wait:
     cmp qword [rbx + 16], 0
     jne .alive
@@ -269,7 +285,11 @@ smp_count_states:
 
 smp_short_delay:
     push rcx
+%ifdef RELEASE_BUILD
+    mov ecx, 20000
+%else
     mov ecx, 200000
+%endif
 .d:
     pause
     loop .d

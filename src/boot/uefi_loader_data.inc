@@ -91,6 +91,7 @@ align 2
 s_kern_path:    ustr "\EFI\BOOT\KERNEL.BIN"
 s_apps_path:    ustr "\EFI\BOOT\APPS.BIN"
 s_data_path:    ustr "\EFI\BOOT\DATA.IMG"
+s_bootcfg_path: ustr "\EFI\BOOT\BOOTCFG.TXT"
 s_klog_path:    ustr "\KLOG.TXT"
 
 ; FAT32 8.3 path components for \EFI\BOOT\DATA.IMG extent resolution.
@@ -120,6 +121,7 @@ v_kernel_addr: dq 0
 v_ksize:       dq 0
 v_apps_size:   dq 0
 v_data_size:   dq 0
+v_bootcfg_size: dq 0
 v_tmp_addr:    dq 0
 
 ; --- KASLR container parse results (filled post-ExitBootServices) -----------

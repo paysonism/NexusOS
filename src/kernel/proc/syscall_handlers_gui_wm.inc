@@ -483,6 +483,22 @@
     jmp .done
 
 .sc_display_set_mode:
+    ; Runtime feature gate (boot_features.nxh): if FEAT_SYSCALL_SET_MODE is
+    ; disabled via BOOTCFG (disable=setmode), reject the mode-set outright. This
+    ; is the representative per-syscall gate AND a hard lock against ring-3
+    ; mode-set as a secure-boot profile. Save the geometry args around the call
+    ; (we overwrite rdi with the feature bit; rsi/rdx are caller-preserved by
+    ; feat_enabled but we push all three for clarity and 16-byte alignment).
+    push rdi
+    push rsi
+    push rdx
+    mov rdi, FEAT_SYSCALL_SET_MODE
+    call feat_enabled
+    pop rdx
+    pop rsi
+    pop rdi
+    test rax, rax
+    jz .sc_display_set_mode_reject
     ; rdi=width, rsi=height, rdx=bpp. Keep ring-3 geometry inside the
     ; fixed boot back-buffer before the display driver touches global state.
     mov rax, rdi
@@ -561,6 +577,48 @@
 .sc_display_set_flags_reject:
     mov qword [rsp + ALL_RAX], -1
     jmp .done
+
+; SYS_MOUSE_SENSE — return packed per-axis pointer sensitivity (tenths):
+; x in bits [15:0], y in bits [31:16].
+.sc_mouse_sense:
+    movzx eax, word [mouse_sense_x]
+    movzx ecx, word [mouse_sense_y]
+    shl ecx, 16
+    or eax, ecx
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+
+; SYS_SET_MOUSE_SENSE(packed) — x in [15:0], y in [31:16], each clamped to
+; [1,50] = 0.1x..5.0x. Out-of-range bits above 32 are rejected.
+.sc_set_mouse_sense:
+    mov rax, rdi
+    shr rax, 32
+    jnz .sc_set_mouse_sense_reject
+    movzx eax, di                ; x (low 16)
+    call .clamp_sense
+    mov [mouse_sense_x], eax
+    mov eax, edi
+    shr eax, 16
+    movzx eax, ax                ; y (high 16)
+    call .clamp_sense
+    mov [mouse_sense_y], eax
+    xor eax, eax
+    mov [rsp + ALL_RAX], rax
+    jmp .done
+.sc_set_mouse_sense_reject:
+    mov qword [rsp + ALL_RAX], -1
+    jmp .done
+; clamp eax to [1,50]
+.clamp_sense:
+    cmp eax, 1
+    jge .clamp_sense_lo_ok
+    mov eax, 1
+.clamp_sense_lo_ok:
+    cmp eax, 50
+    jle .clamp_sense_hi_ok
+    mov eax, 50
+.clamp_sense_hi_ok:
+    ret
 
 ; SYS_DISPLAY_NATIVE — return the monitor's native (boot-time) framebuffer
 ; size as a packed qword: width in bits [31:0], height in bits [63:32].

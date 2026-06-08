@@ -357,6 +357,17 @@ battery_init:
     mov byte [bat_layout], EC_LAYOUT_NONE
     mov dword [bat_poll_counter], 0
 
+%ifdef RELEASE_BUILD
+    ; EC layout probing is nonessential for the first visible desktop and can
+    ; block on platforms that do not expose the Acer EC map. Publish a sane AC
+    ; default; bat_ec_ok stays 0 so the throttled poll path remains disabled.
+    mov byte [battery_state], BAT_STATE_AC
+    mov byte [battery_percent], 100
+    pop rdx
+    pop rax
+    ret
+%endif
+
     ; Serial: 'B'
     mov dx, 0x3F8
     mov al, 'B'

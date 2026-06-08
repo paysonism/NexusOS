@@ -41,9 +41,15 @@ fn net_tcp_connect4(ip, dst_port, src_port) {
     return syscall(SYS_NET_TCP_CONNECT4, ip, dst_port, src_port);
 }
 
-# Resolve one DNS A record through the kernel resolver.
-# Returns IPv4 A.B.C.D packed order, 0 on lookup failure, -1 invalid name,
-# or -2 when another DNS lookup is already in flight.
+# Resolve one DNS A record through the kernel resolver. NON-BLOCKING: call once
+# per frame with the SAME hostname pointer until the return value is non-zero —
+# the kernel advances the query one step per call (and marks the scene dirty
+# while pending so draw() keeps re-polling), so the GUI never freezes.
+#   > 0  -> resolved IPv4 A.B.C.D packed order
+#   0    -> still in flight, call again next frame
+#   -1   -> permanent failure (invalid name, policy reject, or both resolvers
+#           timed out)
+#   -2   -> a lookup for a DIFFERENT hostname is already in flight
 fn net_dns_a(hostname) {
     return syscall(SYS_NET_DNS_A, hostname);
 }

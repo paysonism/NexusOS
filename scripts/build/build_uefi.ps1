@@ -17,6 +17,10 @@ param(
     [switch]$Kpti,           # Kernel Page-Table Isolation (security_todo.md §3). Compiles the user-view-PML4 builder + CR3-swap entry/exit macros (src/include/kpti.inc). OFF by default -> macros emit nothing, no kpti.inc code/data, default image byte-for-byte unchanged. Even with -Kpti the feature is a runtime no-op (kpti_active=0) until the SYSCALL (syscall.asm) + IRQ/exception (isr.asm) CR3-swap points and the kmain kpti_init flip are wired -- see the scoped-out note in kpti.inc. The usermode.asm iretq exits are already wired (inert until armed). Compile-gate verification only for now.
     [switch]$NoKpti,         # Disable KPTI. Default ON: user-view CR3 while ring 3 runs, full kernel CR3 on entry.
     [switch]$NoSyscallPerm,  # Disable heterogeneous syscall numbering per slot (security_todo.md §12). ON by default: per-launch keyed-random permutation of the syscall table; the loader rewrites each app's compiled SYS_* immediates (via the .scfix fixup table) to the slot's forward-permuted numbers, and the dispatcher applies the kernel-side inverse mapping on entry. Pass -NoSyscallPerm to fall back to identity numbering.
+    [switch]$AppO0,          # Compile NexusHL user apps with nxhc --O0 instead of the default lossless -O1 optimizer.
+    [switch]$AppO2,          # Compile NexusHL user apps with nxhc --O2 (lossless register allocator, implies O1).
+    [switch]$BootAnim,       # Play the pre-GUI /BOOTANIM.NBA splash at boot. OFF by default (deterministic boot). Defines NEXUS_BOOT_ANIM so the gated boot_anim_play() call site compiles in. The BOOTANIM.NBA asset is always built (Media Player demo content) regardless of this flag.
+    [switch]$SyscallTrace,   # Emit a per-syscall serial trace ('s'<num>...). OFF by default: it floods COM1 on syscall-heavy apps (e.g. Task Manager polls per-core util/mhz every frame) and serial-out is slow enough to make the app crawl. Pass -SyscallTrace only when debugging the dispatcher.
     [switch]$CopyToE         # Copy built ESP\EFI tree to E:\ for boot from removable media.
     # GFX/DCN bring-up flags (-Gfx, -GfxWave3, -GfxWave3L, -GfxImuKick,
     # -DiagLegacy) were retired 2026-05-26 along with the AMD 780M iGPU
@@ -36,10 +40,16 @@ $KernelDefines = @()
 $LoaderDefines = @()
 if (-not $Release) {
     $KernelDefines += '-dENABLE_DEBUG_SERIAL'
-    $KernelDefines += '-dENABLE_USER_DEBUG_SYSCALL'
+    # Per-syscall serial trace is OFF by default — it floods COM1 and slows
+    # syscall-heavy apps to a crawl. Opt in with -SyscallTrace when needed.
+    if ($SyscallTrace) { $KernelDefines += '-dENABLE_USER_DEBUG_SYSCALL' }
 }
 else {
     $KernelDefines += '-dRELEASE_BUILD'
+}
+if ($BootAnim) {
+    $KernelDefines += '-dNEXUS_BOOT_ANIM'
+    Write-Host '  (BOOTANIM: pre-GUI splash ENABLED via -BootAnim)' -ForegroundColor Magenta
 }
 if ($PerfProfile -eq 'Cache32Max') {
     $KernelDefines += '-dNEXUS_CACHE32_MAX'
@@ -166,6 +176,8 @@ if (Test-Path $WallpaperTool) {
 # 0b. Compile NexusHL apps -> build/nxh/*.asm (included by src/user/apps.asm)
 $NxhBuildArgs = @()
 if ($Release) { $NxhBuildArgs += '-Release' }
+if ($AppO0) { $NxhBuildArgs += '-O0' }
+if ($AppO2) { $NxhBuildArgs += '-O2' }
 & powershell -NoProfile -File (Join-Path $Root 'scripts\build\build_nxh.ps1') @NxhBuildArgs
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED NexusHL compile' -ForegroundColor Red; exit 1 }
 
@@ -185,10 +197,12 @@ $KernelModules = @(
     @{ src = 'src\kernel\nexushlk\serial_poll.nxh'; out = 'build\nxh\serial_poll.asm' },
     @{ src = 'src\kernel\nexushlk\input_dispatch.nxh'; out = 'build\nxh\input_dispatch.asm' },
     @{ src = 'src\kernel\nexushlk\frame_present.nxh'; out = 'build\nxh\frame_present.asm' },
+    @{ src = 'src\kernel\nexushlk\frame_pacing.nxh'; out = 'build\nxh\frame_pacing.asm' },
     @{ src = 'src\kernel\nexushlk\boot_anim.nxh'; out = 'build\nxh\boot_anim.asm' },
     @{ src = 'src\kernel\nexushlk\serial_diag.nxh'; out = 'build\nxh\serial_diag.asm' },
     @{ src = 'src\kernel\nexushlk\syscall_data.nxh'; out = 'build\nxh\syscall_data.asm' },
     @{ src = 'src\kernel\nexushlk\boot_diag.nxh';   out = 'build\nxh\boot_diag.asm' },
+    @{ src = 'src\kernel\nexushlk\boot_timing.nxh'; out = 'build\nxh\boot_timing.asm' },
     @{ src = 'src\kernel\nexushlk\debug_overlay.nxh'; out = 'build\nxh\debug_overlay.asm' },
     @{ src = 'src\kernel\nexushlk\cpu_acct.nxh';    out = 'build\nxh\cpu_acct.asm' },
     @{ src = 'src\kernel\nexushlk\serial_console.nxh'; out = 'build\nxh\serial_console.asm' },
@@ -197,7 +211,16 @@ $KernelModules = @(
     @{ src = 'src\kernel\nexushlk\syscall_secure.nxh'; out = 'build\nxh\syscall_secure.asm' },
     @{ src = 'src\kernel\nexushlk\wm_helpers.nxh'; out = 'build\nxh\wm_helpers.asm' },
     @{ src = 'src\kernel\nexushlk\usb_hid_helpers.nxh'; out = 'build\nxh\usb_hid_helpers.asm' },
-    @{ src = 'src\kernel\nexushlk\usermode_callbacks.nxh'; out = 'build\nxh\usermode_callbacks.asm' }
+    @{ src = 'src\kernel\nexushlk\usermode_callbacks.nxh'; out = 'build\nxh\usermode_callbacks.asm' },
+    @{ src = 'src\kernel\nexushlk\rtl8156_dhcp_build.nxh'; out = 'build\nxh\rtl8156_dhcp_build.asm' },
+    @{ src = 'src\kernel\nexushlk\rtl8156_arp.nxh'; out = 'build\nxh\rtl8156_arp.asm' },
+    @{ src = 'src\kernel\nexushlk\rtl8156_dhcp_parse.nxh'; out = 'build\nxh\rtl8156_dhcp_parse.asm' },
+    @{ src = 'src\kernel\nexushlk\rtl8156_dhcp_sm.nxh'; out = 'build\nxh\rtl8156_dhcp_sm.asm' },
+    @{ src = 'src\kernel\nexushlk\dns.nxh'; out = 'build\nxh\dns.asm' },
+    @{ src = 'src\kernel\nexushlk\net_dhcp_dispatch.nxh'; out = 'build\nxh\net_dhcp_dispatch.asm' },
+    @{ src = 'src\kernel\nexushlk\boot_features.nxh'; out = 'build\nxh\boot_features.asm' },
+    @{ src = 'src\kernel\nexushlk\cursor.nxh'; out = 'build\nxh\cursor.asm' },
+    @{ src = 'src\kernel\nexushlk\eth.nxh'; out = 'build\nxh\eth.asm' }
 )
 foreach ($m in $KernelModules) {
     $mSrc = Join-Path $Root $m.src
@@ -331,14 +354,14 @@ $kernelA = Join-Path $BUILD_DIR 'KERNEL.A.RAW'
 $kernelB = Join-Path $BUILD_DIR 'KERNEL.B.RAW'
 
 $ErrorActionPreference = 'Continue'
-& $NASM -O0 @KernelDefines -w-pp-macro-redef-multi -f bin -o $kernelA -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" -I "$BUILD_DIR\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
+& $NASM -O0 @KernelDefines -w-pp-macro-redef-multi -w-other -w-ea-absolute -f bin -o $kernelA -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" -I "$BUILD_DIR\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
 $ErrorActionPreference = 'Stop'
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED (pass A)' -ForegroundColor Red; exit 1 }
 $szA = (Get-Item $kernelA).Length
 Write-Host "  OK - pass A @0x100000 ($szA bytes)" -ForegroundColor Green
 
 $ErrorActionPreference = 'Continue'
-& $NASM -O0 @KernelDefines '-dKERNEL_BASE_OVERRIDE=0x200000' -w-pp-macro-redef-multi -f bin -o $kernelB -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" -I "$BUILD_DIR\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
+& $NASM -O0 @KernelDefines '-dKERNEL_BASE_OVERRIDE=0x200000' -w-pp-macro-redef-multi -w-other -w-ea-absolute -f bin -o $kernelB -I "$INCLUDE_DIR\" -I "$USER_LIB_DIR\" -I "$SRC_DIR\boot\" -I "$BUILD_DIR\" "$SRC_DIR\kernel\kernel_build.asm" 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "  $_" -ForegroundColor DarkYellow } }
 $ErrorActionPreference = 'Stop'
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED (pass B)' -ForegroundColor Red; exit 1 }
 $szB = (Get-Item $kernelB).Length
@@ -360,6 +383,13 @@ if ($szA -ne $szB) {
 Write-Host '[2a] Signing user blob (kernel-held-key MAC)...' -ForegroundColor Yellow
 & python (Join-Path $Root 'tools\build\patch_blob_sig.py') --a $kernelA --b $kernelB
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED - blob signing' -ForegroundColor Red; exit 1 }
+
+# 2a2. Build-patch the additive per-app integrity manifest. This keeps the old
+# whole-blob HMAC path intact (phase 1), while producing the per-segment SHA-256
+# table future boot/launch verification code will consume.
+Write-Host '[2a2] Patching per-app integrity manifest...' -ForegroundColor Yellow
+& python (Join-Path $Root 'tools\build\gen_app_manifest.py') --a $kernelA --b $kernelB
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED - app manifest patch' -ForegroundColor Red; exit 1 }
 
 # 2b. Extract APPS.BIN from pass A BEFORE wrapping. The extractor scans for
 # byte markers in the raw kernel image; the KASLR container header would shift

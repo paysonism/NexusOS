@@ -15,6 +15,10 @@ param(
     [switch]$NoPassthrough,
     [switch]$NoNicPassthrough,
     [switch]$NoMousePassthrough,
+    # Omit the emulated rtl8139 + QEMU slirp ('user') netdev. Use this with NIC
+    # passthrough when you want the guest to DHCP from your real router instead of
+    # QEMU's built-in 10.0.2.x slirp DHCP server.
+    [switch]$NoEmulatedNic,
     [string]$UsbVendorId   = '0x0BDA',  # RTL8156 NIC
     [string]$UsbProductId  = '0x8156',
     [string]$MouseVendorId = '0x17EF',  # Lenovo Optical Mouse
@@ -27,7 +31,17 @@ param(
     # Diagnostic: log every exception/interrupt and CPU reset to
     # build\qemu_int.log so a guest triple-fault (which -no-reboot turns into a
     # QEMU exit) leaves a vector + RIP trail behind. Off by default.
-    [switch]$IntLog
+    [switch]$IntLog,
+    # Reproduce the real-laptop boot framebuffer geometry. The dev laptop's
+    # internal panel is driven by the AMD 780M iGPU at native 1920x1200, so the
+    # UEFI GOP hands the loader a 1920x1200 framebuffer (pitch 7680). QEMU's
+    # default '-vga std' only offers 1024x768, which never exercises the real
+    # framebuffer width/pitch. When -FbWidth/-FbHeight are set we swap '-vga std'
+    # for '-device VGA,xres=..,yres=..,edid=on' so OVMF's GOP advertises that
+    # mode and the loader (which picks the largest mode <= MAX_FB_WIDTH/HEIGHT)
+    # selects it. Use 1920 1200 to 1:1 the laptop boot scenario.
+    [int]$FbWidth  = 0,
+    [int]$FbHeight = 0
 )
 $UsbPassthrough       = -not ($NoPassthrough -or $NoNicPassthrough)
 $UsbMousePassthrough  = -not ($NoPassthrough -or $NoMousePassthrough)
@@ -83,9 +97,16 @@ $qemuArgs = @(
     # Expose SMEP/SMAP so the kernel's (default-on) stac/clac user-access
     # brackets are valid instructions under TCG; without this the default
     # qemu64 model lacks SMAP and the first bracketed user deref #UDs.
-    '-cpu', 'qemu64,+smep,+smap',
-    '-vga', 'std'
+    '-cpu', 'qemu64,+smep,+smap'
 )
+if ($FbWidth -gt 0 -and $FbHeight -gt 0) {
+    # Real-HW geometry repro: std VGA device with an EDID preferred mode so
+    # OVMF's GOP advertises exactly WxH and the loader selects it.
+    Write-Host "Framebuffer repro: forcing GOP ${FbWidth}x${FbHeight} (real-laptop 1:1)." -ForegroundColor Magenta
+    $qemuArgs += @('-device', "VGA,xres=$FbWidth,yres=$FbHeight,edid=on")
+} else {
+    $qemuArgs += @('-vga', 'std')
+}
 if (-not $MscTest) {
     # Legacy QEMU dev path: data.img on IDE for ATA-PIO fallback.
     $qemuArgs += @('-drive', "file=$BUILD\data.img,format=raw,if=ide,index=0,media=disk")
@@ -100,7 +121,15 @@ $qemuArgs += @(
     '-display', $displayArg,
     '-device', 'qemu-xhci,id=xhci0,p2=8,p3=8'
 )
-if ($NetworkMode -eq 'Tap') {
+# The emulated rtl8139 rides QEMU's slirp ('user') netdev, which has its OWN
+# built-in DHCP server handing out 10.0.2.15 / gw 10.0.2.2 / dns 10.0.2.3. When
+# the real RTL8156 is passed through and you want a lease from your PHYSICAL
+# router, this emulated NIC shadows the real LAN — the guest binds the slirp
+# 10.0.2.x lease instead of the router's. -NoEmulatedNic drops it so the only
+# NIC the guest sees is the real passthrough device.
+if ($NoEmulatedNic) {
+    Write-Host "Emulated rtl8139/usernet NIC OMITTED (-NoEmulatedNic): guest sees only the passthrough NIC." -ForegroundColor Yellow
+} elseif ($NetworkMode -eq 'Tap') {
     $qemuArgs += @(
         '-netdev', "tap,id=net0,ifname=$TapIfName",
         '-device', 'rtl8139,netdev=net0'
@@ -139,21 +168,26 @@ if ($UsbMousePassthrough) {
         '-device', "usb-host,vendorid=$MouseVendorId,productid=$MouseProductId"
     )
 } else {
-    # Emulated mouse on USB2 port 1. usb-mouse is the only pointing device the
-    # in-tree HID driver enumerates cleanly; usb-tablet crashes mouse_init.
+    # Emulated mouse. usb-mouse is the only pointing device the in-tree HID
+    # driver enumerates cleanly; usb-tablet crashes mouse_init.
     # Note: usb-mouse is relative, so the guest cursor only moves after you
     # click into the QEMU window to grab input (or hover, with grab-on-hover).
-    $qemuArgs += @(
-        '-device', 'usb-mouse,bus=xhci0.0,port=1'
-    )
+    # Pin to an explicit USB2 port so NIC passthrough's auto-port-grab can't
+    # shift the emulated mouse onto a port the kernel HID walker skips (the
+    # reported "mouse aint here"). The passthrough NIC is added earlier and
+    # auto-grabs the LOWEST free port (observed: USB2 port 1), so an explicit
+    # port=4 stays clear. Only a USB2 usb-host *mouse* passthrough would
+    # contend for low ports — and that path adds no emulated mouse at all.
+    $qemuArgs += @('-device', 'usb-mouse,bus=xhci0.0,port=4')
 }
-# Always provide a working keyboard. When passthrough is on, ports get
-# auto-assigned and explicit port=N collides ("not found (in use?)"), so let
-# QEMU pick a free USB2 port when any usb-host device is present.
-if ($UsbPassthrough -or $UsbMousePassthrough) {
+# Always provide a working keyboard. Pin it to an explicit USB2 port too, unless
+# a USB2 usb-host MOUSE passthrough is present (that auto-grabs a USB2 port and
+# an explicit port=N could then collide). NIC passthrough alone leaves port 5
+# free, so pinning is safe in the emulated-mouse case.
+if ($UsbMousePassthrough) {
     $qemuArgs += @('-device', 'usb-kbd')
 } else {
-    $qemuArgs += @('-device', 'usb-kbd,bus=xhci0.0,port=2')
+    $qemuArgs += @('-device', 'usb-kbd,bus=xhci0.0,port=5')
 }
 if ($MscTest) {
     # USB Mass Storage backing for ramdisk write-back development. The drive

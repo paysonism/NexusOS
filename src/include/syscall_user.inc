@@ -212,6 +212,22 @@
     syscall
 %endmacro
 
+; SYS_MOUSE_SENSE()
+;   returns packed per-axis pointer sensitivity in tenths:
+;   x in bits[15:0], y in bits[31:16]  (10 = 1.0x).
+%macro SYS_MOUSE_SENSE 0
+    APP_SYSNO 74
+    syscall
+%endmacro
+
+; SYS_SET_MOUSE_SENSE(packed)
+;   x in bits[15:0], y in bits[31:16], tenths; each clamped to [1,50] = 0.1x..5.0x.
+%macro SYS_SET_MOUSE_SENSE 1
+    APP_SYSNO 75
+    mov rdi, %1
+    syscall
+%endmacro
+
 ; SYS_DESKTOP_BG()
 ;   returns current desktop background theme id:
 ;     0=liquid metal, 1=glass ribbons, 2=frosted bloom

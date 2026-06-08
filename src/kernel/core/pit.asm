@@ -5,6 +5,11 @@ bits 64
 %include "constants.inc"
 
 extern fb_addr, main_loop_stage, main_loop_stage_done, gui_initialized
+; Boot-race guard: only 1 once kmain has finished ALL init and entered the main
+; loop (core_runtime_state.asm). Gates the slot-integrity scans below so a PIT
+; tick can't hash a slot mid-load/mid-perm-rewrite (the intermittent boot
+; "CANARY 0 @<hash>" panic). Strictly delays when scanning starts.
+extern code_hash_armed
 extern scr_pitch_q, scr_width, scr_height
 ; Per-slot syscall rate-limit token buckets, defined in syscall_data.nxh.
 ; Refilled once per timer tick (security_todo.md §2).
@@ -222,6 +227,14 @@ pit_handler:
     ; frame pacing; running slot scans that early races partially initialized
     ; app/syscall state and can trip the canary path before kmain reaches K6.
     cmp byte [gui_initialized], 1
+    jne .skip_slot_security_scans
+    ; Additional boot-race guard (security_todo.md §12): even after
+    ; gui_initialized flips at wm_init, kernel_lockdown_ro / nk_protect_page
+    ; _tables / the first lazy app loads still run before the main loop. A tick
+    ; in that window hashes a slot whose bytes are still settling -> spurious
+    ; CANARY panic. code_hash_armed is set once, right before the main loop, so
+    ; the scans below stay inert until all boot init is genuinely complete.
+    cmp byte [code_hash_armed], 1
     jne .skip_slot_security_scans
 
     ; --- Code-range integrity re-verify (security_todo.md §12) ---------------

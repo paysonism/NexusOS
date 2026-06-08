@@ -5,7 +5,9 @@
 
 param(
     [switch]$Release,
-    [switch]$Verify = $true
+    [switch]$Verify = $true,
+    [switch]$O0,
+    [switch]$O2
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +28,7 @@ Write-Host ''
 Write-Host '  NexusHL Build' -ForegroundColor Cyan
 Write-Host '  =============' -ForegroundColor Cyan
 Write-Host ("  Mode: " + ($(if ($Release) { 'release' } else { 'debug' }))) -ForegroundColor DarkGray
+Write-Host ("  Opt:  " + ($(if ($O0) { 'O0' } elseif ($O2) { 'O2' } else { 'O1' }))) -ForegroundColor DarkGray
 
 $count = 0
 $manifestApps = @()
@@ -44,7 +47,10 @@ Get-ChildItem -Path $APP_DIR -Filter '*.nxh' | ForEach-Object {
     Write-Host "  compile $name.nxh -> $name.asm" -ForegroundColor Yellow
     # Embed mode: strips bits/default/section so the output can be %include'd
     # directly from apps.asm without fighting the kernel's section layout.
-    & $PY $COMPILER $in -o $asm -L $LIB_DIR --prefix $name --embed --emit-sigs
+    $CompilerArgs = @($in, '-o', $asm, '-L', $LIB_DIR, '--prefix', $name, '--embed', '--emit-sigs')
+    if ($O0) { $CompilerArgs += '--O0' }
+    if ($O2) { $CompilerArgs += '--O2' }
+    & $PY $COMPILER @CompilerArgs
     if ($LASTEXITCODE -ne 0) { Write-Host '    FAILED compile' -ForegroundColor Red; exit 1 }
     $sz = (Get-Item $asm).Length
     Write-Host "    OK ($sz bytes .asm)" -ForegroundColor Green
@@ -58,7 +64,12 @@ Get-ChildItem -Path $APP_DIR -Filter '*.nxh' | ForEach-Object {
         click = ("{0}_click" -f $prefix)
         key = ("{0}_key" -f $prefix)
     }
+    # Per-app integrity manifest (docs/per-app-integrity-manifest.md): wrap each
+    # app's bytes between app_seg_<name>_start/_end labels so apps.asm's
+    # APP_MANIFEST_ENTRY can record/measure the segment.
+    $includeLines += ('app_seg_{0}_start:' -f $name)
     $includeLines += ('%include "build/nxh/{0}.asm"' -f $name)
+    $includeLines += ('app_seg_{0}_end:' -f $name)
     $count++
 }
 

@@ -103,7 +103,9 @@ fn key_dbg_cpi_req(focused, win, stored, ev) {
 # in progress) or just redraw the cursor at its new position (optionally vsynced).
 fn pm_idle_cursor() {
     if lq(&wm_drag_window_id) != NO_FOCUS { sb(&scene_dirty, 1); return; }
-    if lb(&vsync_enabled) == 1 { wait_vsync(); }
+    # Frame timing is centralized in the pacer (frame_pacing.nxh); the old
+    # wait_vsync() here only added latency and held the cursor at its stale
+    # position during the spin. Redraw immediately for a snappy pointer.
     cursor_hide();
     cursor_draw(lw(&mouse_x), lw(&mouse_y));
 }

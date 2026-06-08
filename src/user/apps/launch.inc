@@ -280,11 +280,14 @@ app_reset_explorer_slot:
 ; sandbox is effectively off. Preserves rax / rdi / rsi so the launcher can
 ; keep treating rax as the slot id and continue its post-create work.
 extern kernel_apply_app_manifest
+extern app_segment_verify
 %macro APPLY_MANIFEST 1
     push rax
     push rdi
     push rsi
-    mov rdi, rax
+    mov rdi, %1
+    call app_segment_verify
+    mov rdi, [rsp + 16]
     mov rsi, %1
     call kernel_apply_app_manifest
     pop rsi

@@ -37,6 +37,7 @@ extern xhci_dbg_adcc2
 extern xhci_dbg_adstage
 extern xhci_dbg_slotstate
 extern tick_count
+extern cpu_tsc_per_tick
 extern debug_print
 extern usb_poll_mouse
 extern net_rx_frame
@@ -80,10 +81,14 @@ RTL8156_PLA_PHYSTATUS  equ 0xC0D8       ; PHY/link status (low 3 bits = state)
 RTL8156_PHY_STAT_MASK  equ 0x07
 RTL8156_PHY_STAT_LAN_ON equ 0x03         ; link is up (PHY_STAT_LAN_ON, Linux r8152)
 ; PHY MDIO access uses an indirect window: write a 4K page base to
-; PLA_OCP_GPHY_BASE (0xB12C), then read/write the corresponding offset in
+; PLA_OCP_GPHY_BASE (0xE86C), then read/write the corresponding offset in
 ; the 0xB000-0xBFFF mirror. To reach PHY MII reg N: ocp_addr = 0xA400+N*2,
 ; base = ocp_addr & 0xF000 = 0xA000, index = 0xB000 | (ocp_addr & 0x0FFF).
-RTL8156_PLA_OCP_GPHY_BASE equ 0xB12C
+; NOTE: the base-select register is 0xE86C (Linux r8152 PLA_OCP_GPHY_BASE).
+; A previous value of 0xB12C was wrong: writing the PHY page base there left
+; the OCP window pointed at an unmapped page, so every MII reg read back 0
+; (symptom: BMCR *and* BMSR both 0x0000 right after writing BMCR).
+RTL8156_PLA_OCP_GPHY_BASE equ 0xE86C
 RTL8156_OCP_BASE_PHY   equ 0xA000        ; (the PHY OCP page base)
 RTL8156_PHY_REG0_OFFSET equ 0x400        ; PHY MII reg 0 (BMCR) lives here in the page
 RTL8156_BYTE_EN_WORD   equ 0x33          ; OCP byte-enable for 16-bit write
@@ -92,12 +97,15 @@ RTL8156_MII_BMCR       equ 0x00          ; MII basic-mode control reg
 RTL8156_MII_BMSR       equ 0x01          ; MII basic-mode status reg
 RTL8156_BMCR_ANE       equ 0x1000
 RTL8156_BMCR_RAN       equ 0x0200
+RTL8156_BMCR_RESET     equ 0x8000        ; PHY soft-reset; self-clears when done
 RTL8156_BMSR_LSTATUS   equ 0x0004        ; link status (latched, sticky-low)
 RTL8156_BMSR_ANEGCOMP  equ 0x0020        ; auto-neg complete
 ; Power-up registers (Linux r8152 r8153_first_init).
 RTL8156_PLA_OOB_CTRL   equ 0xE84C
 RTL8156_NOW_IS_OOB     equ 0x80
-RTL8156_PLA_SFF_STS_7  equ 0xE648
+RTL8156_PLA_SFF_STS_7  equ 0xE78A        ; r8152.c PLA_SFF_STS_7 (was wrongly 0xE648 — LINK_LIST_READY lives here)
+RTL8156_PLA_BOOT_CTRL  equ 0xE004        ; r8152.c PLA_BOOT_CTRL
+RTL8156_AUTOLOAD_DONE  equ 0x0002        ; r8152.c AUTOLOAD_DONE (bit 1)
 RTL8156_MCU_BORW_EN    equ 0x4000
 RTL8156_RE_INIT_LL     equ 0x8000
 RTL8156_LINK_LIST_READY equ 0x0002
@@ -193,14 +201,21 @@ rtl8156_icmp_ping_ipv4:
     jmp .arp_wait
 .got_arp:
     mov byte [rtl8156_ping_reply], 0
-    ; Reset the start TSC right before the ICMP send so the RTT we report is
-    ; the actual ICMP round-trip, not "ICMP + any prior ARP exchange". This
-    ; matches what `ping` on Linux/Windows shows.
+    ; Stamp the start TSC AFTER send_icmp_gateway returns. That call blocks on
+    ; the bulk-OUT TX completion (tx_frame -> bulk_out -> wait_completion), so it
+    ; returns the instant the packet is actually on the wire. Stamping here — not
+    ; before the send — excludes the host-side USB-OUT submit/complete plumbing
+    ; from the reported RTT. That leg is emulation-only overhead under QEMU
+    ; usb-host (on real HW the controller completes via the event ring in us); it
+    ; is NOT part of the ICMP round-trip, and counting it inflated the number
+    ; (~20ms vs the true wire+RX leg). Still excludes any prior ARP exchange,
+    ; matching what `ping` on Linux/Windows reports. Lossless: packet behavior
+    ; is unchanged, this only corrects what window the RTT measures.
+    call rtl8156_send_icmp_gateway
     rdtsc
     shl rdx, 32
     or rax, rdx
     mov [rtl8156_ping_start_tsc], rax
-    call rtl8156_send_icmp_gateway
     mov rbx, [tick_count]
     add rbx, 200                    ; 2s, matching SYS_NET_PING4 contract
 .icmp_wait:
@@ -294,17 +309,18 @@ rtl8156_ping4_tick:
 
 .send_icmp:
     mov byte [rtl8156_ping_reply], 0
+    ; Stamp start TSC AFTER the (TX-completion-blocking) send so the host USB-OUT
+    ; plumbing leg is excluded from the RTT — see the comment in the sync path.
+    call rtl8156_send_icmp_gateway
     rdtsc
     shl rdx, 32
     or rax, rdx
     mov [rtl8156_ping_start_tsc], rax
-    call rtl8156_send_icmp_gateway
     mov byte [rtl8156_ping_async_state], 2
     mov rcx, [tick_count]
     add rcx, 200
     mov [rel rtl8156_ping_async_deadline], rcx
-    xor eax, eax
-    jmp .ret
+    jmp .icmp_busy_poll
 
 .check_icmp:
     cmp byte [rtl8156_ping_reply], 1
@@ -318,9 +334,14 @@ rtl8156_ping4_tick:
 .reply_got:
     mov byte [rtl8156_ping_async_state], 0
     mov byte [rel rtl8156_ping_async_retries], 0
+    ; RTT = (TSC captured when the reply was PARSED) - (TSC at ICMP send). Using
+    ; the captured rtl8156_ping_reply_tsc instead of rdtsc-now means the reported
+    ; time is the real round-trip, not the delay until userspace next polls this
+    ; tick (which fires on app frame/UI events).
     mov rbx, [rtl8156_ping_start_tsc]
-    extern net_tsc_delta_to_us
-    call net_tsc_delta_to_us
+    mov rax, [rtl8156_ping_reply_tsc]
+    extern net_tsc_span_to_us
+    call net_tsc_span_to_us
     jmp .ret
 
 .start:
@@ -349,15 +370,46 @@ rtl8156_ping4_tick:
 
 .send_icmp_initial:
     mov byte [rtl8156_ping_reply], 0
+    ; Stamp start TSC AFTER the (TX-completion-blocking) send so the host USB-OUT
+    ; plumbing leg is excluded from the RTT — see the comment in the sync path.
+    call rtl8156_send_icmp_gateway
     rdtsc
     shl rdx, 32
     or rax, rdx
     mov [rtl8156_ping_start_tsc], rax
-    call rtl8156_send_icmp_gateway
     mov byte [rtl8156_ping_async_state], 2
     mov rcx, [tick_count]
     add rcx, 200
     mov [rel rtl8156_ping_async_deadline], rcx
+    ; fall through into the in-line reply busy-poll
+
+; Busy-poll the ICMP reply leg for a short TSC budget right after the echo is
+; sent. Over a LAN/Internet hop the reply lands in a few ms; catching it in this
+; same tick (rather than waiting for the next once-per-UI-frame rx_once) makes the
+; reported RTT the true round trip instead of one inflated by the poll cadence.
+; If the budget expires the FSM stays in state 2 and the slow/lost-reply case is
+; handled by the existing per-frame tick + tick_count deadline (returns pending).
+.icmp_busy_poll:
+    mov rbx, [cpu_tsc_per_tick]
+    test rbx, rbx
+    jz .icmp_poll_pending          ; no TSC calibration -> pure async fallback
+    lea rbx, [rbx + rbx*4]         ; ~5 PIT ticks (~50ms) cap
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    add rbx, rax                   ; rbx = deadline TSC (rx_once preserves rbx)
+.icmp_poll_loop:
+    call rtl8156_rx_once
+    cmp byte [rtl8156_ping_reply], 1
+    je .reply_got
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    cmp rax, rbx
+    jae .icmp_poll_pending
+    pause
+    jmp .icmp_poll_loop
+.icmp_poll_pending:
     xor eax, eax
     jmp .ret
 
@@ -397,213 +449,10 @@ rtl8156_ping4_tick:
     pop rbx
     ret
 
-rtl8156_dhcp_configure:
-    push rbx
-    push rcx
-    push rdx
-    push r12
-
-    lea rsi, [rel ser_dhcp_start]
-    call rtl8156_ser_puts
-    mov byte [rtl8156_dhcp_bound], 0
-    mov byte [rtl8156_dhcp_offer_seen], 0
-    mov byte [rtl8156_dhcp_ack_seen], 0
-    inc dword [rtl8156_dhcp_xid]
-    cmp dword [rtl8156_dhcp_xid], 0
-    jne .xid_ok
-    mov dword [rtl8156_dhcp_xid], 0x4E584448
-.xid_ok:
-    mov r12d, 3
-.send_discover:
-    call rtl8156_send_dhcp_discover
-    mov rbx, [tick_count]
-    add rbx, 300
-.offer_wait:
-    call rtl8156_rx_once
-    cmp byte [rtl8156_dhcp_offer_seen], 1
-    je .request
-    mov rax, [tick_count]
-    cmp rax, rbx
-    jae .offer_timeout
-    pause
-    jmp .offer_wait
-.offer_timeout:
-    dec r12d
-    jnz .send_discover
-    jmp .fail
-.request:
-    lea rsi, [rel ser_dhcp_offer]
-    call rtl8156_ser_puts
-    call rtl8156_send_dhcp_request
-    mov rbx, [tick_count]
-    add rbx, 300
-.ack_wait:
-    call rtl8156_rx_once
-    cmp byte [rtl8156_dhcp_ack_seen], 1
-    je .ok
-    mov rax, [tick_count]
-    cmp rax, rbx
-    jae .ack_timeout
-    pause
-    jmp .ack_wait
-.ack_timeout:
-    ; Some USB/QEMU/router combinations deliver the OFFER reliably but drop
-    ; the ACK while the link is still settling. The OFFER already populated
-    ; ip/server/router; use it as a lease rather than reporting no network.
-    cmp byte [rtl8156_dhcp_offer_seen], 1
-    je .ok
-    jmp .fail
-.ok:
-    lea rsi, [rel ser_dhcp_ack]
-    call rtl8156_ser_puts
-    mov byte [rtl8156_dhcp_bound], 1
-    mov byte [rtl8156_dhcp_state], 3   ; BOUND — userspace polls this
-    mov eax, 1
-    jmp .done
-.fail:
-    lea rsi, [rel ser_dhcp_fail]
-    call rtl8156_ser_puts
-    mov byte [rtl8156_dhcp_state], 4   ; FAILED — keep sync + async paths consistent
-    xor eax, eax
-.done:
-    pop r12
-    pop rdx
-    pop rcx
-    pop rbx
-    ret
-
-; ------------------------------------------------------------------
-; Async DHCP state machine. State byte:
-;   0 IDLE, 1 DISCOVER (waiting OFFER), 2 REQUEST (waiting ACK),
-;   3 BOUND, 4 FAILED.
-; ------------------------------------------------------------------
-global rtl8156_dhcp_start
-rtl8156_dhcp_start:
-    push rbx
-    push rcx
-    push rdx
-    ; Serialize against rtl8156_dhcp_pump running on the main CPU. Without
-    ; this, the syscall path (possibly on a ring3-AP CPU) and the main-loop
-    ; pump both touch xhci command ring / event ring / bulk_in_inflight at
-    ; the same time and corrupt each other → RIP=0 crashes.
-.rtl_start_lock:
-    mov eax, 1
-    xchg eax, [rel rtl8156_lock]
-    test eax, eax
-    jz .rtl_start_have_lock
-    pause
-    jmp .rtl_start_lock
-.rtl_start_have_lock:
-    cmp byte [rtl8156_active], 1
-    je .ok_to_start
-    mov byte [rtl8156_dhcp_state], 4   ; FAILED
-    jmp .ret
-.ok_to_start:
-    mov byte [rtl8156_dhcp_bound], 0
-    mov byte [rtl8156_dhcp_offer_seen], 0
-    mov byte [rtl8156_dhcp_ack_seen], 0
-    inc dword [rtl8156_dhcp_xid]
-    cmp dword [rtl8156_dhcp_xid], 0
-    jne .xid_ok
-    mov dword [rtl8156_dhcp_xid], 0x4E584448
-.xid_ok:
-    call rtl8156_send_dhcp_discover
-    mov byte [rtl8156_dhcp_state], 1   ; DISCOVER
-    mov rax, [tick_count]
-    add rax, 200
-    mov [rtl8156_dhcp_deadline], rax
-    ; Re-prime the mouse interrupt ring — the bulk_out TRBs we just queued
-    ; can consume HID transfer events while waiting completion.
-    extern usb_hid_requeue_slot1_reads
-    call usb_hid_requeue_slot1_reads
-.ret:
-    mov dword [rel rtl8156_lock], 0
-    pop rdx
-    pop rcx
-    pop rbx
-    ret
-
-global rtl8156_dhcp_pump
-rtl8156_dhcp_pump:
-    ; Fast bail when not in flight — this is called every main-loop tick.
-    movzx eax, byte [rtl8156_dhcp_state]
-    cmp eax, 1
-    je .pump_try_lock
-    cmp eax, 2
-    je .pump_try_lock
-    ret
-.pump_try_lock:
-    ; Try-lock only: if a syscall on another CPU is currently inside
-    ; dhcp_start/pump, just skip this tick. We'll try again 10ms from now.
-    mov eax, 1
-    xchg eax, [rel rtl8156_lock]
-    test eax, eax
-    jz .active
-    ret
-.active:
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    ; Drain at most one frame.
-    mov edi, RTL8156_RX_BUF_ADDR
-    mov ecx, 4096
-    call rtl8156_bulk_in_nonblocking
-    test eax, eax
-    jz .check_timeout
-    ; Got data — parse the frame.
-    mov eax, [abs RTL8156_RX_BUF_ADDR]
-    and eax, RTL8156_RX_LEN_MASK
-    cmp eax, 18 + 14
-    jb .check_timeout
-    sub eax, 4
-    lea rdi, [abs RTL8156_RX_BUF_ADDR + 24]
-    mov ecx, eax
-    call rtl8156_handle_frame
-    ; State transitions based on flags set by rtl8156_handle_udp.
-    movzx eax, byte [rtl8156_dhcp_state]
-    cmp eax, 1
-    jne .check_ack
-    cmp byte [rtl8156_dhcp_offer_seen], 1
-    jne .check_timeout
-    call rtl8156_send_dhcp_request
-    mov byte [rtl8156_dhcp_state], 2
-    mov rax, [tick_count]
-    add rax, 200
-    mov [rtl8156_dhcp_deadline], rax
-    extern usb_hid_requeue_slot1_reads
-    call usb_hid_requeue_slot1_reads
-    jmp .ret
-.check_ack:
-    cmp eax, 2
-    jne .ret
-    cmp byte [rtl8156_dhcp_ack_seen], 1
-    jne .check_timeout
-    mov byte [rtl8156_dhcp_bound], 1
-    mov byte [rtl8156_dhcp_state], 3   ; BOUND
-    jmp .ret
-.check_timeout:
-    mov rax, [tick_count]
-    cmp rax, [rtl8156_dhcp_deadline]
-    jb .ret
-    cmp byte [rtl8156_dhcp_state], 2
-    jne .timeout_fail
-    cmp byte [rtl8156_dhcp_offer_seen], 1
-    jne .timeout_fail
-    mov byte [rtl8156_dhcp_bound], 1
-    mov byte [rtl8156_dhcp_state], 3   ; BOUND via OFFER fallback
-    jmp .ret
-.timeout_fail:
-    mov byte [rtl8156_dhcp_state], 4   ; FAILED
-.ret:
-    mov dword [rel rtl8156_lock], 0
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    ret
+; rtl8156_dhcp_configure / rtl8156_dhcp_start / rtl8156_dhcp_pump moved to
+; zero-asm NexusHLK: src/kernel/nexushlk/rtl8156_dhcp_sm.nxh (state machine +
+; xchg spinlock + anti-reentrancy guard). %included via kernel_build.asm
+; before this file. Globals (dhcp_start/dhcp_pump/dhcp_configure) now live there.
 
 global rtl8156_init
 rtl8156_init:
@@ -613,6 +462,28 @@ rtl8156_init:
     push rsi
     push rdi
     push r12
+
+%ifdef RELEASE_BUILD
+    ; Timed release boot only needs to avoid losing the NIC forever. The full
+    ; USB port walk/vendor bring-up runs from rtl8156_deferred_init_pump after
+    ; the desktop is up, so the R8 marker is not held hostage by link/NIC work.
+    cmp byte [rtl8156_init_allow_blocking], 1
+    je .release_full_init
+    cmp byte [rtl8156_active], 1
+    je .release_return_active
+    cmp byte [rtl8156_deferred_init_done], 1
+    je .release_return_failed
+    mov byte [rtl8156_deferred_init_pending], 1
+    xor eax, eax
+    jmp .done
+.release_return_active:
+    mov eax, 1
+    jmp .done
+.release_return_failed:
+    xor eax, eax
+    jmp .done
+.release_full_init:
+%endif
 
     xor r12d, r12d
     mov rsi, sz_r8156_init
@@ -1005,6 +876,30 @@ rtl8156_init:
     pop rbx
     ret
 
+global rtl8156_deferred_init_pump
+rtl8156_deferred_init_pump:
+%ifdef RELEASE_BUILD
+    push rbx
+    cmp byte [rtl8156_active], 1
+    je .done
+    cmp byte [rtl8156_deferred_init_pending], 1
+    jne .done
+    cmp byte [rtl8156_deferred_init_done], 1
+    je .done
+    cmp byte [rtl8156_deferred_init_running], 1
+    je .done
+    mov byte [rtl8156_deferred_init_running], 1
+    mov byte [rtl8156_init_allow_blocking], 1
+    call rtl8156_init
+    mov byte [rtl8156_init_allow_blocking], 0
+    mov byte [rtl8156_deferred_init_pending], 0
+    mov byte [rtl8156_deferred_init_done], 1
+    mov byte [rtl8156_deferred_init_running], 0
+.done:
+    pop rbx
+%endif
+    ret
+
 ; Power every xHCI root port and wait for debounce without resetting or
 ; addressing anything. This makes the NIC scan robust when HID initialized xHCI
 ; first and xhci_find_port's power-on side effects were skipped.
@@ -1159,8 +1054,31 @@ rtl8156_phy_powerup:
     push rax
     push rsi
     push rdi
+    push rbx
+    push rdx
 
     call rtl8156_mdio_set_base
+
+    ; PHY-reset race fix: at cold power-up / soft reset the PHY leaves
+    ; BMCR.RESET (0x8000) set and its whole MII register file transiently reads
+    ; back 0x0000. Reading BMSR in that window yields LSTATUS=0 forever for that
+    ; boot (observed intermittently: "BMCR BMSR:A000 0000" -> no link, ~1 in 3
+    ; boots). Wait (bounded ~500ms) for RESET to self-clear before touching the
+    ; PHY so every subsequent read is valid. rtl8156_mdio_read preserves rbx, so
+    ; the deadline survives the call.
+    mov rbx, [tick_count]
+    add rbx, 50
+.phy_reset_wait:
+    mov edi, RTL8156_MII_BMCR
+    call rtl8156_mdio_read
+    test ax, RTL8156_BMCR_RESET
+    jz .phy_reset_clear
+    mov rdx, [tick_count]
+    cmp rdx, rbx
+    jae .phy_reset_clear
+    pause
+    jmp .phy_reset_wait
+.phy_reset_clear:
 
     ; Read BMCR and dump it.
     mov edi, RTL8156_MII_BMCR
@@ -1192,6 +1110,8 @@ rtl8156_phy_powerup:
     mov esi, RTL8156_BMCR_ANE | RTL8156_BMCR_RAN
     call rtl8156_mdio_write
 
+    pop rdx
+    pop rbx
     pop rdi
     pop rsi
     pop rax
@@ -1210,6 +1130,59 @@ rtl8156_vendor_init:
     ; endpoint never delivers a frame even with everything else right.
     ; ----------------------------------------------------------------
     push rbx
+
+    ; ---- r8153_first_init prologue, step 0: wait AUTOLOAD_DONE ----
+    ; Linux waits for PLA_BOOT_CTRL.AUTOLOAD_DONE before touching MAC regs.
+    ; Reads before autoload completes return stale/zero and the RE_INIT_LL
+    ; handshake silently no-ops. Best-effort ~1s poll.
+    mov rbx, [tick_count]
+    add rbx, 100
+.al_wait:
+    mov edi, RTL8156_PLA_BOOT_CTRL & ~3
+    mov esi, RTL8156_MCU_PLA
+    mov edx, 4
+    mov rcx, RTL8156_SCRATCH_ADDR
+    call rtl8156_ocp_read
+    mov eax, [abs RTL8156_SCRATCH_ADDR]
+    shr eax, ((RTL8156_PLA_BOOT_CTRL & 3) * 8)
+    test eax, RTL8156_AUTOLOAD_DONE
+    jnz .al_done
+    mov rax, [tick_count]
+    cmp rax, rbx
+    jae .al_done
+    pause
+    jmp .al_wait
+.al_done:
+    lea rsi, [rel ser_al_done]
+    call rtl8156_ser_puts
+    push rax
+    test eax, RTL8156_AUTOLOAD_DONE
+    setnz al
+    add al, '0'
+    mov dx, 0x3F8
+    out dx, al
+    mov al, 10
+    out dx, al
+    pop rax
+
+    ; ---- step 1: gate the RX path (rxdy_gated_en true) BEFORE OOB exit ----
+    ; r8153_first_init sets RXDY_GATED_EN before clearing NOW_IS_OOB and
+    ; re-initialising the link list, then clears it again at the end. Doing
+    ; the RE_INIT_LL handshake with RX un-gated leaves LINK_LIST_READY stuck.
+    mov edi, RTL8156_PLA_MISC_1 & ~3
+    mov esi, RTL8156_MCU_PLA
+    mov edx, 4
+    mov rcx, RTL8156_SCRATCH_ADDR
+    call rtl8156_ocp_read
+    mov eax, [abs RTL8156_SCRATCH_ADDR]
+    or eax, RTL8156_RXDY_GATED_EN
+    mov [abs RTL8156_SCRATCH_ADDR], eax
+    mov edi, RTL8156_PLA_MISC_1 & ~3
+    mov esi, RTL8156_MCU_PLA | RTL8156_BYTE_DWORD
+    mov edx, 4
+    mov rcx, RTL8156_SCRATCH_ADDR
+    call rtl8156_ocp_write
+
     ; Read PLA_OOB_CTRL byte, clear NOW_IS_OOB, write back.
     mov edi, RTL8156_PLA_OOB_CTRL & ~3
     mov esi, RTL8156_MCU_PLA
@@ -1276,10 +1249,29 @@ rtl8156_vendor_init:
 .ll_ready:
     lea rsi, [rel ser_ll_ready]
     call rtl8156_ser_puts
-    jmp .ll_done
+    jmp .ll_dump
 .ll_timeout:
     lea rsi, [rel ser_ll_timeout]
     call rtl8156_ser_puts
+.ll_dump:
+    ; Dump the SFF_STS_7 word so a timeout is diagnosable: prints "SFF7:hhhh".
+    lea rsi, [rel ser_sff7_tag]
+    call rtl8156_ser_puts
+    mov edi, RTL8156_PLA_SFF_STS_7 & ~3
+    mov esi, RTL8156_MCU_PLA
+    mov edx, 4
+    mov rcx, RTL8156_SCRATCH_ADDR
+    call rtl8156_ocp_read
+    mov eax, [abs RTL8156_SCRATCH_ADDR]
+    shr eax, ((RTL8156_PLA_SFF_STS_7 & 3) * 8)
+    push rax
+    mov al, ah
+    call rtl8156_ser_phex8
+    pop rax
+    call rtl8156_ser_phex8
+    mov al, 10
+    mov dx, 0x3F8
+    out dx, al
 .ll_done:
     pop rbx
 .skip_oob_init:
@@ -1461,36 +1453,37 @@ rtl8156_wait_link:
     call rtl8156_ser_puts
 
     ; Kick PHY auto-neg via MDIO BMCR (Linux r8152 r8152_mdio_write path).
-    ; OCP address = OCP_BASE_PHY + (MII_BMCR << 1) = 0xA400; byte_enable=0x33
-    ; restricts the write to the low 16 bits so BMSR at +2 is not touched.
-    mov dword [abs RTL8156_SCRATCH_ADDR], RTL8156_BMCR_ANE | RTL8156_BMCR_RAN
-    mov edi, RTL8156_OCP_BASE_PHY + (RTL8156_MII_BMCR << 1)
-    mov esi, RTL8156_MCU_PLA | RTL8156_BYTE_EN_WORD
-    mov edx, 4
-    mov rcx, RTL8156_SCRATCH_ADDR
-    call rtl8156_ocp_write
+    ; ----------------------------------------------------------------------
+    ; FIX (BMSR=0x0000 link timeout): the PHY MII registers are NOT directly
+    ; OCP-addressable at 0xA400. They are only reachable through the GPHY
+    ; indirection window: point PLA_OCP_GPHY_BASE (0xB12C) at the 0xA000 page,
+    ; then access the 0xB400+reg*2 mirror. The previous code wrote ANE|RAN
+    ; straight to OCP 0xA400 (a non-PHY PLA address in the 0xA000 page that the
+    ; window never exposes), so RESTART_AUTONEG never reached the PHY and
+    ; BMSR.LSTATUS stayed low forever. Re-point the base (intervening OOB/
+    ; first_init OCP traffic may have moved it) and drive BMCR through the same
+    ; rtl8156_mdio_write window the BMSR read below uses.
+    call rtl8156_mdio_set_base
+    mov edi, RTL8156_MII_BMCR
+    mov esi, RTL8156_BMCR_ANE | RTL8156_BMCR_RAN
+    call rtl8156_mdio_write
 
-    mov rbx, [tick_count]
-    add rbx, 500                        ; ~5 s budget
-.loop:
-    ; Read MII BMSR via the GPHY indirection window.
+    ; NON-BLOCKING (boot must not stall on link). Auto-neg was kicked just above;
+    ; sample BMSR ONCE for diagnostics and return immediately. Why not poll:
+    ;  - An absent or unplugged NIC never links, so any budget here is pure boot
+    ;    delay when there's no ethernet.
+    ;  - Even when a cable IS present, gigabit auto-neg takes ~2-3s; the old 5s
+    ;    poll blocked the whole boot until link (or timeout).
+    ; Link comes up in the background; the main-loop DHCP pump and the ping ARP
+    ; path retry until it does, so a slow-negotiating, later-plugged, or
+    ; different-port NIC still works — it just binds shortly after the desktop
+    ; appears instead of holding boot hostage.
     mov edi, RTL8156_MII_BMSR
     call rtl8156_mdio_read
-    ; Debug-print BMSR once per ~50 ticks (500 ms).
-    mov rdx, [tick_count]
-    mov rcx, [rtl8156_phy_dbg_last]
-    sub rdx, rcx
-    cmp rdx, 50
-    jb .check
-    mov rdx, [tick_count]
-    mov [rtl8156_phy_dbg_last], rdx
     push rax
-    push rsi
-    push rdx
     lea rsi, [rel ser_bmsr_tag]
     call rtl8156_ser_puts
-    pop rdx
-    push rdx
+    pop rax
     push rax
     mov al, ah
     call rtl8156_ser_phex8
@@ -1501,27 +1494,17 @@ rtl8156_wait_link:
     mov dx, 0x3F8
     out dx, al
     pop rax
-    pop rdx
-    pop rsi
-    pop rax
-.check:
     test ax, RTL8156_BMSR_LSTATUS
-    jnz .up
-.next:
-    mov rax, [tick_count]
-    cmp rax, rbx
-    jae .timeout
-    pause
-    jmp .loop
-.up:
+    jz .nolink_yet
     lea rsi, [rel ser_link_up_8156]
     call rtl8156_ser_puts
-    mov eax, 1
-    jmp .done
-.timeout:
-    lea rsi, [rel ser_link_timeout_8156]
+    jmp .done_ok
+.nolink_yet:
+    ; Not up yet — best-effort; background DHCP/ping retries handle it.
+    lea rsi, [rel ser_link_wait_8156]
     call rtl8156_ser_puts
-    xor eax, eax
+.done_ok:
+    mov eax, 1
 .done:
     pop rsi
     pop rdx
@@ -1886,203 +1869,11 @@ rtl8156_init_bulk_rings:
     pop rax
     ret
 
-rtl8156_send_dhcp_discover:
-    push rax
-    push rcx
-    push rdi
-    call rtl8156_build_dhcp_base
-    lea rdi, [abs RTL8156_TX_BUF_ADDR + 8 + 14 + 20 + 8 + 240]
-    mov byte [rdi + 0], 53       ; DHCP message type
-    mov byte [rdi + 1], 1
-    mov byte [rdi + 2], 1        ; discover
-    add rdi, 3
-    mov byte [rdi + 0], 12       ; option 12: hostname — shown by routers (eero, etc.)
-    mov byte [rdi + 1], 7
-    mov dword [rdi + 2], 'Nexu'
-    mov word  [rdi + 6], 'sO'
-    mov byte  [rdi + 8], 'S'
-    add rdi, 9
-    mov byte [rdi + 0], 55       ; parameter request list
-    mov byte [rdi + 1], 3
-    mov byte [rdi + 2], 1        ; subnet mask
-    mov byte [rdi + 3], 3        ; router
-    mov byte [rdi + 4], 6        ; DNS
-    add rdi, 5
-    mov byte [rdi], 255
-    mov rcx, rdi
-    sub rcx, (RTL8156_TX_BUF_ADDR + 8 + 14 + 20 + 8)
-    inc ecx
-    call rtl8156_finish_dhcp_udp
-    pop rdi
-    pop rcx
-    pop rax
-    ret
-
-rtl8156_send_dhcp_request:
-    push rax
-    push rcx
-    push rdi
-    call rtl8156_build_dhcp_base
-    lea rdi, [abs RTL8156_TX_BUF_ADDR + 8 + 14 + 20 + 8 + 240]
-    mov byte [rdi + 0], 53       ; DHCP message type
-    mov byte [rdi + 1], 1
-    mov byte [rdi + 2], 3        ; request
-    add rdi, 3
-    mov byte [rdi + 0], 50       ; requested IP
-    mov byte [rdi + 1], 4
-    mov eax, [rtl8156_dhcp_ip]
-    mov [rdi + 2], eax
-    add rdi, 6
-    mov byte [rdi + 0], 54       ; server identifier
-    mov byte [rdi + 1], 4
-    mov eax, [rtl8156_dhcp_server]
-    mov [rdi + 2], eax
-    add rdi, 6
-    mov byte [rdi + 0], 12       ; hostname (so the router shows "NexusOS")
-    mov byte [rdi + 1], 7
-    mov dword [rdi + 2], 'Nexu'
-    mov word  [rdi + 6], 'sO'
-    mov byte  [rdi + 8], 'S'
-    add rdi, 9
-    mov byte [rdi + 0], 55
-    mov byte [rdi + 1], 3
-    mov byte [rdi + 2], 1
-    mov byte [rdi + 3], 3
-    mov byte [rdi + 4], 6
-    add rdi, 5
-    mov byte [rdi], 255
-    mov rcx, rdi
-    sub rcx, (RTL8156_TX_BUF_ADDR + 8 + 14 + 20 + 8)
-    inc ecx
-    call rtl8156_finish_dhcp_udp
-    pop rdi
-    pop rcx
-    pop rax
-    ret
-
-rtl8156_build_dhcp_base:
-    push rax
-    push rcx
-    push rsi
-    push rdi
-
-    lea rdi, [abs RTL8156_TX_BUF_ADDR + 8]
-    mov ecx, 342
-    xor eax, eax
-    rep stosb
-
-    lea rdi, [abs RTL8156_TX_BUF_ADDR + 8]
-    mov ecx, 6
-    mov al, 0xFF
-    rep stosb
-    lea rsi, [rtl8156_mac]
-    mov ecx, 6
-    rep movsb
-    mov word [rdi], 0x0008       ; IPv4
-
-    ; IPv4 header.
-    mov byte [abs RTL8156_TX_BUF_ADDR + 8 + 14], 0x45
-    mov byte [abs RTL8156_TX_BUF_ADDR + 8 + 15], 0
-    mov word [abs RTL8156_TX_BUF_ADDR + 8 + 18], 0x7856
-    mov word [abs RTL8156_TX_BUF_ADDR + 8 + 20], 0
-    mov byte [abs RTL8156_TX_BUF_ADDR + 8 + 22], 64
-    mov byte [abs RTL8156_TX_BUF_ADDR + 8 + 23], 17 ; UDP
-    mov word [abs RTL8156_TX_BUF_ADDR + 8 + 24], 0
-    mov dword [abs RTL8156_TX_BUF_ADDR + 8 + 26], 0
-    mov dword [abs RTL8156_TX_BUF_ADDR + 8 + 30], 0xFFFFFFFF
-
-    ; UDP header.
-    mov word [abs RTL8156_TX_BUF_ADDR + 8 + 14 + 20], 0x4400 ; src 68
-    mov word [abs RTL8156_TX_BUF_ADDR + 8 + 14 + 22], 0x4300 ; dst 67
-    mov word [abs RTL8156_TX_BUF_ADDR + 8 + 14 + 26], 0      ; checksum optional for IPv4
-
-    ; BOOTP/DHCP fixed area.
-    lea rdi, [abs RTL8156_TX_BUF_ADDR + 8 + 14 + 20 + 8]
-    mov byte [rdi + 0], 1        ; BOOTREQUEST
-    mov byte [rdi + 1], 1        ; Ethernet
-    mov byte [rdi + 2], 6
-    mov byte [rdi + 3], 0
-    mov eax, [rtl8156_dhcp_xid]
-    mov [rdi + 4], eax
-    mov word [rdi + 10], 0x0080  ; broadcast flag
-    lea rsi, [rtl8156_mac]
-    lea rdi, [rdi + 28]
-    mov ecx, 6
-    rep movsb
-    mov dword [abs RTL8156_TX_BUF_ADDR + 8 + 14 + 20 + 8 + 236], 0x63538263
-
-    pop rdi
-    pop rsi
-    pop rcx
-    pop rax
-    ret
-
-; ECX = DHCP/BOOTP payload length from UDP payload start.
-rtl8156_finish_dhcp_udp:
-    push rax
-    push rcx
-    push rdi
-    mov eax, ecx
-    add eax, 8
-    xchg al, ah
-    mov [abs RTL8156_TX_BUF_ADDR + 8 + 14 + 24], ax ; UDP length
-    mov eax, ecx
-    add eax, 8 + 20
-    xchg al, ah
-    mov [abs RTL8156_TX_BUF_ADDR + 8 + 16], ax      ; IP total length
-    lea rdi, [abs RTL8156_TX_BUF_ADDR + 8 + 14]
-    mov ecx, 20
-    call net_checksum
-    mov [abs RTL8156_TX_BUF_ADDR + 8 + 24], ax
-    movzx ecx, word [abs RTL8156_TX_BUF_ADDR + 8 + 16]
-    xchg cl, ch
-    add ecx, 14
-    call rtl8156_tx_frame
-    pop rdi
-    pop rcx
-    pop rax
-    ret
-
-rtl8156_send_arp_gateway:
-    push rax
-    push rcx
-    push rsi
-    push rdi
-    lea rdi, [abs RTL8156_TX_BUF_ADDR + 8]
-    mov ecx, 60
-    xor eax, eax
-    rep stosb
-    lea rdi, [abs RTL8156_TX_BUF_ADDR + 8]
-    mov ecx, 6
-    mov al, 0xFF
-    rep stosb
-    lea rsi, [rtl8156_mac]
-    mov ecx, 6
-    rep movsb
-    mov word [rdi], 0x0608
-    add rdi, 2
-    mov word [rdi], 0x0100
-    mov word [rdi + 2], 0x0008
-    mov byte [rdi + 4], 6
-    mov byte [rdi + 5], 4
-    mov word [rdi + 6], 0x0100
-    lea rsi, [rtl8156_mac]
-    lea rdi, [abs RTL8156_TX_BUF_ADDR + 8 + 22]
-    mov ecx, 6
-    rep movsb
-    mov eax, [rtl8156_guest_ip]
-    mov dword [abs RTL8156_TX_BUF_ADDR + 8 + 28], eax
-    mov qword [abs RTL8156_TX_BUF_ADDR + 8 + 32], 0
-    mov eax, [rtl8156_next_hop_ip]
-    mov dword [abs RTL8156_TX_BUF_ADDR + 8 + 38], eax
-    mov ecx, 60
-    call rtl8156_tx_frame
-    pop rdi
-    pop rsi
-    pop rcx
-    pop rax
-    ret
-
+; DHCP/ARP transmit builders moved to zero-asm NexusHLK:
+;   rtl8156_send_dhcp_discover / rtl8156_send_dhcp_request /
+;   rtl8156_build_dhcp_base / rtl8156_finish_dhcp_udp -> rtl8156_dhcp_build.nxh
+;   rtl8156_send_arp_gateway -> rtl8156_arp.nxh
+;   (src/kernel/nexushlk/, %included via kernel_build.asm before this file).
 rtl8156_send_icmp_gateway:
     push rax
     push rbx
@@ -2255,196 +2046,9 @@ rtl8156_net_poll_rx:
     ret
 
 ; RDI = Ethernet frame, ECX = len.
-rtl8156_handle_frame:
-    push rax
-    push rcx
-    push rsi
-    push rdi
-    push rcx
-    call net_rx_frame
-    pop rcx
-    pop rdi
-    cmp word [rdi + 12], 0x0608
-    je .arp
-    cmp word [rdi + 12], 0x0008
-    je .ip
-    jmp .done
-.arp:
-    cmp ecx, 42
-    jb .done
-    cmp word [rdi + 20], 0x0200
-    jne .done
-    mov eax, [rtl8156_next_hop_ip]
-    cmp dword [rdi + 28], eax
-    jne .done
-    lea rsi, [rdi + 22]
-    lea rdi, [rtl8156_gw_mac]
-    mov ecx, 6
-    rep movsb
-    mov byte [rtl8156_have_gw_mac], 1
-    jmp .done
-.ip:
-    cmp ecx, 42
-    jb .done
-    cmp byte [rdi + 23], 17
-    je .udp
-    cmp byte [rdi + 23], 1
-    jne .done
-    mov eax, [rtl8156_guest_ip]
-    cmp dword [rdi + 30], eax
-    jne .icmp_ignore
-    cmp byte [rdi + 34], 0
-    jne .icmp_ignore
-    cmp word [rdi + 38], 0xBEEF
-    jne .icmp_ignore
-    ; Capture TTL from the IPv4 header (offset 8 of IP header == frame+22)
-    ; so net_info(NI_PING_LAST_TTL) can report it to userspace.
-    mov al, [rdi + 22]
-    mov [rtl8156_ping_last_ttl], al
-    mov byte [rtl8156_ping_reply], 1
-    jmp .done
-.icmp_ignore:
-    jmp .done
-.udp:
-    call rtl8156_handle_udp
-.done:
-    pop rsi
-    pop rcx
-    pop rax
-    ret
-
-; RDI = Ethernet frame, ECX = len.
-rtl8156_handle_udp:
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push r8
-    push r9
-
-    cmp ecx, 282
-    jb .done
-    cmp word [rdi + 34], 0x4300      ; UDP source port 67
-    jne .done
-    cmp word [rdi + 36], 0x4400      ; UDP dest port 68
-    jne .done
-    mov eax, [rtl8156_dhcp_xid]
-    cmp [rdi + 46], eax
-    jne .done
-    cmp dword [rdi + 278], 0x63538263
-    jne .done
-
-    mov eax, [rdi + 58]              ; yiaddr
-    mov [rtl8156_dhcp_candidate_ip], eax
-    mov byte [rtl8156_dhcp_msg_type], 0
-    mov dword [rtl8156_dhcp_candidate_server], 0
-    mov dword [rtl8156_dhcp_candidate_router], 0
-    mov dword [rtl8156_dhcp_candidate_dns], 0
-
-    lea rsi, [rdi + 282]
-    mov r8, rdi
-    add r8, rcx
-.opt_loop:
-    cmp rsi, r8
-    jae .classify
-    mov al, [rsi]
-    cmp al, 255
-    je .classify
-    cmp al, 0
-    je .opt_pad
-    movzx edx, byte [rsi + 1]
-    lea r9, [rsi + rdx + 2]
-    cmp r9, r8
-    ja .classify
-    cmp al, 53
-    je .msg_type
-    cmp al, 54
-    je .server_id
-    cmp al, 3
-    je .router
-    cmp al, 6
-    je .dns_server
-    jmp .next_opt
-.msg_type:
-    cmp edx, 1
-    jb .next_opt
-    mov al, [rsi + 2]
-    mov [rtl8156_dhcp_msg_type], al
-    jmp .next_opt
-.server_id:
-    cmp edx, 4
-    jb .next_opt
-    mov eax, [rsi + 2]
-    mov [rtl8156_dhcp_candidate_server], eax
-    jmp .next_opt
-.router:
-    cmp edx, 4
-    jb .next_opt
-    mov eax, [rsi + 2]
-    mov [rtl8156_dhcp_candidate_router], eax
-    jmp .next_opt
-.dns_server:
-    cmp edx, 4
-    jb .next_opt
-    mov eax, [rsi + 2]
-    mov [rtl8156_dhcp_candidate_dns], eax
-.next_opt:
-    mov rsi, r9
-    jmp .opt_loop
-.opt_pad:
-    inc rsi
-    jmp .opt_loop
-.classify:
-    cmp byte [rtl8156_dhcp_msg_type], 2
-    je .offer
-    cmp byte [rtl8156_dhcp_msg_type], 5
-    je .ack
-    jmp .done
-.offer:
-    mov eax, [rtl8156_dhcp_candidate_ip]
-    test eax, eax
-    jz .done
-    mov [rtl8156_dhcp_ip], eax
-    mov eax, [rtl8156_dhcp_candidate_server]
-    mov [rtl8156_dhcp_server], eax
-    mov eax, [rtl8156_dhcp_candidate_router]
-    mov [rtl8156_dhcp_router], eax
-    mov eax, [rtl8156_dhcp_candidate_dns]
-    mov [rtl8156_dhcp_dns], eax
-    mov byte [rtl8156_dhcp_offer_seen], 1
-    jmp .done
-.ack:
-    mov eax, [rtl8156_dhcp_candidate_ip]
-    test eax, eax
-    jz .done
-    mov [rtl8156_dhcp_ip], eax
-    mov eax, [rtl8156_dhcp_candidate_server]
-    test eax, eax
-    jz .keep_server
-    mov [rtl8156_dhcp_server], eax
-.keep_server:
-    mov eax, [rtl8156_dhcp_candidate_router]
-    test eax, eax
-    jz .keep_router
-    mov [rtl8156_dhcp_router], eax
-.keep_router:
-    mov eax, [rtl8156_dhcp_candidate_dns]
-    test eax, eax
-    jz .keep_dns
-    mov [rtl8156_dhcp_dns], eax
-.keep_dns:
-    mov byte [rtl8156_dhcp_ack_seen], 1
-.done:
-    pop r9
-    pop r8
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-    ret
-
+; rtl8156_handle_frame / rtl8156_handle_udp moved to zero-asm NexusHLK:
+;   src/kernel/nexushlk/rtl8156_dhcp_parse.nxh (RX dispatch + bounds-checked
+;   DHCP option parser). %included via kernel_build.asm before this file.
 ; RDI=OCP value/register, ESI=wIndex/type, EDX=len, RCX=buffer.
 rtl8156_ocp_read:
     mov r8d, edi
@@ -3174,6 +2778,8 @@ ser_link_timeout_8156 db "[R8156 LINK TIMEOUT]", 10, 0
 ser_phy_tag db "PHY:", 0
 ser_mac_tag db "MAC:", 0
 ser_oob_tag db "OOB:", 0
+ser_al_done db "ALDONE:", 0
+ser_sff7_tag db "SFF7:", 0
 ser_ll_ready db "[LL READY]", 10, 0
 ser_ll_timeout db "[LL TIMEOUT]", 10, 0
 ser_tcr0_tag db "TCR0:", 0
@@ -3208,6 +2814,11 @@ global rtl8156_dhcp_dns
 global rtl8156_guest_ip
 global rtl8156_next_hop_ip
 rtl8156_active:          resb 1
+global rtl8156_deferred_init_pending
+rtl8156_deferred_init_pending: resb 1
+rtl8156_deferred_init_running: resb 1
+rtl8156_deferred_init_done:    resb 1
+rtl8156_init_allow_blocking:   resb 1
 alignb 4
 rtl8156_lock:            resd 1
 ; TX-completion mailbox. The main-loop poller routes bulk-OUT transfer
@@ -3252,6 +2863,7 @@ rtl8156_port:            resb 1
 rtl8156_ping_reply:      resb 1
 global rtl8156_ping_last_ttl
 rtl8156_ping_last_ttl:   resb 1
+global rtl8156_ping_seq
 rtl8156_ping_seq:        resw 1
 rtl8156_guest_ip:        resd 1
 rtl8156_next_hop_ip:     resd 1
@@ -3275,6 +2887,11 @@ rtl8156_dhcp_candidate_dns: resd 1
 global rtl8156_ping_start_tick, rtl8156_ping_start_tsc
 rtl8156_ping_start_tick: resq 1
 rtl8156_ping_start_tsc:  resq 1
+; TSC captured at the instant the ICMP echo reply is parsed (set in
+; rtl8156_dhcp_parse.nxh). Read by the ping RTT math so the round-trip is measured
+; against reply arrival, not the userspace poll that notices it.
+global rtl8156_ping_reply_tsc
+rtl8156_ping_reply_tsc:  resq 1
 rtl8156_ping_async_state: resb 1
 rtl8156_ping_async_retries: resb 1
 alignb 8

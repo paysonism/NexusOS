@@ -46,6 +46,8 @@ const SYS_WM_SET_USER_ARG = 65
 const SYS_WM_GET_USER_ARG = 73
 const SYS_HANDLE_CLOSE   = 70
 const SYS_FS_ENTRY_INFO  = 71
+const SYS_MOUSE_SENSE     = 74    # get packed pointer sensitivity (x[15:0],y[31:16] tenths)
+const SYS_SET_MOUSE_SENSE = 75    # set packed pointer sensitivity, each axis [1,50]=0.1x..5.0x
 const SYS_FS_ENTRY_INFO_SIZE = 20
 
 # SYS_FS_ENTRY_INFO output struct offsets (matches FAT16 short-entry head):

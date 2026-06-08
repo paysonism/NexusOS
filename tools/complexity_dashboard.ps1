@@ -26,7 +26,7 @@ $fixed = foreach ($f in $files) {
 }
 
 $todo = foreach ($f in $files) {
-    $n = (Select-String -Path $f.FullName -Pattern '\b(TODO|STUB|FIXME)\b' | Measure-Object).Count
+    $n = (Select-String -Path $f.FullName -Pattern '\b(TODO|STUB|FIXME)\b' -CaseSensitive | Measure-Object).Count
     if ($n -gt 0) { [pscustomobject]@{ File = $f.FullName.Substring($Root.Length + 1); Count = $n } }
 }
 

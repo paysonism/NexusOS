@@ -31,6 +31,7 @@ global process_find_by_window
 extern l3_user_stack_top
 extern l3_syscall_stack_top
 extern tss64
+extern tick_count
 
 ; --- scheduler_init ---
 FN_BEGIN scheduler_init, 0, 0, FN_RET_SCALAR
@@ -696,6 +697,152 @@ extern call_app_l3
 extern call_app_l3_packed
 extern ser_print_hex64
 extern wq_lock
+
+; ---------------------------------------------------------------------------
+; cb_run_guarded(rdi=fn, rsi=win, rdx=arg1, rcx=arg2) -> rax = ret (or -1)
+;
+; The only place call_app_l3 is invoked from dispatch_app_callback's inline
+; BSP path. Wraps it with:
+;   (B) a reentrancy guard (cb_in_callback): if a callback is already in
+;       flight for the BSP, refuse and return -1 instead of double-running
+;       (which would clobber the shared cb_rt global + per-slot kernel RSP).
+;   (A) a deadman: capture a longjmp landing pad + start tick, arm it, run
+;       the callback, disarm on normal return. The PIT IRQ calls
+;       cb_deadman_check; on budget overrun it restores rsp/rbx/rbp and jmps
+;       to .deadman_land here, marks the slot TERMINATED, returns -1.
+;
+; BSP-only by construction: dispatch_app_callback only runs the inline path on
+; the BSP (the AP-routing path goes through the work queue), so the single
+; global landing pad is race-free.
+global cb_run_guarded
+cb_run_guarded:
+    push rbp
+    mov rbp, rsp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+
+    ; (B) reentrancy guard ---------------------------------------------------
+    cmp dword [rel cb_in_callback], 0
+    jne .reenter_refuse
+    mov dword [rel cb_in_callback], 1
+
+    mov r12, rdi                       ; fn
+    mov r13, rsi                       ; win
+    mov r14, rdx                       ; arg1
+    mov r15, rcx                       ; arg2
+
+    ; resolve pid for the slot (best-effort; 0 if none) so the deadman can
+    ; mark it TERMINATED on a runaway. Reuses process_find_by_window.
+    xor ebx, ebx
+    test r13, r13
+    jz .pid_done
+    mov edi, [r13 + WIN_OFF_ID]
+    call process_find_by_window
+    mov ebx, eax                       ; pid (0 if not found)
+.pid_done:
+    mov [rel cb_deadman_pid], ebx
+
+    ; (A) arm the deadman: save landing pad + start tick.
+    lea rax, [rel .deadman_land]
+    mov [rel cb_deadman_jmp_rip], rax
+    mov [rel cb_deadman_jmp_rsp], rsp
+    mov [rel cb_deadman_jmp_rbx], rbx
+    mov [rel cb_deadman_jmp_rbp], rbp
+    mov rax, [rel tick_count]
+    mov [rel cb_deadman_start_tick], rax
+    mov dword [rel cb_deadman_armed], 1
+
+    ; run the callback inline on the BSP.
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r14
+    mov rcx, r15
+    call call_app_l3
+
+    ; normal return: disarm + clear reentrancy lock.
+    mov dword [rel cb_deadman_armed], 0
+    mov dword [rel cb_in_callback], 0
+    jmp .done
+
+.deadman_land:
+    ; Reached via cb_deadman_check's jmp after rsp/rbx/rbp were restored to the
+    ; values saved above. The runaway callback's stack frame is abandoned.
+    mov dword [rel cb_deadman_armed], 0
+    ; mark the offending slot's process TERMINATED so it stops being scheduled.
+    mov ebx, [rel cb_deadman_pid]
+    test ebx, ebx
+    jz .land_unlock
+    mov eax, ebx
+    imul rax, 512
+    add rax, PROCESS_POOL
+    mov dword [rax + process_t.state], 4   ; TERMINATED
+.land_unlock:
+    mov dword [rel cb_in_callback], 0
+    mov rax, -1                         ; report failure to the main loop
+    jmp .done
+
+.reenter_refuse:
+    mov rax, -1
+.done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+
+; ---------------------------------------------------------------------------
+; cb_deadman_check() -> eax = 1 if a runaway-callback abort is requested, else 0
+;
+; Called from the timer IRQ handler (isr.asm .irq_timer) AFTER the LAPIC/PIC
+; EOI and ONLY when the interrupted CS shows the IRQ came from ring 3. This is
+; pure, NON-destructive DETECTION: if a callback is armed and has exceeded its
+; tick budget, it marks the slot's PCB TERMINATED, disarms, and returns eax=1 so
+; the caller can perform the clean call_app_l3_return unwind on the IRQ frame.
+; It must NOT longjmp from interrupt context (that would strand the IRQ stub
+; before EOI/iretq). Returns eax=0 (no abort) otherwise. Clobbers rax/rbx.
+; The longjmp pad below is kept for reference but is NOT taken here.
+global cb_deadman_check
+cb_deadman_check:
+    xor eax, eax
+    cmp dword [rel cb_deadman_armed], 0
+    je .nofire
+    mov rax, [rel tick_count]
+    sub rax, [rel cb_deadman_start_tick]
+    cmp eax, [rel cb_deadman_budget]
+    jb .no_overrun
+    ; over budget: disarm (so we fire once) and mark the runaway slot TERMINATED
+    ; so it stops being scheduled. Mirrors .deadman_land's slot->PCB math.
+    mov dword [rel cb_deadman_armed], 0
+    mov ebx, [rel cb_deadman_pid]
+    test ebx, ebx
+    jz .request_abort
+    mov eax, ebx
+    imul rax, 512
+    add rax, PROCESS_POOL
+    mov dword [rax + process_t.state], 4   ; TERMINATED
+.request_abort:
+    mov eax, 1                              ; abort requested
+    ret
+.no_overrun:
+    xor eax, eax
+.nofire:
+    ret
+
+; --- reference-only longjmp path (NOT reachable from IRQ context) ------------
+; The original raw `mov rsp; jmp pad` longjmp lived here. It is unsafe from the
+; timer IRQ (abandons the stub before EOI+iretq), so the deadman now detects and
+; the IRQ stub performs the clean call_app_l3_return unwind instead.
+cb_deadman_longjmp_ref:
+    mov rbx, [rel cb_deadman_jmp_rbx]
+    mov rbp, [rel cb_deadman_jmp_rbp]
+    mov rsp, [rel cb_deadman_jmp_rsp]
+    jmp [rel cb_deadman_jmp_rip]
+
 extern wq_unlock
 extern smp_alive_cores
 
@@ -706,9 +853,14 @@ WIN_OFF_ID equ 0                       ; matches src/include/window_layout.inc
 ; Apps run inline on the BSP when AP routing is not compiled in.
 global dispatch_app_callback
 dispatch_app_callback:
-    jmp call_app_l3
+    jmp cb_run_guarded                 ; deadman + reentrancy-guarded inline run
 %else
 ; --- AP-ROUTING BUILD: route ring-3 callbacks to APs ------------------------
+; The AP "presumed dead" wait budget is derived from the inline deadman budget so
+; there is ONE timescale knob (cb_deadman_budget). Kept a large multiple, NOT 1x:
+; legit synchronous callbacks (~12 s DHCP) must complete on the AP and not get
+; misclassified as a dead AP + re-run inline. 60 * ~25 ticks ~= 1500 ticks ~= 15 s.
+CB_AP_DEADMAN_MULT equ 60
 extern workqueue_wait_timeout
 global ring3_ap_enabled
 section .data
@@ -772,7 +924,29 @@ dispatch_app_callback:
     je .submit_fail
 
     mov edi, eax
-    mov esi, 20                        ; 20 ticks = ~200 ms timeout
+    ; Wait budget = "is the AP dead?", NOT "is the callback slow?". The old
+    ; 200 ms budget misclassified legitimately-slow callbacks (a DHCP click runs
+    ; the synchronous rtl8156_dhcp_configure, which blocks for SECONDS waiting on
+    ; OFFER/ACK + tick timeouts) as a dead AP, then re-ran the SAME callback
+    ; inline on the BSP via .timed_out while the AP was STILL executing it. Two
+    ; concurrent call_app_l3 invocations for one slot clobber the shared cb_rt
+    ; global + the per-slot saved kernel RSP, so the ring-3 return restored a
+    ; smashed RSP and #PF'd at a stale RIP (the '!T' -> RIP=0x170 / RSP in the
+    ; trampoline-stack region crash). Budget must stay large enough that any real
+    ; callback (incl. worst-case ~12 s sync DHCP) completes on the AP and takes
+    ; the safe normal return below; only a genuinely hung AP reaches the inline
+    ; fallback, where double execution can't happen because the AP is gone.
+    ;
+    ; This budget is DELIBERATELY NOT the deadman budget: a 250 ms slam here would
+    ; re-introduce the double-run/RSP-smash bug for slow-but-valid callbacks. So we
+    ; derive it as a large multiple of cb_deadman_budget (CB_AP_DEADMAN_MULT) — the
+    ; relationship is now explicit (one knob, cb_deadman_budget) instead of a magic
+    ; 1500 — while still landing near ~15 s. The ACTUAL runaway protection comes
+    ; from the deadman + reentrancy guard on the inline re-run at .inline (which
+    ; goes through cb_run_guarded), so a hung AP callback is killed on the ~250 ms
+    ; deadman timescale once it falls back, not after a bare 15 s.
+    mov esi, [rel cb_deadman_budget]   ; ~25 ticks
+    imul esi, esi, CB_AP_DEADMAN_MULT  ; 60x -> ~1500 ticks (~15 s) "AP dead" budget
     call workqueue_wait_timeout
     test edx, edx
     jnz .timed_out
@@ -811,7 +985,7 @@ dispatch_app_callback:
     mov rsi, r13
     mov rdx, r14
     mov rcx, r15
-    call call_app_l3
+    call cb_run_guarded                ; deadman + reentrancy-guarded inline run
     DBG_EVT EVT_CALLBACK_RETURN, 0, rax, r12, r13, r14, r15, 0
 %ifdef ENABLE_DEBUG_SERIAL
     push rax
@@ -942,7 +1116,11 @@ media_draw_dispatch:
     cmp eax, -1
     je .inline
     mov edi, eax
-    mov esi, 20                        ; 20 ticks = ~200 ms timeout
+    ; Same "slow != dead" fix as the generic dispatch path above: a 200 ms budget
+    ; misreads a legitimately-slow AP draw as a dead AP and re-runs it inline while
+    ; the AP is still executing it (double call_app_l3 -> kernel-RSP smash). Wait
+    ; long enough that only a genuinely hung AP trips the inline fallback.
+    mov esi, 1500                      ; 1500 ticks = ~15 s "AP presumed dead" budget
     call workqueue_wait_timeout
     test edx, edx
     jnz .timed_out
@@ -989,6 +1167,39 @@ section .data
 global current_process_id
 current_process_id: dd -1
 next_pid:           dd 0
+
+; ---------------------------------------------------------------------------
+; Ring-3 callback deadman + reentrancy guard (BSP-only).
+;
+; dispatch_app_callback runs an app's click/draw handler inline on the BSP via
+; call_app_l3. A `while(1){}` in that handler used to hang the whole OS. The
+; deadman lets the PIT IRQ (which keeps firing on the BSP) longjmp back out of
+; a runaway callback after a tick budget, mark the slot TERMINATED, and return
+; -1 so the main loop survives.
+;
+; Globals exported for pit.asm / other code:
+;   cb_deadman_armed       dd  0/1  - a callback is in flight & armed
+;   cb_deadman_start_tick  dq       - tick_count when call_app_l3 was entered
+;   cb_deadman_budget      dd       - tick budget (~250 ms @ ~100 Hz = 25)
+;   cb_in_callback         dd  0/1  - reentrancy lock (refuse double-run)
+;   cb_deadman_pid         dd       - pid of the slot being run (for fault mark)
+;   cb_deadman_check       fn       - pit calls this; longjmps if over budget
+align 64
+global cb_deadman_armed
+global cb_deadman_start_tick
+global cb_deadman_budget
+global cb_in_callback
+global cb_deadman_pid
+cb_deadman_armed:       dd 0
+cb_in_callback:         dd 0
+cb_deadman_pid:         dd 0
+cb_deadman_budget:      dd 25            ; ~250 ms at the ~100 Hz PIT tick
+cb_deadman_start_tick:  dq 0
+; longjmp landing pad: kernel context captured just before call_app_l3.
+cb_deadman_jmp_rsp:     dq 0
+cb_deadman_jmp_rbx:     dq 0
+cb_deadman_jmp_rbp:     dq 0
+cb_deadman_jmp_rip:     dq 0
 
 align 64
 global app_callback_lock

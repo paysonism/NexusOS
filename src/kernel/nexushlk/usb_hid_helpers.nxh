@@ -155,12 +155,14 @@ fn usb_log_hex_nib(al n)
 #   edx=len).
 # ---------------------------------------------------------------------------
 fn usb_hid_flush_log() preserves(all) {
-    let n = lq(&usb_log_len) & 0xFFFFFFFF;
-    if n != 0 {
-        if n < USB_LOG_BUF_SIZE {
-            sb(&usb_log_buf + n, 0);
+    cfg !"RELEASE_BUILD" {
+        let n = lq(&usb_log_len) & 0xFFFFFFFF;
+        if n != 0 {
+            if n < USB_LOG_BUF_SIZE {
+                sb(&usb_log_buf + n, 0);
+            }
+            call fat16_write_file(rdi: &usb_log_name, rsi: &usb_log_buf, rdx: n);
         }
-        call fat16_write_file(rdi: &usb_log_name, rsi: &usb_log_buf, rdx: n);
     }
 }
 

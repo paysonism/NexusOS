@@ -162,6 +162,81 @@ sc_record_strike:
     ret
 
 ; ----------------------------------------------------------------------------
+; sc_slot_integrity_kill - PER-SLOT teardown for a "should-be-impossible"
+; integrity fault that is ATTRIBUTABLE TO THE CURRENT SLOT on the syscall
+; dispatch path (e.g. .sc_cap_tamper: slot_cap_mask[r15] no longer matches its
+; HMAC). The old behaviour jmp'd kernel_panic_canary, which HALTS THE WHOLE
+; MACHINE — letting one malicious tenant take down every other tenant. Instead
+; we kill ONLY the offending slot via the same teardown sc_record_strike uses
+; at its strike limit (cap_audit_log + wm_close_window), then return so the
+; caller can set rax=-1 and take the normal .done exit. Fail-closed: the slot's
+; window/handles are reclaimed, so it cannot continue executing on the forged
+; value (its next syscall lands in recycled/dead slot state).
+;
+; In:  r15 = current slot id (set by syscall_entry).
+;      edx = 4-char serial reason code (e.g. 'CAPT' = 0x43415054), big-endian
+;            so the bytes print in order — same codes the old panic banner used.
+; Out: nothing. Caller sets rax=-1 and jmp .done.
+; Clobbers rax, rcx, rdx, rsi, rdi, r8 (dead at the integrity sinks). r15 kept.
+; ----------------------------------------------------------------------------
+sc_slot_integrity_kill:
+    push rbx
+    mov ebx, edx                            ; save reason code across serial/log
+    ; Serial banner: "SKILL <code> s<slot>" — forensic trail before teardown so
+    ; the kill is never silent (mirrors the panic banner's intent, no halt).
+    SER 'S'
+    SER 'K'
+    SER 'I'
+    SER 'L'
+    SER 'L'
+    SER ' '
+    rol ebx, 8                              ; emit the 4 reason bytes big-endian
+    mov dx, 0x3F8
+    mov al, bl
+    out dx, al
+    rol ebx, 8
+    mov al, bl
+    out dx, al
+    rol ebx, 8
+    mov al, bl
+    out dx, al
+    rol ebx, 8
+    mov al, bl
+    out dx, al
+    SER ' '
+    SER 's'
+    movzx edi, r15b
+    call ser_print_hex64                    ; faulting slot id
+    SER 13
+    SER 10
+    pop rbx
+    ; Forensics: ship this slot's last few syscalls before we reclaim it (same
+    ; aid the panic path gave). sc_trace_dump preserves all caller regs.
+    movzx edi, r15b
+    call sc_trace_dump
+    ; Audit the kill so the cap-transition ring records it: old_mask = current
+    ; mask, new_mask = 0, reason = CAP_AUDIT_STRIKE (same code as the strike
+    ; auto-kill — this is a security teardown of the same class), app_id = 0.
+    movzx eax, r15b
+    cmp eax, MAX_WINDOWS
+    jae .ski_kill                           ; defensive: skip audit on bad slot
+    movzx edi, r15b
+    lea rcx, [rel slot_cap_mask]
+    movzx eax, r15b
+    mov sil, [rcx + rax]                    ; sil = old_mask
+    xor edx, edx                            ; dl  = new_mask = 0
+    mov cl, CAP_AUDIT_STRIKE                ; cl  = reason
+    xor r8d, r8d                            ; r8d = app_id = 0
+    call cap_audit_log
+.ski_kill:
+    ; Tear down ONLY this slot via the existing window/slot teardown. For app
+    ; slots window id == slot id; wm_close_window range-checks and is a no-op on
+    ; an already-closed window. This denies/drains the slot fail-closed.
+    movzx edi, r15b
+    call wm_close_window
+    ret
+
+; ----------------------------------------------------------------------------
 ; sc_anomaly_scan_all - behavioral anomaly detector on the dispatcher
 ; (security_todo.md §11, "Anomaly detector on the dispatcher"). Pure-software
 ; behavioral sandbox: it never touches the hot dispatch path. pit_handler calls

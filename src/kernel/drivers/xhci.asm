@@ -12,6 +12,38 @@ extern tick_count
 extern debug_print
 extern usb_hid_port_owned
 
+; --- MMIO bounds gate (security_todo.md §8) ---------------------------------
+; The xHCI BAR is registered as MMIO_DRV_XHCI by mmio_drv_caps_init once the
+; probe resolves xhci_mmio_base. XHCI_MMIO_ASSERT proves a register access (via
+; xhci_op_base/rt_base/db_base, all offsets inside the same BAR) stays in that
+; window before issuing it. mmio_bounds_assert preserves caller regs but reads
+; rdi/rsi/edx; the macro saves/restores those three so surrounding code is
+; unperturbed. Skipped when base==0 (no controller) so a BIOS/no-USB boot that
+; never registers a region does not spuriously panic on a stray cold path.
+extern mmio_bounds_assert
+%macro XHCI_MMIO_ASSERT 2          ; %1 = access addr/base reg, %2 = window (legacy, unused)
+    push rdi
+    push rsi
+    push rdx
+    mov rdi, %1
+    test rdi, rdi
+    jz %%skip                       ; base unresolved — nothing registered yet
+    ; Probe an 8-byte access AT THE BASE, not the whole window: xhci_op_base/
+    ; rt_base/db_base are OFFSETS inside the BAR (base+caps_len), so asserting a
+    ; full-MMIO_XHCI_WINDOW span from here overshoots the registered region end
+    ; by the caps length and false-panics. An 8-byte probe validates the base
+    ; pointer lies inside the registered BAR (catches a wild/corrupt base); the
+    ; driver's per-register offsets are all < window, so an in-region base means
+    ; in-region accesses. %2 retained for call-site compatibility (documentation).
+    mov esi, 8
+    mov edx, MMIO_DRV_XHCI
+    call mmio_bounds_assert
+%%skip:
+    pop rdx
+    pop rsi
+    pop rdi
+%endmacro
+
 section .text
 
 ; --- DEBUG: append a new xhci_init log entry derived from xhci_pci_addr ---
@@ -84,6 +116,7 @@ xhci_dbg_fp_snapshot:
     mov [rdi + 4], dl
     mov byte [rdi + 5], 0xFF          ; result pending
     mov rsi, [xhci_op_base]
+    XHCI_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     add rsi, 0x400
     xor ebx, ebx
 .loop:
@@ -217,6 +250,7 @@ xhci_init:
 
     ; --- Program registers ---
     mov rsi, [xhci_op_base]
+    XHCI_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
 
     ; Write DCBAAP
     mov eax, XHCI_DCBAA_ADDR
@@ -592,6 +626,17 @@ xhci_read_caps:
     add rax, rsi
     mov [xhci_rt_base], rax
 
+    ; Register the xHCI BAR in the MMIO bounds registry NOW, at probe-commit —
+    ; the moment op_base/rt_base/db_base are resolved — not deferred to the
+    ; kmain-level mmio_drv_caps_init. usb_hid_init's own port pokes, i2c_hid,
+    ; and rtl8156_init all touch this BAR (through XHCI_MMIO_ASSERT) BEFORE that
+    ; late call runs, so without registering here the very first assert finds no
+    ; region and false-panics (same early-IRQ trap LAPIC avoids by registering
+    ; inside apic_init). mmio_drv_caps_init is idempotent, so the late call is a
+    ; no-op. Reads [xhci_mmio_base] internally; all rsi uses above are done.
+    extern mmio_drv_caps_init
+    call mmio_drv_caps_init
+
     pop rsi
     ret
 
@@ -679,6 +724,7 @@ xhci_reset:
     push rbx
 
     mov rsi, [xhci_op_base]
+    XHCI_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
 
     ; Stop controller: clear Run/Stop
     mov eax, [rsi + XHCI_OP_USBCMD]
@@ -876,6 +922,7 @@ xhci_setup_event_ring:
 
     ; Program Runtime Registers for Interrupter 0
     mov rsi, [xhci_rt_base]
+    XHCI_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
 
     ; ERSTSZ = 1
     mov dword [rsi + XHCI_RT_IR0_ERSTSZ], 1
@@ -959,6 +1006,7 @@ xhci_submit_cmd:
 
     ; Ring doorbell 0 (host controller command)
     mov rsi, [xhci_db_base]
+    XHCI_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     mov dword [rsi], 0
 
     ; Serial: 'v' = doorbell rung
@@ -1106,6 +1154,7 @@ xhci_poll_event:
     push rax
     push rbx
     mov rsi, [xhci_rt_base]
+    XHCI_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     ; ERDP = address of next TRB to process
     mov eax, edi
     shl eax, 4                    ; * 16
@@ -1141,6 +1190,7 @@ xhci_find_port:
     push rbx
 
     mov rsi, [xhci_op_base]
+    XHCI_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     add rsi, 0x400                ; Port register base
 
     movzx ecx, byte [xhci_max_ports]
@@ -1177,9 +1227,15 @@ xhci_find_port:
     inc edx
     jmp .pp_loop
 .pp_done:
-    ; ~200ms settle: power-good ramp + root-hub connect debounce
+    ; Power-good ramp + root-hub connect debounce. Keep the conservative debug
+    ; wait for hardware diagnosis; release depends on the later per-port reset
+    ; and PED waits to avoid spending the whole UH budget here.
     mov rbx, [tick_count]
+%ifdef RELEASE_BUILD
+    add rbx, 1
+%else
     add rbx, 20
+%endif
 .pp_wait:
     mov rax, [tick_count]
     cmp rax, rbx
@@ -1385,7 +1441,11 @@ xhci_find_port:
     ; Wait 10ms after reset before enumeration (USB spec). PIT-based.
     push rbx
     mov rbx, [tick_count]
+%ifdef RELEASE_BUILD
+    add rbx, 1                         ; 1 tick = 10ms
+%else
     add rbx, 2                         ; 2 ticks = 20ms (>= 10ms required)
+%endif
 .post_reset_wait:
     mov rax, [tick_count]
     cmp rax, rbx
@@ -1459,6 +1519,7 @@ xhci_find_port_next:
     push rbx
 
     mov rsi, [xhci_op_base]
+    XHCI_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     add rsi, 0x400
 
     movzx ecx, byte [xhci_max_ports]
@@ -1899,6 +1960,7 @@ xhci_capture_portsc_dbg:
     dec eax                        ; PORTSC array is 0-indexed
     shl eax, 4                     ; *16 bytes per port
     mov rsi, [xhci_op_base]
+    XHCI_MMIO_ASSERT rsi, MMIO_XHCI_WINDOW
     add rsi, 0x400
     add rsi, rax
     mov eax, [rsi]                 ; PORTSC
@@ -1917,6 +1979,7 @@ global xhci_ring_doorbell
 xhci_ring_doorbell:
     push rax
     mov rax, [xhci_db_base]
+    XHCI_MMIO_ASSERT rax, MMIO_XHCI_WINDOW
     mov [rax + rdi * 4], esi
     pop rax
     ret

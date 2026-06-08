@@ -56,6 +56,7 @@ global cap_mask_store;
 global slot_cap_hmac_init;
 
 extern dbg_event_emit6;
+extern sc_slot_integrity_kill;  # per-slot integrity teardown (r15=slot, edx=reason)
 
 # Domain-separation constants (kdomain_hmac.inc §13). Literals — value-preserving.
 const KDOM_CPI       = 0x00;   # CPI callback tag (domainless)
@@ -178,12 +179,19 @@ fn cpi_verify_callback(rax result, rdi stored, rsi win, rdx off)
                 cb_ser(13);
                 cb_ser(10);
             }
-            # Pointer corruption detected. Reuse the canary panic path so the
-            # operator sees the same CANARY <bad> @<rip> trace. rdi=observed bad
-            # qword, rsi=&cpi_verify_callback as the approximate detection RIP.
-            # kernel_panic_canary halts and never returns. System-V call
-            # (rdi=stored, rsi=&cpi_verify_callback) — bare call expr-stmt.
-            kernel_panic_canary(stored, &cpi_verify_callback, 0x43504956);
+            # Pointer corruption detected on a SIGNED click/key callback. The
+            # forged qword lives in this tenant's own window struct, so it is
+            # attributable to ONE slot — kill only that slot instead of halting
+            # every tenant (was: kernel_panic_canary global halt). Derive the
+            # slot id from the window's pool offset (window id == slot id for app
+            # slots; WINDOW_STRUCT_SIZE == 256, so >>8 = index). sc_slot_integrity
+            # _kill takes r15=slot, edx=reason ('CPIV'); it logs+dumps+audits+
+            # closes the slot's window, never panicking. After it returns we fail
+            # CLOSED for this slot: return 0 (the detach sentinel) so the caller
+            # treats the callback as absent and never dispatches the bad pointer.
+            let slot = (win - WINDOW_POOL_ADDR) >> 8;
+            call sc_slot_integrity_kill(r15: slot, edx: EVT_CPI_VERIFY_FAIL);
+            result = 0;
         }
     }
 }
