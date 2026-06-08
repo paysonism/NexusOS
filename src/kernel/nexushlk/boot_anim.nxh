@@ -149,12 +149,9 @@ fn boot_anim_valid_payload(bytes_read, width, height, frames) {
 }
 
 fn boot_anim_play() preserves(all) {
-    # Disabled for now: the pre-GUI animation can spend unbounded time in the
-    # early framebuffer flip path on some randomized UEFI slides, before normal
-    # boot/perf markers are available. Keep boot progress deterministic and let
-    # the GUI own visual presentation after initialization.
-    return;
-
+    # Gated at the call site by `cfg "NEXUS_BOOT_ANIM"` (build_uefi.ps1
+    # -BootAnim). Off by default so boot stays deterministic; when enabled the
+    # pre-GUI splash plays before the GUI owns visual presentation.
     if boot_anim_should_skip() != 0 { return; }
 
     let entry = boot_anim_find();
@@ -192,10 +189,6 @@ fn boot_anim_play() preserves(all) {
     while i < frames {
         boot_anim_blit(frame, width, height, scale);
         display_flip_rect(lw(&boot_anim_rect_x), lw(&boot_anim_rect_y), lw(&boot_anim_rect_w), lw(&boot_anim_rect_h));
-        # Keep early boot bounded: show a validated splash frame, then continue
-        # kernel bring-up. Full timed playback can run later once GUI/app state
-        # is initialized and PIT-time security work is active.
-        return;
         boot_anim_wait_ticks(ticks);
         frame = frame + stride;
         i = i + 1;

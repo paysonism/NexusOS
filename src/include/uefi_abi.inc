@@ -134,6 +134,12 @@ UEFI_PDPT1_PHYS       equ 0x72000       ; PML4[1] -> PDPT covering 512..1024 GiB
 UEFI_PD0_PHYS         equ 0x73000       ; PDPT0[0] -> PD0 covering first 1 GiB
 UEFI_PT0_PHYS         equ 0x74000       ; PD0[0] -> 4 KiB PT over 0..2 MiB
 UEFI_APP_PT_PHYS      equ 0x75000       ; first of 12 app-arena 4 KiB PTs
+; Framebuffer overrun-guard tables (split the LFB's 1 GiB page down to 4 KiB so
+; the page just past fb_end can be left unmapped). Contiguous after the
+; syscall-stack PT (0x82000); kept inside the nested-kernel monitor's protected
+; page-table region (see nk_monitor.asm NK_PT_REGION_HI).
+UEFI_FB_PD_PHYS       equ 0x83000       ; PDPT0[fb>>30] -> PD over that 1 GiB
+UEFI_FB_PT_PHYS       equ 0x84000       ; PD[fb>>21] -> 4 KiB PT around fb_end
 ; W^X kernel-text window expressed as 4 KiB PTE indices (0x100000..0x200000).
 UEFI_KTEXT_START_PAGE equ 0x100
 UEFI_KTEXT_END_PAGE   equ 0x200

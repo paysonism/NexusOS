@@ -123,9 +123,17 @@ security_status_init:
     ; --- [4] KASLR -------------------------------------------------------
     ; The kernel never sees -dENABLE_KASLR (loader-only flag), so detect it
     ; directly: a RIP-relative _start that resolves anywhere other than the
-    ; link-time KERNEL_LOAD_ADDR means the loader slid us.
+    ; link-time base means the loader slid us.
+    ;
+    ; The comparison base MUST be KERNEL_LINK_BASE, not KERNEL_LOAD_ADDR. The
+    ; latter is an absolute immediate that differs between the two ORG passes
+    ; (0x100000 vs 0x200000), so extract_kaslr_fixups.py adds it to the fixup
+    ; table and the loader slides it identically to _start -> the probe always
+    ; saw rax == rcx and reported KASLR off even when slid. KERNEL_LINK_BASE is
+    ; the same literal in both passes, so it is never fixed up and stays at the
+    ; true unslid base.
     lea rax, [rel _start]
-    mov rcx, KERNEL_LOAD_ADDR
+    mov rcx, KERNEL_LINK_BASE
     cmp rax, rcx
     je  .kaslr_done
     mov byte [rel security_status_table + 4], SECST_ACTIVE

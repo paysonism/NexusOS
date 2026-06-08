@@ -41,6 +41,8 @@ section .text
 %include "build/nxh/input_dispatch.asm"
 section .text
 %include "build/nxh/frame_present.asm"
+section .text
+%include "build/nxh/frame_pacing.asm"
 ; NexusHLK: former main-loop and diagnostic modules. Keep these directly after
 ; core_runtime_state.asm and before crypto.nxh so the moved code stays in
 ; the early kernel text span [_start, _kernel_text_end).
@@ -51,6 +53,10 @@ section .text
 ; by nxhc.py --target kernel.
 section .text
 %include "build/nxh/boot_diag.asm"
+section .text
+%include "build/nxh/boot_timing.asm"
+section .text
+%include "build/nxh/boot_features.asm"
 %ifndef RELEASE_BUILD
 section .text
 %include "build/nxh/debug_overlay.asm"
@@ -130,7 +136,7 @@ section .text
 
 ; --- Network stack ---
 section .text
-%include "src/kernel/net/eth.asm"
+%include "build/nxh/eth.asm"
 section .text
 %include "src/kernel/net/ip.asm"
 section .text
@@ -140,7 +146,7 @@ section .text
 section .text
 %include "src/kernel/net/udp.asm"
 section .text
-%include "src/kernel/net/dns.asm"
+%include "build/nxh/dns.asm"
 section .text
 %include "src/kernel/net/icmp.asm"
 section .text
@@ -200,9 +206,22 @@ section .text
 section .text
 %include "src/kernel/drivers/usb_hid.asm"
 section .text
+; NexusHLK (zero-asm) DHCP/ARP control path — must precede rtl8156.asm so the
+; single NASM TU resolves these globals as forward refs (see each module header).
+%include "build/nxh/rtl8156_dhcp_build.asm"
+section .text
+%include "build/nxh/rtl8156_arp.asm"
+section .text
+%include "build/nxh/rtl8156_dhcp_parse.asm"
+section .text
+%include "build/nxh/rtl8156_dhcp_sm.asm"
+section .text
 %include "src/kernel/drivers/rtl8156.asm"
 section .text
 %include "src/kernel/net/nic.asm"
+section .text
+; net_dhcp_configure / net_dhcp_start ported out of nic.asm to zero-asm NHLK.
+%include "build/nxh/net_dhcp_dispatch.asm"
 section .text
 %include "src/kernel/drivers/driver_debug.asm"
 section .text
@@ -237,7 +256,8 @@ section .text
 section .text
 %include "src/kernel/gui/desktop.asm"
 section .text
-%include "src/kernel/gui/cursor.asm"
+; NexusHLK mouse cursor rendering (zero-asm; compiled with --forbid-asm).
+%include "build/nxh/cursor.asm"
 section .text
 ; NexusHLK boot animation player (zero-asm; compiled with --forbid-asm).
 %include "build/nxh/boot_anim.asm"

@@ -8,7 +8,7 @@ bits 64
 
 %include "net_driver.inc"
 
-extern net_arp_resolve_ipv4
+extern net_arp_resolve_ipv4_try
 extern net_arp_resolved_mac_ptr
 extern net_dns_rx_udp
 extern net_info
@@ -46,7 +46,10 @@ net_udp_send_ipv4:
     mov eax, [rel net_udp_dst_ip]
 .have_hop:
     mov edi, eax
-    call net_arp_resolve_ipv4
+    ; Non-blocking: if the next-hop MAC isn't cached yet this fires one ARP
+    ; request and returns 0 (datagram not sent). The DNS FSM retries on a later
+    ; tick once the main loop's poll_rx has warmed the cache — no kernel freeze.
+    call net_arp_resolve_ipv4_try
     test eax, eax
     jz .fail
     call net_arp_resolved_mac_ptr

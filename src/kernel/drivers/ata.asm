@@ -60,6 +60,18 @@ ata_read_sectors:
     ret
 
 .ata_pio_read:
+    ; Float-bus probe. On real hardware with no legacy IDE controller (NVMe /
+    ; USB boot, no DATA.IMG ramdisk) the status port reads back 0xFF because the
+    ; bus floats high. Without this check each sector read would burn the full
+    ; ~268M-iteration tick-free spin in ata_wait_drq/ready (interrupts are off
+    ; during fat16_init), stalling boot for seconds before failing. Detect the
+    ; absent controller in one IN and fail immediately instead.
+    call ata_bus_present
+    test eax, eax
+    jnz .read_bus_ok
+    mov eax, -1
+    ret
+.read_bus_ok:
     push rbx
     push rcx
     push rdx
@@ -165,6 +177,13 @@ ata_write_sectors:
     ret
 
 .ata_pio_write:
+    ; Float-bus probe — see ata_read_sectors / .ata_pio_read.
+    call ata_bus_present
+    test eax, eax
+    jnz .write_bus_ok
+    mov eax, -1
+    ret
+.write_bus_ok:
     push rbx
     push rcx
     push rdx
@@ -251,12 +270,34 @@ ata_write_sectors:
 
 ; --- Internal helpers ---
 
+; ata_bus_present - one-shot float-bus detection. Reads the primary status port
+; once; if every bit is set (0xFF) the IDE data bus is floating high, i.e. there
+; is no controller responding. Returns eax=1 if a controller appears present,
+; eax=0 if absent. No spin, no PIT dependency: safe to call with interrupts off.
+ata_bus_present:
+    mov dx, ATA_STATUS
+    in al, dx
+    cmp al, 0xFF
+    je .abp_absent
+    mov eax, 1
+    ret
+.abp_absent:
+    xor eax, eax
+    ret
+
 ; PIT-based deadline waits. CPU-spin loops are unreliable across CPU clocks
 ; (too short on fast real HW, too long on slow QEMU). 100 ticks = 1 second.
 ata_wait_ready:
     push rbx
+    push rcx
     mov rbx, [tick_count]
     add rbx, 100
+    ; Spin-count fallback deadline. fat16_init runs with interrupts disabled
+    ; (sti is deferred until after the FAT cache fill to keep the PIT IRQ out of
+    ; that window), so tick_count does not advance here. Without a tick-free
+    ; bound a hung drive would spin forever; ~256M pause-iterations is a coarse
+    ; multi-second wall-clock cap that terminates even with IF=0.
+    mov rcx, 0x10000000
 .wr_loop:
     mov dx, ATA_STATUS
     in al, dx
@@ -265,21 +306,29 @@ ata_wait_ready:
     mov rax, [tick_count]
     cmp rax, rbx
     jae .wr_timeout
+    dec rcx
+    jz .wr_timeout
     pause
     jmp .wr_loop
 .wr_timeout:
+    pop rcx
     pop rbx
     mov eax, -1
     ret
 .wr_ok:
+    pop rcx
     pop rbx
     xor eax, eax
     ret
 
 ata_wait_drq:
     push rbx
+    push rcx
     mov rbx, [tick_count]
     add rbx, 100
+    ; Tick-free spin fallback — see ata_wait_ready (sti is deferred past the
+    ; FAT cache fill, so tick_count is frozen during fat16_init).
+    mov rcx, 0x10000000
 .wdrq_loop:
     mov dx, ATA_STATUS
     in al, dx
@@ -290,13 +339,17 @@ ata_wait_drq:
     mov rax, [tick_count]
     cmp rax, rbx
     jae .wdrq_err
+    dec rcx
+    jz .wdrq_err
     pause
     jmp .wdrq_loop
 .wdrq_err:
+    pop rcx
     pop rbx
     mov eax, -1
     ret
 .wdrq_ok:
+    pop rcx
     pop rbx
     xor eax, eax
     ret

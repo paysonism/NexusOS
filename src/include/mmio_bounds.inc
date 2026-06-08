@@ -64,6 +64,7 @@ MMIO_DRV_NONE   equ 0
 MMIO_DRV_LAPIC  equ 1            ; kernel/arch/apic.asm  — local APIC MMIO page
 MMIO_DRV_XHCI   equ 2            ; kernel/drivers/xhci.asm — host controller BAR
 MMIO_DRV_RTL8156 equ 3           ; kernel/drivers/rtl8156.asm — rides xHCI BAR
+MMIO_DRV_I2C    equ 4            ; kernel/drivers/i2c_hid.asm — DesignWare I2C MMIO block
 
 ; --- Region flags -----------------------------------------------------------
 MMIO_RGN_NONE   equ 0
@@ -81,6 +82,10 @@ MMIO_REG_MAX    equ 8
 ; goal is "a stray pointer can't leave the controller's BAR", not exact decode).
 MMIO_LAPIC_WINDOW equ 0x1000
 MMIO_XHCI_WINDOW  equ 0x10000
+; A DesignWare I2C register block (DW_IC_*) tops out at offset 0xF4. One 4 KiB
+; page is a conservative window — far more than the decoded register set, but it
+; keeps a stray [i2c_base_addr + off] from leaving the controller's MMIO page.
+MMIO_I2C_WINDOW   equ 0x1000
 
 section .data
 align 8
@@ -267,8 +272,46 @@ mmio_register_lapic:
 .skip:
     ret
 
+; mmio_register_i2c — declare a DesignWare I2C controller's register page as the
+; MMIO_DRV_I2C capability. i2c_hid's probe walks several candidate bases (the
+; four AMD FCH FEDCx000 blocks, or a PCI BAR0) and commits one to
+; i2c_base_addr; this is called with that committed base in RDI right after the
+; commit, so the assert on the poll path has a region to match. Idempotent
+; per-base (the probe may re-commit the same base on a bus-reset reinit), so a
+; duplicate base is skipped rather than appended.
+;   RDI = committed I2C MMIO base. Clobbers rax/rcx/rdx/rsi (caller-saved here).
+global mmio_register_i2c
+mmio_register_i2c:
+    test rdi, rdi
+    jz .skip
+    mov ecx, [mmio_reg_count]
+    xor eax, eax
+.find:
+    cmp eax, ecx
+    jae .do_register
+    cmp dword [mmio_reg_owner + rax*4], MMIO_DRV_I2C
+    jne .find_next
+    cmp [mmio_reg_base + rax*8], rdi
+    je .skip                            ; already registered for this base
+.find_next:
+    inc eax
+    jmp .find
+.do_register:
+    mov esi, MMIO_I2C_WINDOW
+    mov edx, MMIO_DRV_I2C
+    call mmio_region_register
+.skip:
+    ret
+
 global mmio_drv_caps_init
 mmio_drv_caps_init:
+    ; Idempotent: this is now called BOTH at xHCI probe-commit (xhci_read_caps,
+    ; so the region exists before usb_hid/i2c/rtl8156 touch the BAR) AND at the
+    ; original kmain site. mmio_region_register is append-only, so guard against
+    ; a duplicate second registration (which would also burn MMIO_REG_MAX slots).
+    cmp byte [mmio_drv_caps_done], 0
+    jne .already_done
+    mov byte [mmio_drv_caps_done], 1
     ; --- xHCI BAR: register for both the controller driver and the rtl8156 ----
     ; NIC, which reaches the controller exclusively through xhci_op_base (an
     ; offset inside this same BAR). Two owner ids over one window keeps each
@@ -284,6 +327,11 @@ mmio_drv_caps_init:
     mov edx, MMIO_DRV_RTL8156
     call mmio_region_register
 .skip_xhci:
+.already_done:
     ret
+
+section .data
+mmio_drv_caps_done: db 0
+section .text
 
 %endif ; MMIO_BOUNDS_INC

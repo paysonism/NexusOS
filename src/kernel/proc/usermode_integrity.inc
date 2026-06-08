@@ -139,11 +139,26 @@ FN_DECL l3_code_hash_verify_all, 0, 0, FN_RET_SCALAR
     mov edi, ecx
     call l3_code_hash_compute             ; rax = recomputed hash
     mov ecx, edx
+    ; compute returns 0 for any slot that does NOT currently present a sane v1
+    ; manifest (ver!=1 or start>=end) — i.e. a slot that was recycled, is mid
+    ; re-install, or never carried a real code range. The valid flag can still
+    ; read nonzero across that window (TOCTOU vs l3_copy_app_blob_to_slot /
+    ; SYS_WX_INSTALL_MANIFEST, or stale/garbage BSS for a never-installed slot),
+    ; which previously compared 0 against the stale baseline and fail-closed with
+    ; a spurious "CANARY 0 @..." (tag WCXH) at boot. A genuine W-on-code attack
+    ; mutates the bytes (nonzero, mismatching hash) and never zeroes the
+    ; manifest, so a 0 here means "no executable range to protect": drop the
+    ; stale baseline and skip rather than panic. No real coverage is lost.
+    test rax, rax
+    jz .va_stale
     cmp rax, [l3_code_hash + rcx*8]
     jne .va_mismatch
 .va_next:
     inc ecx
     jmp .va_loop
+.va_stale:
+    mov byte [l3_code_hash_valid + rcx], 0
+    jmp .va_next
 .va_done:
     pop rdi
     pop rdx
@@ -190,11 +205,23 @@ FN_DECL l3_code_hash_verify_all, 0, 0, FN_RET_SCALAR
     SER 13
     SER 10
 %endif
-    mov rdi, rax
-    lea rsi, [rel .va_mismatch]
-    mov r10, [l3_code_hash + rcx*8]
+    ; PER-SLOT KILL (was: jmp kernel_panic_canary global halt). The diverged
+    ; bytes are attributable to slot ECX, so tear down ONLY that slot rather than
+    ; halting every tenant. sc_slot_integrity_kill wants the faulting slot in r15
+    ; and the reason code in edx; this is the PIT-cadence sweep (IRQ context), so
+    ; r15 here is NOT a syscall-entry slot id — load it from ECX and restore it
+    ; after. The helper clobbers rax/rcx/rdx/rsi/rdi/r8 (all dead or stack-saved
+    ; here); we reload ECX from the stack-saved copy (pushed rcx) afterward, drop
+    ; this slot's now-untrusted baseline, and continue the sweep fail-closed.
+    extern sc_slot_integrity_kill
+    push r15
+    movzx r15d, cl                       ; r15 = faulting slot id
     mov edx, 0x57435848                  ; WCXH: executable code hash mismatch
-    jmp kernel_panic_canary
+    call sc_slot_integrity_kill
+    pop r15
+    mov ecx, [rsp+16]                    ; reload slot index (stack: rdi@0, rdx@8, rcx@16)
+    mov byte [l3_code_hash_valid + rcx], 0  ; baseline untrusted -> stop re-checking
+    jmp .va_next
 
 ; l3_install_app_done_trampoline MIGRATED TO ZERO-ASM NexusHLK:
 ; src/kernel/nexushlk/usermode_callbacks.nxh -> build/nxh/usermode_callbacks.asm

@@ -1553,6 +1553,20 @@ FN_BEGIN display_flip_rect, 0, 0, FN_RET_SCALAR
     cmp ecx, 0
     jle .fr_done
 
+    ; Clamp the rect ORIGIN inside the screen. The clip above only forces
+    ; x>=0 / y>=0 and bounds w/h to scr_width/scr_height; it never rejects an
+    ; origin that is AT or BEYOND the right/bottom edge. A dirty rect with a
+    ; large positive x/y (off-screen / garbage window coords pushed through
+    ; render_mark_dirty during a mouse drag) therefore survives the clip and
+    ; produces a base pointer far outside the framebuffer -> the movntdq loop
+    ; below walks off the LFB into QEMU std-vga's adjacent VBE-MMIO BAR (the
+    ; "1664x262" scanout clobber) and, with a corrupt row count, into a
+    ; multi-GB copy that never returns (UI freeze). Bail on an off-screen origin.
+    cmp edi, [scr_width]
+    jge .fr_done
+    cmp esi, [scr_height]
+    jge .fr_done
+
     ; Note clipped rect size for fbperf bytes accounting.
     push rdi
     push rsi
@@ -1577,7 +1591,28 @@ FN_BEGIN display_flip_rect, 0, 0, FN_RET_SCALAR
     shl r11d, 2              ; Width in bytes
     mov r12d, ecx            ; Row count
 
+    ; Hard destination backstop, independent of the (possibly corrupt) scr_*
+    ; geometry the clip above trusts. The real linear framebuffer spans
+    ; [fb_addr, fb_addr + fb_native_height*scr_pitch_q). fb_native_height is
+    ; written once by the loader and never overwritten, so it bounds the LFB
+    ; even when scr_width/scr_height/x/y have been clobbered. r8 = fb_end; the
+    ; per-row guard below stops the copy before any movntdq store could land
+    ; at/after fb_end (i.e. in the adjacent VBE-MMIO BAR or off the end of RAM).
+    mov r8, [fb_addr]
+    movsxd rax, dword [fb_native_height]
+    imul rax, [scr_pitch_q]
+    add r8, rax              ; r8 = fb_end (exclusive)
+
 .fr_row:
+    ; Backstop: never start a row below fb_addr or write a row that reaches
+    ; at/after fb_end. Either condition means corrupt geometry slipped through;
+    ; stop cleanly rather than wild-write into the VBE-MMIO BAR / off RAM.
+    cmp r9, [fb_addr]
+    jb .fr_done
+    movsxd rbx, r11d         ; bytes this row (>= 0)
+    lea rax, [r9 + rbx]
+    cmp rax, r8
+    ja .fr_done
     ; Copy one row using SSE2 non-temporal stores
     mov rdi, r9              ; Dest (VRAM)
     mov rsi, r10             ; Src (RAM)
@@ -1751,8 +1786,17 @@ vsync_enabled: db 0        ; Disabled by default (uses PIT fallback on AMD/UEFI)
 fps_show:      db 1
 display_stretch: db 0
 last_vsync_tick: dq 0      ; PIT tick count at last vsync
+; --- Frame pacing tunables (written by the Settings Mouse/Display tab) ---
+; target_fps : frame-rate cap when vsync is OFF. Default 60. Clamped 5..1000 by
+;              the pacer. 0 is treated as "uncapped" (pace to PIT only).
+; vsync_hz   : target refresh used when vsync_enabled != 0. Default 60; the
+;              user's real panel is 180. Clamped 5..1000 by the pacer.
+; The pacer (frame_pacing.nxh) reads these every frame, so a live write from the
+; settings UI takes effect on the next frame with no extra wiring.
+target_fps:    dd 60    ; frame-rate cap when vsync is OFF (clamped 5..1000)
+vsync_hz:      dd 60     ; target refresh when vsync is ON (clamped 5..1000)
 global last_vsync_tick
-global vsync_enabled, fps_show
+global vsync_enabled, fps_show, target_fps, vsync_hz
 extern fps_count, last_fps, frame_count, start_tick
 
 ; --- Wait for VSync / Frame Pacing ---

@@ -77,6 +77,48 @@ net_arp_resolve_ipv4:
     pop rbx
     ret
 
+; Non-blocking variant. EDI = IPv4 (A.B.C.D packed). If the MAC is cached,
+; copies it to net_arp_resolved_mac and returns EAX=1. Otherwise it fires ONE
+; ARP request and returns EAX=0 IMMEDIATELY (no busy-wait). The caller is
+; expected to retry on a later tick; the main loop's net_nic_poll_rx ->
+; net_arp_rx_frame warms the cache in the background. This is the freeze fix:
+; the DNS/UDP send path (net_udp_send_ipv4) used the blocking resolver above,
+; which pinned the kernel for up to 1s on a cold next-hop MAC.
+global net_arp_resolve_ipv4_try
+net_arp_resolve_ipv4_try:
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    mov [rel net_arp_target_host], edi
+    mov eax, edi
+    bswap eax
+    mov [rel net_arp_target_net], eax
+
+    cmp byte [rel net_arp_cache_valid], 1
+    jne .miss
+    cmp [rel net_arp_cache_ip], eax
+    jne .miss
+    lea rsi, [rel net_arp_cache_mac]
+    lea rdi, [rel net_arp_resolved_mac]
+    mov ecx, 6
+    rep movsb
+    mov eax, 1
+    jmp .done
+.miss:
+    mov byte [rel net_arp_waiting], 1
+    mov byte [rel net_arp_cache_valid], 0
+    call net_arp_send_request            ; single non-blocking request
+    xor eax, eax                         ; not resolved yet -> caller retries
+.done:
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
+
 ; Returns RAX = pointer to the most recently resolved MAC.
 global net_arp_resolved_mac_ptr
 net_arp_resolved_mac_ptr:

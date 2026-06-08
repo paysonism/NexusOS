@@ -56,6 +56,17 @@ section .data
 debug_y: dd 40
 global gui_initialized
 gui_initialized db 0
+; Boot-race guard for the PIT slot-integrity scans (security_todo.md §12).
+; gui_initialized flips at wm_init, but kernel_lockdown_ro, nk_protect_page
+; _tables and the first lazy app loads all run AFTER that — a PIT tick landing
+; in that window can hash a slot whose code bytes / syscall-perm rewrite are
+; still settling and trip a spurious "CANARY 0 @<hash>" panic (the intermittent
+; ~1-in-3 boot fault). kmain sets this to 1 once, immediately before the
+; free-running main loop, i.e. after ALL boot init is done. Verification has no
+; security value before then (every slot loads from the same trusted in-image
+; blob); arming afterward keeps runtime tamper detection fully live.
+global code_hash_armed
+code_hash_armed db 0
 global main_loop_stage, main_loop_stage_done, main_loop_iters
 main_loop_stage      db 0    ; stage we are about to enter
 main_loop_stage_done db 0    ; last stage that completed
@@ -407,6 +418,10 @@ acct_idle_acc    dq 0
 acct_win_tick    dq 0
 acct_tsc_start   dq 0
 taskmgr_last_refresh_tick dq 0
+; Net-panel (ping app) live-refresh: last-seen async DHCP / ping states so the
+; focused window repaints when a reply/bind resolves, not just on user input.
+netpanel_last_dhcp db 0
+netpanel_last_ping db 0
 
 section .bss
 serial_command_armed resb 1

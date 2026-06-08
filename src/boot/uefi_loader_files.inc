@@ -299,3 +299,86 @@ load_data_img:
     add rsp, 48
     pop rbx
     ret
+
+; ============================================================================
+; LOAD_BOOTCFG - open OPTIONAL \EFI\BOOT\BOOTCFG.TXT, read into firmware RAM,
+; publish (base,size) in VBE_INFO so the kernel's boot_features.nxh parser can
+; build the runtime feature-toggle bitmask. Non-fatal on EVERY error (missing
+; file is the common case): leaves the boot-info fields zero, which the kernel
+; treats as "no config -> default everything ON". Mirrors load_data_img.
+; ============================================================================
+load_bootcfg:
+    push rbx
+    sub rsp, 48
+
+    mov qword [abs VBE_INFO + VBE_BOOTCFG_BASE_OFF], 0
+    mov qword [abs VBE_INFO + VBE_BOOTCFG_SIZE_OFF], 0
+    mov qword [v_bootcfg_size], 0
+
+    mov rbx, [v_sfs]
+    test rbx, rbx
+    jz .bc_fail
+    mov rcx, rbx
+    lea rdx, [v_root]
+    mov rax, [rbx + SFS_OPENVOL]
+    call rax
+    test rax, rax
+    jnz .bc_fail
+
+    mov rbx, [v_root]
+    mov rcx, rbx
+    lea rdx, [v_file]
+    lea r8,  [s_bootcfg_path]
+    mov r9,  1
+    mov qword [rsp+32], 0
+    mov rax, [rbx + FP_OPEN]
+    call rax
+    test rax, rax
+    jnz .bc_fail
+
+    mov qword [v_tmp_addr], 0
+    mov rcx, [v_bs]
+    mov rax, [rcx + BS_ALLOCPG]
+    mov ecx, 0
+    mov edx, 2
+    mov r8, BOOTCFG_MAX_SIZE / 0x1000
+    lea r9, [v_tmp_addr]
+    call rax
+    test rax, rax
+    jnz .bc_close_and_fail
+
+    mov qword [rsp+40], BOOTCFG_MAX_SIZE
+    mov rbx, [v_file]
+    mov rcx, rbx
+    lea rdx, [rsp+40]
+    mov r8, [v_tmp_addr]
+    mov rax, [rbx + FP_READ]
+    call rax
+    test rax, rax
+    jnz .bc_close_and_fail
+
+    mov rax, [rsp+40]
+    test rax, rax
+    jz .bc_close_and_fail
+    mov [v_bootcfg_size], rax
+    mov rdx, [v_tmp_addr]
+    mov [abs VBE_INFO + VBE_BOOTCFG_BASE_OFF], rdx
+    mov [abs VBE_INFO + VBE_BOOTCFG_SIZE_OFF], rax
+
+    SER 'C'                          ; C = BOOTCFG loaded
+    mov rbx, [v_file]
+    mov rcx, rbx
+    mov rax, [rbx + FP_CLOSE]
+    call rax
+    jmp .bc_done
+
+.bc_close_and_fail:
+    mov rbx, [v_file]
+    mov rcx, rbx
+    mov rax, [rbx + FP_CLOSE]
+    call rax
+.bc_fail:
+.bc_done:
+    add rsp, 48
+    pop rbx
+    ret

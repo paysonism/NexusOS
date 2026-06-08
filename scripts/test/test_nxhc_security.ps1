@@ -179,4 +179,68 @@ if ($RejectDenyUnsafeExit -eq 0) {
     throw '--deny-unsafe accepted unsafe capability declarations'
 }
 
+Write-Host '[nxhc-security] optimizer (-O1) is signature-preserving and lossless-shape' -ForegroundColor Yellow
+# Differential safety net for the function-level optimizer: for every shipped
+# user app, compile with the optimizer OFF (--O0) and ON (default), and assert
+#   (1) the .sig.json sidecar is byte-identical  -> the public ABI surface and
+#       every function's arity/kind/return are unchanged, and
+#   (2) the optimized output is never larger      -> the pass only ever removes
+#       provably-dead scaffolding, never adds code.
+# A regression that changes a signature or grows output trips this immediately.
+$AppDir = Join-Path $Root 'src\user\nexushl\apps'
+$AppLib = Join-Path $Root 'src\user\nexushl\lib'
+# Use a throwaway scratch dir OUTSIDE build/nxh: the signature-registry builder
+# scans build/nxh/** and would flag these comparison copies as duplicate
+# FN_BEGIN names against the real generated apps.
+$DiffDir = Join-Path ([IO.Path]::GetTempPath()) ("nxhc_optdiff_" + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $DiffDir -Force | Out-Null
+try {
+    Get-ChildItem -Path $AppDir -Filter '*.nxh' | ForEach-Object {
+        $nm = [IO.Path]::GetFileNameWithoutExtension($_.Name)
+        $o0 = Join-Path $DiffDir "$nm.O0.asm"
+        $o1 = Join-Path $DiffDir "$nm.O1.asm"
+        $o2 = Join-Path $DiffDir "$nm.O2.asm"
+        python $Compiler $_.FullName -o $o0 -L $AppLib --emit-sigs --O0 *> $null
+        if ($LASTEXITCODE -ne 0) { throw "optimizer diff: --O0 compile failed for $nm" }
+        python $Compiler $_.FullName -o $o1 -L $AppLib --emit-sigs *> $null
+        if ($LASTEXITCODE -ne 0) { throw "optimizer diff: -O1 compile failed for $nm" }
+        python $Compiler $_.FullName -o $o2 -L $AppLib --emit-sigs --O2 *> $null
+        if ($LASTEXITCODE -ne 0) { throw "optimizer diff: --O2 compile failed for $nm" }
+        $sig0 = Get-Content ([IO.Path]::ChangeExtension($o0, '.sig.json')) -Raw
+        $sig1 = Get-Content ([IO.Path]::ChangeExtension($o1, '.sig.json')) -Raw
+        $sig2 = Get-Content ([IO.Path]::ChangeExtension($o2, '.sig.json')) -Raw
+        if ($sig0 -ne $sig1) { throw "optimizer changed the signature sidecar for $nm" }
+        # Phase-2 (--O2) register allocator must be signature-preserving too:
+        # only .text may change, never the public ABI sidecar.
+        if ($sig0 -ne $sig2) { throw "--O2 register allocator changed the signature sidecar for $nm" }
+        if ((Get-Item $o1).Length -gt (Get-Item $o0).Length) {
+            throw "optimizer GREW output for $nm (-O1 larger than --O0)"
+        }
+        if ((Get-Item $o2).Length -gt (Get-Item $o0).Length) {
+            throw "--O2 GREW output for $nm (larger than --O0)"
+        }
+    }
+
+    $syscallFixture = Join-Path $DiffDir 'syscall_clobber.nxh'
+    $syscallAsm = Join-Path $DiffDir 'syscall_clobber.asm'
+    @'
+app "probe" { stack = 4096; }
+fn probe(x) {
+    syscall(1, 0);
+    return x;
+}
+'@ | Set-Content -Encoding ascii $syscallFixture
+    python $Compiler $syscallFixture -o $syscallAsm -L $AppLib --emit-sigs *> $null
+    if ($LASTEXITCODE -ne 0) { throw "optimizer syscall-clobber fixture failed to compile" }
+    $syscallOut = Get-Content $syscallAsm -Raw
+    if ($syscallOut -notmatch 'syscall\s+mov rax, \[rbp-8\]') {
+        throw "optimizer forwarded an rbp-slot value across syscall; caller-saved syscall registers must be treated as clobbered"
+    }
+    if ($syscallOut -notmatch 'push rbx\s+push r12[\s\S]*syscall[\s\S]*pop r12\s+pop rbx') {
+        throw "optimizer removed the rbx/r12 user-mode compatibility bracket around a syscall-bearing function"
+    }
+} finally {
+    Remove-Item -Recurse -Force $DiffDir -ErrorAction SilentlyContinue
+}
+
 Write-Host '[nxhc-security] PASS' -ForegroundColor Green

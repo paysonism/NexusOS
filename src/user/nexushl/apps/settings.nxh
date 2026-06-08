@@ -56,6 +56,15 @@ const Y_DBG_DUMP     = 148
 # Security tab.
 const Y_SEC_SUMMARY  = 34
 const Y_SEC_LIST     = 58
+# Mouse tab.
+const Y_MOUSE_TITLE  = 34
+const Y_MOUSE_X      = 60
+const Y_MOUSE_Y      = 92
+const Y_MOUSE_HINT   = 124
+const SENSE_BTN_W    = 28          # [-] / [+] stepper width
+const SENSE_VAL_X    = 96          # value text x within row
+const SENSE_MINUS_X  = 150         # [-] button x
+const SENSE_PLUS_X   = 182         # [+] button x
 const SEC_ROW_H      = 18
 
 # --- Security status SYS_SYSINFO selectors (security_status.asm) --------------
@@ -111,13 +120,23 @@ state {
     fb_line4_buf:      64;
     fb_line5_buf:      64;
     fb_line6_buf:      64;
+    mouse_buf:         24;
 }
 
 # Tab + section labels.
 str tab_general   = "General";
 str tab_display   = "Display";
 str tab_security  = "Security";
+str tab_mouse     = "Mouse";
 str tab_debug     = "Debug";
+# Mouse tab strings.
+str t_pointer     = "Pointer sensitivity";
+str mouse_x_lbl   = "X axis:";
+str mouse_y_lbl   = "Y axis:";
+str sense_minus   = "-";
+str sense_plus    = "+";
+str sense_suffix  = "x";
+str mouse_hint    = "Range 0.1x - 5.0x (step 0.1)";
 str t_system      = "System";
 str t_appearance  = "Appearance";
 str t_resolution  = "Resolution";
@@ -305,15 +324,16 @@ fn sec_si(sel) {
 
 fn n_tabs() {
     if sec_si(SEC_SI_DEBUG) != 0 {
-        return 4;
+        return 5;
     }
-    return 3;
+    return 4;
 }
 
 fn tab_name(i) {
     if i == 0 { return &tab_general; }
     if i == 1 { return &tab_display; }
     if i == 2 { return &tab_security; }
+    if i == 3 { return &tab_mouse; }
     return &tab_debug;
 }
 
@@ -707,6 +727,80 @@ fn click_debug(win, x, y) {
 }
 
 # ---------------------------------------------------------------------------
+# Mouse tab — per-axis pointer sensitivity (0.1x .. 5.0x).
+# Kernel stores sensitivity as tenths [1,50]; SYS_MOUSE_SENSE packs x[15:0],
+# y[31:16]. SYS_SET_MOUSE_SENSE writes the same packing (kernel re-clamps).
+# ---------------------------------------------------------------------------
+fn mouse_sense_get() {
+    return syscall(SYS_MOUSE_SENSE, 0, 0);
+}
+
+fn mouse_sense_set(sx, sy) {
+    let packed = (sx & 0xFFFF) | ((sy & 0xFFFF) << 16);
+    syscall(SYS_SET_MOUSE_SENSE, packed, 0);
+}
+
+# Format a tenths value (e.g. 25) into buf as "2.5x".
+fn fmt_sense(buf, tenths) {
+    let p = put_uint(buf, tenths / 10);
+    sb(p, 46); p = p + 1;             # '.'
+    p = put_uint(p, tenths % 10);
+    p = copy_cstr(p, &sense_suffix);
+    sb(p, 0);
+}
+
+# One sensitivity row: label, current value, [-] and [+] steppers.
+fn draw_sense_row(win, y, lbl, tenths) {
+    ui_text_at(win, PAD, y + 4, lbl, UI_COL_TEXT, UI_COL_BG_BASE);
+    fmt_sense(&mouse_buf, tenths);
+    ui_text_at(win, SENSE_VAL_X, y + 4, &mouse_buf, UI_COL_ACCENT, UI_COL_BG_BASE);
+    action_button(win, SENSE_MINUS_X, y, SENSE_BTN_W, &sense_minus, 0);
+    action_button(win, SENSE_PLUS_X,  y, SENSE_BTN_W, &sense_plus,  0);
+}
+
+fn draw_mouse(win) {
+    section_title(win, Y_MOUSE_TITLE, &t_pointer);
+    let packed = mouse_sense_get();
+    draw_sense_row(win, Y_MOUSE_X, &mouse_x_lbl, packed & 0xFFFF);
+    draw_sense_row(win, Y_MOUSE_Y, &mouse_y_lbl, (packed >> 16) & 0xFFFF);
+    ui_text_at(win, PAD, Y_MOUSE_HINT, &mouse_hint, UI_COL_TEXT_MUTED, UI_COL_BG_BASE);
+}
+
+# Clamp tenths to [1,50].
+fn clamp_sense(t) {
+    if t < 1 { return 1; }
+    if t > 50 { return 50; }
+    return t;
+}
+
+fn click_mouse(win, x, y) {
+    let packed = mouse_sense_get();
+    let sx = packed & 0xFFFF;
+    let sy = (packed >> 16) & 0xFFFF;
+
+    if y >= Y_MOUSE_X {
+        if y < Y_MOUSE_X + UI_BUTTON_H {
+            if ui_button_hit(x, y, SENSE_MINUS_X, Y_MOUSE_X, SENSE_BTN_W) != 0 {
+                mouse_sense_set(clamp_sense(sx - 1), sy); return;
+            }
+            if ui_button_hit(x, y, SENSE_PLUS_X, Y_MOUSE_X, SENSE_BTN_W) != 0 {
+                mouse_sense_set(clamp_sense(sx + 1), sy); return;
+            }
+        }
+    }
+    if y >= Y_MOUSE_Y {
+        if y < Y_MOUSE_Y + UI_BUTTON_H {
+            if ui_button_hit(x, y, SENSE_MINUS_X, Y_MOUSE_Y, SENSE_BTN_W) != 0 {
+                mouse_sense_set(sx, clamp_sense(sy - 1)); return;
+            }
+            if ui_button_hit(x, y, SENSE_PLUS_X, Y_MOUSE_Y, SENSE_BTN_W) != 0 {
+                mouse_sense_set(sx, clamp_sense(sy + 1)); return;
+            }
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Entry points.
 # ---------------------------------------------------------------------------
 fn draw(win) {
@@ -723,7 +817,8 @@ fn draw(win) {
     if tab == 0 { draw_general(win); }
     if tab == 1 { draw_display(win); }
     if tab == 2 { draw_security(win); }
-    if tab == 3 { draw_debug(win); }
+    if tab == 3 { draw_mouse(win); }
+    if tab == 4 { draw_debug(win); }
 
     if lw(&settings_last_mode_result) < 0 {
         ui_status_bar(win, &mode_failed, UI_COL_ERROR);
@@ -747,7 +842,8 @@ fn click(win, x, y) {
     let tab = lw(&active_tab);
     if tab == 0 { click_general(win, x, y); return; }
     if tab == 1 { click_display(win, x, y); return; }
-    if tab == 3 { click_debug(win, x, y); return; }
+    if tab == 3 { click_mouse(win, x, y); return; }
+    if tab == 4 { click_debug(win, x, y); return; }
 }
 
 fn key(win, k) {

@@ -37,6 +37,16 @@
     jne .sc_wx_manifest_reject
 
     mov eax, r15d
+    ; Drop the code-integrity baseline BEFORE mutating the manifest bounds.
+    ; These three fields are written with IF=1; a PIT IRQ landing between them
+    ; (e.g. new code_start stored while code_end is still the old, smaller value
+    ; -> start >= end -> l3_code_hash_compute returns 0) would run
+    ; l3_code_hash_verify_all against the STALE baseline and fail closed with
+    ; "CANARY 0 @..." (tag WCXH). Clearing valid first makes the verifier skip
+    ; this slot across the inconsistent window AND forces l3_apply_wx_policy to
+    ; re-capture the hash for the new range (its hash-install is gated on
+    ; valid==0). Mirrors the up-front clear in l3_copy_app_blob_to_slot.
+    mov byte [l3_code_hash_valid + rax], 0
     mov qword [l3_wx_code_start + rax*8], rdi
     mov qword [l3_wx_code_end + rax*8], rsi
     mov qword [l3_wx_manifest_ver + rax*8], 1
@@ -318,6 +328,7 @@
     pop rax
     mov [rsp + ALL_RAX], rax
     mov byte [sc_net_ping_busy], 0
+    extern usb_hid_requeue_slot1_reads
     call usb_hid_requeue_slot1_reads
     jmp .done
 .sc_net_ping4_reject:
@@ -359,98 +370,62 @@
 .ni_server:
 .ni_guest:
 .ni_nexthop:
-.ni_dhcp_state:
 .ni_last_ttl:
 .ni_dns:
     call net_info
 .ni_store:
     mov [rsp + ALL_RAX], rax
     jmp .done
+.ni_dhcp_state:
+    ; Same self-redraw contract as net_ping4_tick: while an async DHCP
+    ; transaction is in flight (state DISCOVER=1 or REQUEST=2), keep the scene
+    ; marked dirty so the WM keeps redrawing and the app re-polls NI_DHCP_STATE
+    ; each frame until it resolves to BOUND/FAILED. Without this the app would
+    ; read state once, the scene would go clean, and the status would freeze on
+    ; "discover..." even though the kernel pump advances the lease.
+    call net_info
+    mov [rsp + ALL_RAX], rax
+    cmp rax, 1
+    je .ni_dhcp_inflight
+    cmp rax, 2
+    je .ni_dhcp_inflight
+    jmp .done
+.ni_dhcp_inflight:
+    mov byte [scene_dirty], 1
+    jmp .done
 
 .sc_net_dhcp_renew:
-    ; Force a fresh DHCP DISCOVER/REQUEST cycle. Returns 1 on bound, 0 on fail.
-    ; Trace markers: [d1] enter, [d2] have nic, [d3] after configure, [d4] requeue
-    push rax
-    push rdx
-    mov dx, 0x3F8
-    mov al, '['
-    out dx, al
-    mov al, 'd'
-    out dx, al
-    mov al, '1'
-    out dx, al
-    mov al, ']'
-    out dx, al
-    pop rdx
-    pop rax
-    ; DHCP waits on xHCI completions and tick_count timeouts; IF is masked
-    ; by syscall entry, so open a small interrupt window around the wait.
+    ; Force a fresh DHCP transaction WITHOUT blocking. Previously this called the
+    ; synchronous net_dhcp_configure inside the syscall (busy-waiting on rx for up
+    ; to ~1.2s) which froze the whole UI — render/mouse/dhcp-pump couldn't run
+    ; until it returned. Now it routes through the async net_dhcp_start kick (which
+    ; clears any existing lease, forces a fresh DISCOVER, and arms the deadline for
+    ; the main-loop rtl8156_dhcp_pump) and returns the CURRENT dhcp_state
+    ; immediately. The app polls NI_DHCP_STATE each frame until it resolves.
+    ; net_dhcp_start is non-blocking on rtl8156; the rtl8139 fallback still does a
+    ; bounded synchronous configure, so keep an interrupt window around the call.
     sti
-    call net_dhcp_configure
+    call net_dhcp_start
     push rax
     cli
     pop rax
     test eax, eax
     jz .dhcp_no_nic
-    push rax
-    push rdx
-    mov dx, 0x3F8
-    mov al, '['
-    out dx, al
-    mov al, 'd'
-    out dx, al
-    mov al, '2'
-    out dx, al
-    mov al, ']'
-    out dx, al
-    pop rdx
-    pop rax
-    push rax
-    push rdx
-    mov dx, 0x3F8
-    mov al, '['
-    out dx, al
-    mov al, 'd'
-    out dx, al
-    mov al, '3'
-    out dx, al
-    mov al, ']'
-    out dx, al
-    pop rdx
-    pop rax
-    ; rtl8156_wait_completion drained any HID transfer events queued during
-    ; the DHCP exchange. Re-prime the mouse interrupt ring so the cursor
-    ; doesn't freeze after the user clicks the DHCP button.
-    extern usb_hid_requeue_slot1_reads
-    call usb_hid_requeue_slot1_reads
-    push rax
-    push rdx
-    mov dx, 0x3F8
-    mov al, '['
-    out dx, al
-    mov al, 'd'
-    out dx, al
-    mov al, '4'
-    out dx, al
-    mov al, ']'
-    out dx, al
-    pop rdx
-    pop rax
-    mov rdi, 2
+    mov rdi, 7                         ; NI_DHCP_STATE
     call net_info
     mov [rsp + ALL_RAX], rax
     jmp .done
 .dhcp_no_nic:
+    mov byte [rtl8156_dhcp_state], 4   ; FAILED — no NIC
     mov qword [rsp + ALL_RAX], 0
     jmp .done
 
 .sc_net_dhcp_start:
-    ; Kick off async DHCP. Returns 0 immediately. Caller polls
-    ; NI_DHCP_STATE for progress.
-    ; Backend selection is handled by net_dhcp_start. Keep this syscall as a
-    ; stable app-facing shim while NIC-specific work stays behind net/nic.asm.
-    ; The active backend may do synchronous fallback work before returning.
-    ; Keep timer interrupts live for that bounded network wait.
+    ; Kick off async DHCP. Returns 0 immediately. Caller polls NI_DHCP_STATE for
+    ; progress. Backend selection + the (now non-blocking, fresh-DISCOVER-forcing)
+    ; kick live in the NHLK module net_dhcp_dispatch.nxh. net_dhcp_start never
+    ; blocks on the rtl8156 path; the rtl8139 fallback does a bounded synchronous
+    ; configure, so keep timer interrupts live around the call.
     sti
     call net_dhcp_start
     push rax
@@ -515,15 +490,12 @@
     cli
     pop rax
     mov [rsp + ALL_RAX], rax
-    ; While the ping is still in flight (0 = pending, -2 = busy), keep the
-    ; scene marked dirty so the WM redraws and the app's draw() pumps the
-    ; tick again next frame. Without this, scene_dirty clears after the
-    ; first tick and the state machine stalls.
-    cmp rax, 0
-    je .sc_net_ping4_tick_mark
-    cmp rax, -2
-    jne .done
-.sc_net_ping4_tick_mark:
+    ; Always keep the scene dirty after a tick. While in flight (0 = pending,
+    ; -2 = busy) this re-pumps the FSM next frame. On the COMPLETION tick (the
+    ; in-line busy-poll now resolves an RTT within a single call) it forces one
+    ; more redraw so the final result paints immediately — without it the app
+    ; kept showing "Pinging..." until the user clicked to trigger a redraw,
+    ; especially on the DNS path where resolution + ping finish in one frame.
     mov byte [scene_dirty], 1
     jmp .done
 .sc_net_ping4_tick_bad:
@@ -531,26 +503,36 @@
     jmp .done
 
 .sc_net_dns_a:
-    ; rdi = app-owned hostname C-string. Returns IPv4 A.B.C.D or 0 on failure.
-    cmp byte [sc_net_dns_busy], 0
-    jne .sc_net_dns_busy
+    ; rdi = app-owned hostname C-string. ASYNC: advances the DNS state machine
+    ; one step and returns immediately (no more kernel-halting busy-wait).
+    ; Returns >0 resolved IPv4 A.B.C.D, 0 pending (poll again next frame), -1
+    ; fail/invalid, -2 a different hostname's lookup is already in flight. While
+    ; pending (0) or contended (-2) we keep the scene dirty so the app's draw()
+    ; re-polls each frame and the FSM advances — mirroring net_ping4_tick.
+    ; rsi = max scan length for the C-string validator. The dispatcher only
+    ; 1-byte-probes a no-sibling-descriptor PTR arg and restores the user's
+    ; (garbage) rsi, so the handler MUST set it here — same as .sc_print et al.
+    ; Without this, sc_validate_user_cstring reads a random max_len and DNS
+    ; rejects (-1) before net_dns_tick ever runs. THIS was the DNS-fail bug.
+    mov rsi, SYSCALL_MAX_STR_LEN
     call sc_validate_user_cstring
     test eax, eax
     jz .sc_net_dns_reject
-    mov byte [sc_net_dns_busy], 1
     mov rdi, [rsp + ALL_RDI]
     sti
-    call net_dns_query_a
+    call net_dns_tick
     push rax
     cli
     pop rax
     mov [rsp + ALL_RAX], rax
-    mov byte [sc_net_dns_busy], 0
+    cmp rax, 0
+    je .sc_net_dns_mark
+    cmp rax, -2
+    jne .done
+.sc_net_dns_mark:
+    mov byte [scene_dirty], 1
     jmp .done
 .sc_net_dns_reject:
     mov qword [rsp + ALL_RAX], -1
-    jmp .done
-.sc_net_dns_busy:
-    mov qword [rsp + ALL_RAX], -2
     jmp .done
 

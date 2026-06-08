@@ -20,7 +20,7 @@ state {
     ip_buf: 64;     # Target text: IPv4, hostname, or URL.
     ip_len: 8;      # current cursor / string length.
     ip_init: 8;     # 0 until set_default_ip has seeded the field once.
-    ping_result: 8; # RTT in microseconds, -1 fail, -2 idle, -3 in-flight, -5 DNS fail.
+    ping_result: 8; # RTT in microseconds, -1 fail, -2 idle, -3 in-flight, -5 DNS fail, -7 resolving DNS.
     ping_target: 8; # A.B.C.D-packed target IP while a ping is in flight.
     dhcp_result: 8; # -2 idle, 0 fail, 1 pass.
     line_buf: 64;   # scratch for formatting IPv4 → dotted-quad.
@@ -69,6 +69,7 @@ str rtt_dnsfail = "DNS failed";
 str suffix_ms   = " ms";
 str suffix_ttl  = "  TTL=";
 str dhcp_idle   = "DHCP test: -";
+str dhcp_busy   = "DHCP test: acquiring...";
 str dhcp_ok     = "DHCP test: lease acquired";
 str dhcp_fail   = "DHCP test: failed";
 
@@ -304,6 +305,7 @@ fn build_rtt() {
     let r = lq(&ping_result);
     if r == -2 { copy_cstr(&rtt_buf, &rtt_idle);    return; }
     if r == -3 { copy_cstr(&rtt_buf, &rtt_busy);    return; }
+    if r == -7 { copy_cstr(&rtt_buf, &rtt_busy);    return; }   # resolving DNS
     if r == -4 { copy_cstr(&rtt_buf, &rtt_unbound); return; }
     if r == -5 { copy_cstr(&rtt_buf, &rtt_dnsfail); return; }
     if r <  0  { copy_cstr(&rtt_buf, &rtt_fail);    return; }
@@ -326,8 +328,19 @@ fn build_rtt() {
 fn build_dhcp_result() {
     let r = lq(&dhcp_result);
     if r == -2 { copy_cstr(&dhcp_buf, &dhcp_idle); return; }
+    if r == -3 { copy_cstr(&dhcp_buf, &dhcp_busy); return; }
     if r == 1  { copy_cstr(&dhcp_buf, &dhcp_ok);   return; }
     copy_cstr(&dhcp_buf, &dhcp_fail);
+}
+
+# Advance the async "Test DHCP" result. The test no longer blocks the kernel in
+# a synchronous renew; it kicks net_dhcp_start() and watches the live DHCP state
+# machine (driven by the kernel main-loop pump) resolve to BOUND or FAILED.
+fn pump_dhcp_test() {
+    if lq(&dhcp_result) != -3 { return; }
+    let s = net_dhcp_state();
+    if s == DHCP_BOUND  { sq(&dhcp_result, 1); return; }
+    if s == DHCP_FAILED { sq(&dhcp_result, 0); return; }
 }
 
 fn is_connected() {
@@ -391,6 +404,7 @@ fn renew_btn_x(win) {
 
 fn draw(win) {
     set_default_ip(win);
+    pump_dns();
     pump_ping();
     ui_fill_client_below(win, 0, UI_COL_BG_BASE);
 
@@ -442,16 +456,28 @@ fn link_text() {
 fn run_ping() {
     if is_connected() != 1 { sq(&ping_result, -4); return; }
     let ip = parse_ip();
-    if ip < 0 {
-        if normalize_host() != 1 { sq(&ping_result, -1); return; }
-        ip = net_dns_a(&dns_buf);
-        if ip <= 0 { sq(&ping_result, -5); return; }
+    if ip >= 0 {
+        # Numeric target -> straight to the async ping. The kernel's
+        # net_ping4_tick syscall marks scene_dirty while in flight, so draw()
+        # re-runs and pump_ping() advances the state machine each frame.
+        sq(&ping_target, ip);
+        sq(&ping_result, -3);
+        return;
     }
-    # Async ping. The kernel's net_ping4_tick syscall marks scene_dirty while
-    # the request is in flight, which guarantees draw() re-runs each frame
-    # and pump_ping() advances the state machine until it resolves.
+    # Hostname -> resolve via the async DNS resolver. pump_dns() polls it each
+    # frame (net_dns_a keeps the scene dirty while pending) and hands off to the
+    # ping path once an IP comes back. No blocking lookup on the click frame.
+    if normalize_host() != 1 { sq(&ping_result, -1); return; }
+    sq(&ping_result, -7);          # DNS in flight
+}
+
+fn pump_dns() {
+    if lq(&ping_result) != -7 { return; }
+    let ip = net_dns_a(&dns_buf);
+    if ip == 0 { return; }          # still resolving; scene stays dirty
+    if ip < 0 { sq(&ping_result, -5); return; }   # invalid / -2 busy / timeout
     sq(&ping_target, ip);
-    sq(&ping_result, -3);
+    sq(&ping_result, -3);           # resolved -> start the async ping
 }
 
 fn pump_ping() {
@@ -463,10 +489,14 @@ fn pump_ping() {
 }
 
 fn run_dhcp_test() {
+    # Async: kick a DISCOVER and watch the live state machine resolve via
+    # pump_dhcp_test() on subsequent frames. Previously this called the
+    # synchronous net_dhcp_renew(), which halts the whole kernel main loop for
+    # up to a few seconds and re-ran a fresh DISCOVER over a possibly busy
+    # endpoint (observed to fail after boot already held a lease).
     sq(&ping_result, -2);
-    let ip = net_dhcp_renew();
-    if ip == 0 { sq(&dhcp_result, 0); return; }
-    sq(&dhcp_result, 1);
+    sq(&dhcp_result, -3);          # in progress
+    net_dhcp_start();
 }
 
 fn click(win, x, y) {

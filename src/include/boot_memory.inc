@@ -20,6 +20,15 @@ KERNEL_LOAD_ADDR    equ KERNEL_BASE_OVERRIDE
 %else
 KERNEL_LOAD_ADDR    equ 0x100000
 %endif
+; Canonical link base of the WRAPPED payload (pass A), independent of the
+; two-pass KERNEL_BASE_OVERRIDE diff. Use this — NOT KERNEL_LOAD_ADDR — anywhere
+; a constant must compare against the kernel's *unslid* base at runtime: an
+; absolute immediate built from KERNEL_LOAD_ADDR differs between the A/B ORG
+; passes, so extract_kaslr_fixups.py flags it and the loader relocates it along
+; with the slide (making it useless for KASLR self-detection). 0x100000 is the
+; same in both passes, so it is never added to the fixup table and survives as
+; the true link base. See src/kernel/core/security_status.asm [4].
+KERNEL_LINK_BASE    equ 0x100000
 KERNEL_STACK_TOP    equ 0xC00000
 IDT_ADDR            equ 0xC10000
 KERNEL_DATA_ADDR    equ 0xC20000
@@ -204,6 +213,28 @@ VBE_STORAGE_LUN_OFF     equ 0x61   ; u8 (NVMe NSID or USB LUN)
 VBE_STORAGE_BLKSIZE_OFF equ 0x62   ; u16 (logical block size, usually 512)
 VBE_STORAGE_EXT_CNT_OFF equ 0x64   ; u32 (number of extents written)
 VBE_STORAGE_EXT_PTR_OFF equ 0x68   ; u64 (physical pointer to extent array)
+
+; --- Runtime feature-toggle config (BOOTCFG.TXT) --------------------------
+; The UEFI loader reads the OPTIONAL ESP file \EFI\BOOT\BOOTCFG.TXT into
+; firmware RAM and publishes (base,size) here. The kernel's NHLK module
+; boot_features.nxh (boot_features_init) parses it into the feat_mask bitmask
+; that gates subsystem init / per-frame work / individual syscalls. Absent
+; file -> size 0 -> default-everything-on (byte-compatible with prior boots).
+VBE_BOOTCFG_BASE_OFF    equ 0x70   ; u64 base of the loaded config text (0 = none)
+VBE_BOOTCFG_SIZE_OFF    equ 0x78   ; u64 byte length of the config text
+BOOTCFG_MAX_SIZE        equ 0x1000 ; 4 KiB cap (one firmware page)
+
+; Feature bits — MUST stay in lockstep with src/kernel/nexushlk/boot_features.nxh.
+; (asm callers — e.g. the SYS_DISPLAY_SET_MODE gate — use these names.)
+FEAT_CURSOR_DRAW           equ 1
+FEAT_FRAME_PRESENT_REFRESH equ 2
+FEAT_FRAME_PACING          equ 4
+FEAT_MOUSE_INIT            equ 8
+FEAT_HID_INIT              equ 16
+FEAT_SYSCALL_SET_MODE      equ 32
+FEAT_DISPLAY_INIT          equ 64
+FEAT_FBPERF_WC             equ 128
+FEAT_FX_BENCH              equ 256
 
 STORAGE_EXTENTS_ADDR    equ 0x9200   ; 4 KiB scratch for extent table
 STORAGE_EXTENTS_MAX     equ 256      ; max extents (256 * 16B = 4 KiB)
