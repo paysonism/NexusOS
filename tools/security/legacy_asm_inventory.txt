@@ -56,6 +56,7 @@ src/boot/vesa.asm | boot | high | legacy | TBD
 src/diag/uefi_mouse_probe.asm | diag | medium | legacy | TBD
 src/include/amdgpu_psp.inc | include | high | legacy | TBD
 src/include/app_blob_sig.inc | include | high | legacy | TBD
+src/include/app_manifest.inc | include | high | legacy | TBD
 src/include/app_sysno.inc | include | high | legacy | TBD
 src/include/arch_regs.inc | include | high | legacy | TBD
 src/include/bios_boot.inc | include | high | legacy | TBD
@@ -136,8 +137,6 @@ src/kernel/lib/xml.asm | kernel-lib | medium | legacy | TBD
 src/kernel/lib/xml_selftest.inc | kernel-lib | medium | legacy | TBD
 src/kernel/net/arp.asm | kernel-net | medium | legacy | TBD
 src/kernel/net/dhcp.asm | kernel-net | medium | legacy | TBD
-src/kernel/net/dns.asm | kernel-net | medium | legacy | TBD
-src/kernel/net/eth.asm | kernel-net | medium | legacy | TBD
 src/kernel/net/icmp.asm | kernel-net | medium | legacy | TBD
 src/kernel/net/ip.asm | kernel-net | medium | legacy | TBD
 src/kernel/net/nic.asm | kernel-net | medium | legacy | TBD

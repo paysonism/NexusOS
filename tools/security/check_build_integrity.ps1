@@ -73,7 +73,7 @@ $findings = New-Object System.Collections.Generic.List[object]
 # Directories never scanned (VCS / tooling / generated / archival output).
 # NOTE: deprecated/ is NOT ignored here — we must scan non-deprecated files for
 # references INTO deprecated/, and skip only files that live under deprecated/.
-$ignoredPrefixes = @('.git', '.claude', 'sandbox_shadow', 'build', 'dist', '__pycache__')
+$ignoredPrefixes = @('.git', '.claude', 'sandbox_shadow', 'build', 'dist', '__pycache__', 'worktrees')
 
 # -----------------------------------------------------------------------------
 # LEGACY-MAINTENANCE ALLOWLIST (the quarantine).

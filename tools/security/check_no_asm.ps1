@@ -124,7 +124,7 @@ if (-not (Test-Path -LiteralPath $securityModuleDir -PathType Container)) {
     }
 }
 
-$ignoredPrefixes = @('.git', '.claude', 'sandbox_shadow')
+$ignoredPrefixes = @('.git', '.claude', 'sandbox_shadow', 'worktrees')
 $quarantinePrefixes = @('build', 'dist', 'deprecated')
 $trustedNxhPrefixes = @(
     'src/boot/nxh',
