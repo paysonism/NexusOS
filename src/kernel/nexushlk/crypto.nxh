@@ -476,39 +476,41 @@ fn app_segment_verify(app_id) {
                 # panic once the verifier matches.
                 #   AVMISS id=<app_id> O=<seg_off> S=<seg_size> N=<inseg fixups>
                 #          C=<computed[0:8]> M=<manifest[0:8]> B0=<seg first qword>
-                call svg_dump_putc(al: 65);   # 'A'
-                call svg_dump_putc(al: 86);   # 'V'
-                call svg_dump_putc(al: 77);   # 'M'
-                call svg_dump_putc(al: 32);   # ' '
-                call ser_print_hex64(rdi: app_id);
-                call svg_dump_putc(al: 79);   # 'O'
-                call ser_print_hex64(rdi: seg_off);
-                call svg_dump_putc(al: 83);   # 'S'
-                call ser_print_hex64(rdi: seg_size);
-                # count sliding fixups fully inside this segment (same predicate
-                # as sha256_blob_segment_canonical)
-                let nfix = 0;
-                let fc = lw(&mb_blob_sig_fixup_count);
-                let fi = 0;
-                while fi < fc {
-                    let fo2 = lw(&mb_blob_sig_fixups + fi * 4) & MASK32;
-                    if fo2 >= seg_off {
-                        if (fo2 + 8) <= seg_end {
-                            nfix = nfix + 1;
+                cfg "ENABLE_DEBUG_SERIAL" {
+                    call svg_dump_putc(al: 65);   # 'A'
+                    call svg_dump_putc(al: 86);   # 'V'
+                    call svg_dump_putc(al: 77);   # 'M'
+                    call svg_dump_putc(al: 32);   # ' '
+                    call ser_print_hex64(rdi: app_id);
+                    call svg_dump_putc(al: 79);   # 'O'
+                    call ser_print_hex64(rdi: seg_off);
+                    call svg_dump_putc(al: 83);   # 'S'
+                    call ser_print_hex64(rdi: seg_size);
+                    # count sliding fixups fully inside this segment (same predicate
+                    # as sha256_blob_segment_canonical)
+                    let nfix = 0;
+                    let fc = lw(&mb_blob_sig_fixup_count);
+                    let fi = 0;
+                    while fi < fc {
+                        let fo2 = lw(&mb_blob_sig_fixups + fi * 4) & MASK32;
+                        if fo2 >= seg_off {
+                            if (fo2 + 8) <= seg_end {
+                                nfix = nfix + 1;
+                            }
                         }
+                        fi = fi + 1;
                     }
-                    fi = fi + 1;
+                    call svg_dump_putc(al: 78);   # 'N'
+                    call ser_print_hex64(rdi: nfix);
+                    call svg_dump_putc(al: 67);   # 'C'
+                    call ser_print_hex64(rdi: lq(&sha_tmp_digest));
+                    call svg_dump_putc(al: 77);   # 'M'
+                    call ser_print_hex64(rdi: lq(ent + 12));
+                    call svg_dump_putc(al: 66);   # 'B'
+                    call ser_print_hex64(rdi: lq(blob_base + seg_off));
+                    call svg_dump_putc(al: 13);
+                    call svg_dump_putc(al: 10);
                 }
-                call svg_dump_putc(al: 78);   # 'N'
-                call ser_print_hex64(rdi: nfix);
-                call svg_dump_putc(al: 67);   # 'C'
-                call ser_print_hex64(rdi: lq(&sha_tmp_digest));
-                call svg_dump_putc(al: 77);   # 'M'
-                call ser_print_hex64(rdi: lq(ent + 12));
-                call svg_dump_putc(al: 66);   # 'B'
-                call ser_print_hex64(rdi: lq(blob_base + seg_off));
-                call svg_dump_putc(al: 13);
-                call svg_dump_putc(al: 10);
                 return;   # FAIL-SOFT: do not panic the kernel on a verify bug
             }
             return;

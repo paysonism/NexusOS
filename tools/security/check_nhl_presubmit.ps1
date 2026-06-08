@@ -87,7 +87,7 @@ function Remove-NxhLineNoise {
 $root = Get-RepoRoot
 $findings = New-Object System.Collections.Generic.List[object]
 
-$ignoredPrefixes = @('.git', '.claude', 'sandbox_shadow', 'build', 'dist', 'deprecated', '__pycache__')
+$ignoredPrefixes = @('.git', '.claude', 'sandbox_shadow', 'build', 'dist', 'deprecated', '__pycache__', 'worktrees')
 
 # NHL trusted-path source roots (.nxh lives here). Mirrors check_no_asm.ps1.
 $trustedNxhPrefixes = @(
