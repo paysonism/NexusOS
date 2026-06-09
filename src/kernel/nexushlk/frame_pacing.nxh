@@ -39,6 +39,20 @@ unsafe implicit_extern;   # &tick_count / &cpu_tsc_per_tick / &target_fps / ...
 global frame_pace_reset;
 global frame_pace_wait;
 
+# Low-latency input pump (called on every HLT wakeup inside frame_pace_wait).
+# Rationale (real-HW latency report): input used to be drained ONCE per frame
+# (60 Hz) while the Synaptics I2C touchpad generates reports at ~125 Hz+, so
+# during sustained movement the device-side FIFO backlog grew until the pointer
+# trailed the finger by ~0.25 s and felt ~20 Hz. Pumping on each timer wakeup
+# raises the drain rate well above the report rate (no backlog can accumulate)
+# and caps pointer latency at one PIT period (~10 ms) instead of a frame.
+extern usb_poll_mouse;    # drains the whole xHCI event ring (cheap when idle)
+extern i2c_hid_poll;      # one touchpad report per call (~1.4 ms I2C when data)
+extern process_mouse;     # routes movement/clicks; redraws the cursor directly
+extern mouse_x;           # dword: cursor X (activity detection)
+extern mouse_y;           # dword: cursor Y (activity detection)
+extern scene_dirty;       # byte: a repaint is pending (keyboard/app activity)
+
 extern tick_count;        # qword, advanced by the PIT handler (100 Hz)
 extern cpu_tsc_per_tick;  # qword, calibrated TSC cycles per 10 ms PIT tick
 extern vsync_enabled;     # byte:  0 = fps-cap pacing, !=0 = vsync_hz pacing
@@ -51,6 +65,55 @@ const RATE_MAX = 1000;    # Hz ceiling
 # Pacer state (module-local).
 data fp_next_deadline: 1 x 8 = 0;   # TSC stamp the current frame waits for
 data fp_have_deadline: 1 x 1 = 0;   # 0 until first frame seeds the deadline
+
+# Input-pump activity state. The I2C touchpad poll is a *blind* bus read (no
+# data-ready GPIO is wired), so pumping it on every wakeup would burn the bus /
+# CPU while idle. Instead: pump I2C only inside a short window after the last
+# observed cursor movement ("burst mode"). First-touch latency stays bounded by
+# the main loop's per-frame polls (<=16 ms); every subsequent report during the
+# movement is drained at wakeup rate.
+data fp_last_mx: 1 x 4 = -1;        # last cursor X seen by the pump
+data fp_last_my: 1 x 4 = -1;        # last cursor Y seen by the pump
+data fp_activity_tsc: 1 x 8 = 0;    # TSC of the last observed cursor movement
+
+const ACTIVITY_TICKS = 25;          # I2C burst window: 25 PIT ticks (~250 ms)
+
+# Idle frame governor: after IDLE_DOWNSHIFT_TICKS with no activity (no cursor
+# movement, no pending repaint), pace the loop at IDLE_FPS instead of the full
+# target rate. Input latency is unaffected — the wakeup pump above handles the
+# pointer at PIT rate regardless of frame rate — and ANY activity (mouse, key,
+# app repaint, media frame) restores the full rate on the very next frame.
+const IDLE_DOWNSHIFT_TICKS = 200;   # 2 s of nothing before downshifting
+const IDLE_FPS = 30;                # idle render floor
+
+# One low-latency input pass: drain USB HID events (cheap event-ring peek when
+# idle), drain touchpad reports while in the activity window, then route the
+# result. process_mouse no-ops unless position/buttons actually changed, and the
+# cursor is drawn straight to the front buffer — so a moving pointer updates at
+# wakeup rate instead of frame rate.
+fn fp_input_pump() {
+    usb_poll_mouse();
+
+    let now = rdtsc();
+    let tick_tsc = lq(&cpu_tsc_per_tick);
+    if tick_tsc != 0 {
+        if (now - lq(&fp_activity_tsc)) < (tick_tsc * ACTIVITY_TICKS) {
+            # Burst: up to 3 reports per wakeup so an accumulated device-side
+            # backlog drains in a few wakeups instead of replaying for 250 ms.
+            i2c_hid_poll();
+            i2c_hid_poll();
+            i2c_hid_poll();
+        }
+    }
+
+    if lw(&mouse_x) != lw(&fp_last_mx) || lw(&mouse_y) != lw(&fp_last_my) {
+        sw(&fp_last_mx, lw(&mouse_x));
+        sw(&fp_last_my, lw(&mouse_y));
+        sq(&fp_activity_tsc, now);
+    }
+
+    process_mouse();
+}
 
 # Effective target rate in Hz, clamped to RATE_MIN..RATE_MAX. vsync_enabled
 # selects vsync_hz; otherwise target_fps. A 0/garbage value falls back to 60.
@@ -70,15 +133,34 @@ fn fp_target_rate() {
 fn fp_frame_budget() {
     let tpt = lq(&cpu_tsc_per_tick);
     if tpt == 0 { return 1; }
-    let budget = (tpt * 100) / fp_target_rate();
+    let budget = (tpt * 100) / fp_effective_rate();
     if budget == 0 { budget = 1; }
     return budget;
+}
+
+# Target rate with the idle governor applied: a pending repaint counts as
+# activity (covers typing / app draws / media frames, which don't move the
+# cursor); cursor movement is stamped by fp_input_pump. Only when BOTH have
+# been quiet for IDLE_DOWNSHIFT_TICKS does the loop downshift to IDLE_FPS.
+fn fp_effective_rate() {
+    let rate = fp_target_rate();
+    let tick_tsc = lq(&cpu_tsc_per_tick);
+    if tick_tsc == 0 { return rate; }
+    let now = rdtsc();
+    if lb(&scene_dirty) != 0 { sq(&fp_activity_tsc, now); }
+    if (now - lq(&fp_activity_tsc)) > (tick_tsc * IDLE_DOWNSHIFT_TICKS) {
+        if rate > IDLE_FPS { rate = IDLE_FPS; }
+    }
+    return rate;
 }
 
 # Force the next frame to re-seed its deadline from now (used when entering the
 # loop, or after a long stall, so we don't try to "catch up" a huge backlog).
 fn frame_pace_reset() {
     sb(&fp_have_deadline, 0);
+    # Seed the activity stamp so boot starts at full rate (a zero stamp would
+    # read as "idle for ages" and downshift the very first frames).
+    sq(&fp_activity_tsc, rdtsc());
 }
 
 # Block until the current frame's deadline, then advance the deadline by one
@@ -117,6 +199,11 @@ fn frame_pace_wait() {
             if remaining > tick_tsc {
                 if (read_flags() & 0x200) != 0 {
                     hlt();
+                    # Low-latency input pass on every timer wakeup: drains HID
+                    # faster than the touchpad generates reports (kills the
+                    # moving-pointer backlog lag) and moves the cursor now
+                    # instead of after the remaining frame sleep.
+                    fp_input_pump();
                     now = rdtsc();
                     continue;
                 }
