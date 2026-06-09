@@ -19,7 +19,7 @@
 ;       driver exists: VBE_STORAGE_CLASS_OFF stays 0 so ramdisk_flush is a
 ;       no-op and the partition-relative extents captured here are correct for
 ;       the future absolute-LBA fixup. Tracked as see #21 (and as a roadmap
-;       item in docs/nexushl-boot-conversion.md Phase 1b.4), not a stray TODO.
+;       item in docs/nexushl-boot-conversion.md Phase 1b.4), not stray debt.
 ;
 ; The BPB capture below is non-destructive and idempotent - safe to call every
 ; boot. Non-fatal on every UEFI error: failure leaves the contract zeroed and

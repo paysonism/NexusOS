@@ -13,7 +13,7 @@
 ; which sits after .data, is left writable here: it cannot be isolated from
 ; .data at page granularity without 4 KiB-splitting the straddling boundary,
 ; which the flat-bin layout doesn't page-align. Scoping to .text covers the
-; self-modifying-code threat this TODO targets.)
+; self-modifying-code threat security_todo.md §9 targets.)
 ;
 ; PAGE GRANULARITY: the boot page tables (paging.asm / uefi setup_paging) map
 ; the low region with 2 MiB large pages in PD0. We clear the WRITABLE (RW, bit

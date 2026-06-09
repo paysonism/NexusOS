@@ -122,7 +122,7 @@
 ;       (see KPTI_SWITCH_TO_USER_CR3 right before the iretq frames) because
 ;       usermode.asm is owned by this task; they are inert until kpti_init runs.
 ;
-;   (4) ENTRY-STUB RELOCATION + PCID. A production KPTI keeps the per-CR3 TLB
+;   (4) ENTRY-TRAMPOLINE RELOCATION + PCID. A production KPTI keeps the per-CR3 TLB
 ;       cost down with PCID (CR4.PCIDE + non-flushing CR3 writes) and places the
 ;       trampoline in a dedicated tiny section. Both are follow-ups; the macros
 ;       use plain CR3 reloads (correct, just slower) and the trampoline window

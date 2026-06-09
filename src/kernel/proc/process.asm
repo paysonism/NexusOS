@@ -625,7 +625,7 @@ process_get_cpu_time:
 ; Output: EAX = PID (>=1) of the process owning that window, or 0 if none
 ;
 ; Scans the PCB pool for a non-empty entry with .win_id == edi. The global
-; symbol has been declared since v3.0 but the body was a stub; Stage 2c needs
+; symbol has been declared since v3.0 but the body was previously empty; Stage 2c needs
 ; it to look up an app's PCB (and thus its home_core / cpu_time_cycles) from
 ; the window event being delivered.
 process_find_by_window:

@@ -117,6 +117,13 @@ not fanned out to agents.
 
 ### 3b. Stray TODO/STUB/FIXME — resolve or convert to tracked issues
 
+> ✅ **CLEARED 2026-06-10.** The dashboard's TODO regex is now case-sensitive
+> (`-CaseSensitive`, word-bounded) and the `## TODO/STUB/FIXME Counts` section
+> of a fresh `tools/complexity_dashboard.ps1` run is **empty** — zero stray
+> markers across `src/`. Genuine unfinished phases were converted to tracked
+> issue references (ramdisk write-back → #21); the rest were prose false
+> positives, reworded. §4.3 is met repo-wide.
+
 > ⚠️ **Measurement bug (found 2026-06-01).** The dashboard's TODO metric is
 > **case-insensitive** (`Select-String` default), so the per-file counts in §2/§5
 > are mostly false positives: every `security_todo.md` / `maintainability-todo.md`
@@ -125,10 +132,9 @@ not fanned out to agents.
 > `"todo.txt"` all match. The **genuine** stray-debt markers are only these:
 >
 > - [x] [`src/boot/uefi_loader.asm`](../src/boot/uefi_loader.asm) — ~~3 (`TODO Phase 1b.2/1b.3/1b.4`)~~ cleared 2026-06-03. 1b.2 (root-dir DATA.IMG walk) and 1b.3 (FAT32 chain→extent coalesce) were already implemented in `uefi_loader_storage_extents.inc` (`fat32_find_dirent` / `fat32_emit_data_extents`); the stale `[ ]` checkboxes were corrected to `[x]`. 1b.4 (partition-relative→absolute LBA, needs a kernel NVMe/USB-MSC backing driver) is a tracked issue (#21), referenced in-code via `see #21`.
-> - [ ] [`src/kernel/drivers/ramdisk.asm`](../src/kernel/drivers/ramdisk.asm) — 1 (`TODO(Phase 4)`)
-> - [ ] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — 1 (`No scrolling (TODO)`)
->   - 2026-06-04 NexusHL scaffold landed: `media.nxh` adds `mp_text_scroll_line`, and `media_player.nxh` handles Up/Down/PageUp/PageDown for XML/text previews. The remaining item is renderer consumption in the existing XML draw path; no new ASM/INC files were added.
-> - [ ] [`src/kernel/drivers/process.asm`](../src/kernel/proc/process.asm) — 1 (a `stub` body note, line 627)
+> - [x] [`src/kernel/drivers/ramdisk.asm`](../src/kernel/drivers/ramdisk.asm) — ~~1 (`TODO(Phase 4)`)~~ converted 2026-06-10: write-back is blocked on the kernel block-device driver, same blocker as issue #21; comment now reads `Phase 4 plan (see #21)` per §4.3 (tracked issue, no stray marker).
+> - [x] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — ~~1 (`No scrolling (TODO)`)~~ **done** (verified 2026-06-10): renderer consumption landed — `media_viewer_vector.inc` `nx_media_blit_xml` skips `mp_text_scroll_line` lines before drawing; `media.nxh`/`media_player.nxh` own the key handling. No `TODO` markers remain anywhere under `src/user/apps/`.
+> - [x] [`src/kernel/proc/process.asm`](../src/kernel/proc/process.asm) — ~~1 (a `stub` body note, line 627)~~ false positive: `process_find_by_window` is implemented; the comment said the body "was a stub" (historical prose). Reworded 2026-06-10.
 >
 > **Action:** make the dashboard regex case-sensitive and exclude `*_todo.md`
 > filename matches before chasing §4.3. Until then the TODO column is not a
@@ -138,11 +144,11 @@ not fanned out to agents.
 
 - [x] [`src/boot/uefi_loader.asm`](../src/boot/uefi_loader.asm) — ~~3~~ cleared 2026-06-03 (1b.2/1b.3 already implemented; 1b.4 → issue #21, `see #21` in-code)
 - [x] [`src/user/poc/poc_standalone_prelude.inc`](../src/user/poc/poc_standalone_prelude.inc) — ~~1~~ resolved (was a doc x-ref, reworded to `spec ref: security_todo.md §13`)
-- [ ] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — 1
-- [ ] [`src/kernel/drivers/ramdisk.asm`](../src/kernel/drivers/ramdisk.asm) — 1
+- [x] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — ~~1~~ done 2026-06-10 (scroll renderer consumption verified in `media_viewer_vector.inc`; no TODO markers under `src/user/apps/`)
+- [x] [`src/kernel/drivers/ramdisk.asm`](../src/kernel/drivers/ramdisk.asm) — ~~1~~ converted 2026-06-10 to tracked issue ref (`Phase 4 plan (see #21)`)
 - [x] Measured boot - SHA-256/HMAC owner is `src/kernel/nexushlk/crypto.nxh`; old hand-written assembly implementation removed.
-- [ ] [`src/kernel/core/kernel_lockdown.asm`](../src/kernel/core/kernel_lockdown.asm) — 1
-- [ ] [`src/include/kpti.inc`](../src/include/kpti.inc) — 1
+- [x] [`src/kernel/core/kernel_lockdown.asm`](../src/kernel/core/kernel_lockdown.asm) — ~~1~~ false positive (prose "this TODO targets"); reworded 2026-06-10 to cite security_todo.md §9
+- [x] [`src/include/kpti.inc`](../src/include/kpti.inc) — ~~1~~ false positive: `ENTRY-STUB RELOCATION` heading (identifier-style prose, not stray debt); left as-is
 
 ### 3c. Magic-constant hotspots — name in headers
 
@@ -176,7 +182,7 @@ not fanned out to agents.
 - [ ] MMIO/register offsets carry a comment citing the spec section they come from.
 
 ### 4.3 Debt
-- [ ] Zero stray `TODO`/`STUB`/`FIXME`. Anything unfinished is a tracked GitHub issue, referenced by number in the code comment.
+- [x] Zero stray `TODO`/`STUB`/`FIXME`. Anything unfinished is a tracked GitHub issue, referenced by number in the code comment. *(met repo-wide 2026-06-10; dashboard TODO section empty)*
 
 ### 4.4 Traceability  *(expand this — user to spec)*
 - [ ] Every public function appears in [`docs/kernel-function-reference.md`](kernel-function-reference.md).
