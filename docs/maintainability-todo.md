@@ -69,6 +69,15 @@ state 9→8, terminal 7→5, media_viewer 23→21; diag probe 46→35. Builds gr
 untouched — splitting those is boot-/runtime-sensitive manual work, intentionally
 not fanned out to agents.
 
+> **2026-06-10 update — the table below is stale on size/TODO columns.** The
+> byte-identical split program (§3a) decomposed every >700-line monolith in
+> `kernel/drivers`, `kernel/fs`, `kernel/gui`, `kernel/lib`, and `kernel/proc`
+> except `syscall_dispatch_core.inc` (727 — single `syscall_entry` local-label
+> scope, no safe seam) and `syscall_user.inc` (723). Stray TODO/STUB/FIXME is
+> **zero repo-wide** (§3b). Remaining oversized: `src/diag/uefi_mouse_probe.asm`
+> (2,202), `src/user/apps/launch.inc` (1,671), `media_viewer` parts, and the
+> font data tables (data, not logic). Re-measure per §5 before re-rating.
+
 | Sector | Files | Lines | Largest | TODO | Magic | Rating | Primary action |
 |---|--:|--:|--:|--:|--:|---|---|
 | `src/user/lib` | 3 | 173 | 98 | 0 | 4 | 🟢 Excellent | hold the line |
