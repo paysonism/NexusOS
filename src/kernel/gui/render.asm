@@ -20,6 +20,10 @@ extern scr_width
 extern scr_height
 extern scr_pitch_q
 
+; SMP work queue (proc/workqueue.asm) — the flip blit runs on an AP
+extern workqueue_submit
+extern workqueue_wait_timeout
+
 ; Export to GUI
 global render_init
 global render_rect
@@ -83,7 +87,14 @@ render_mark_full:
     mov byte [full_redraw], 1
     ret
 
-; --- Flush dirty rectangles to framebuffer ---
+; --- Flush dirty rectangles to framebuffer (async: blit runs on an AP) ---
+; The BSP snapshots the dirty list into the flip_* shadows, submits
+; render_flip_job to the work queue, and returns to interactive work while an
+; AP does the backbuffer->FB copy. At most one job is in flight: the previous
+; frame's job is drained before the shadows are rewritten, so an AP never
+; reads them mid-update. The AP blits from the live backbuffer, so a frame
+; rendered concurrently can tear within a rect; the next flush repaints it.
+; Single-core builds degrade cleanly — workqueue_submit runs the job inline.
 render_flush:
     push rax
     push rbx
@@ -92,47 +103,92 @@ render_flush:
     push rsi
     push rdi
 
-    ; Check if full redraw needed
+    ; Drain the previous flip job (normally DONE already => near-zero wait).
+    ; Timeout-guarded like dispatch_app_callback: if the owning AP wedged, we
+    ; leak the slot and carry on rather than freezing the GUI.
+    mov edi, [flip_job_handle]
+    cmp edi, -1
+    je .no_pending
+    mov esi, 50                  ; PIT-tick budget (never raw-counter; STATUS.md)
+    call workqueue_wait_timeout
+    mov dword [flip_job_handle], -1
+.no_pending:
+
+    ; Anything to do this frame?
     cmp byte [full_redraw], 0
-    jne .do_full
+    jne .snapshot
+    cmp dword [dirty_count], 0
+    je .flush_done
 
-    ; Flip each dirty rectangle
-    mov ebx, [dirty_count]
-    test ebx, ebx
-    jz .flush_done
-
-    xor eax, eax            ; Index
-.flush_loop:
-    cmp eax, ebx
-    jge .flush_done
-
-    push rax
-    shl eax, 4
-    lea r8, [dirty_rects + rax]
-    mov edi, [r8]
-    mov esi, [r8 + 4]
-    mov edx, [r8 + 8]
-    mov ecx, [r8 + 12]
-    call display_flip_rect
-    pop rax
-
-    inc eax
-    jmp .flush_loop
-
-.do_full:
-    call display_flip
+.snapshot:
+    ; Snapshot dirty state into the job-owned shadows, then reset the live
+    ; list so the BSP can mark new rects while the AP blits these.
+    mov al, [full_redraw]
+    mov [flip_full], al
+    mov ecx, [dirty_count]
+    mov [flip_count], ecx
+    shl ecx, 2                   ; rect count -> dword count (16 bytes/rect)
+    lea rsi, [dirty_rects]
+    lea rdi, [flip_rects]
+    rep movsd
+    mov dword [dirty_count], 0
     mov byte [full_redraw], 0
 
-.flush_done:
-    ; Reset dirty count
-    mov dword [dirty_count], 0
+    ; Hand the blit to an AP. High priority so app jobs cannot starve frames.
+    mov rdi, render_flip_job
+    xor esi, esi
+    mov edx, 2                   ; WQ_PRIO_HIGH
+    call workqueue_submit
+    cmp eax, -1                  ; WQ_INVALID: queue full -> blit on the BSP
+    jne .submitted
+    xor edi, edi
+    call render_flip_job
+    jmp .flush_done
+.submitted:
+    mov [flip_job_handle], eax
 
+.flush_done:
     pop rdi
     pop rsi
     pop rdx
     pop rcx
     pop rbx
     pop rax
+    ret
+
+; --- render_flip_job(RDI = unused) -> RAX = 0. Runs on an AP (or inline). ---
+; Blits the snapshotted rects (or the whole screen) backbuffer -> FB. Reads
+; only the flip_* shadows the BSP wrote before publishing the job; x86 store
+; ordering makes them visible together with the PENDING status word. Preserves
+; RBX/RBP/R12-R15 per the workqueue job contract.
+render_flip_job:
+    push rbx
+    cmp byte [flip_full], 0
+    jne .full
+    mov ebx, [flip_count]
+    test ebx, ebx
+    jz .done
+    xor eax, eax            ; Index
+.rect_loop:
+    cmp eax, ebx
+    jge .done
+    push rax
+    shl eax, 4
+    lea r8, [flip_rects + rax]
+    mov edi, [r8]
+    mov esi, [r8 + 4]
+    mov edx, [r8 + 8]
+    mov ecx, [r8 + 12]
+    call display_flip_rect
+    pop rax
+    inc eax
+    jmp .rect_loop
+.full:
+    call display_flip
+    mov byte [flip_full], 0
+.done:
+    pop rbx
+    xor eax, eax
     ret
 
 ; --- Save back buffer (RAM -> RAM) SSE2 optimized, 128 bytes/iteration ---
@@ -477,6 +533,14 @@ section .data
 dirty_count    dd 0
 full_redraw    db 0
 dirty_rects    times MAX_DIRTY_RECTS * 16 db 0
+
+; Async-flip shadow state: written by the BSP in render_flush (only while no
+; job is in flight), read by the AP running render_flip_job.
+flip_job_handle dd -1
+flip_count      dd 0
+flip_full       db 0
+align 16
+flip_rects      times MAX_DIRTY_RECTS * 16 db 0
 
 section .bss
 

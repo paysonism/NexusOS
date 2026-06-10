@@ -1,9 +1,39 @@
-# NexusOS v3.0
+# NexusOS
 
-A 64-bit operating system written entirely in x86-64 assembly, with a
-graphical desktop, a ring-3 callback path for built-in apps, and a source tree
-organized to keep boot code, kernel code, and user-facing code clearly
-separated.
+A hobbyist 64-bit x86-64 operating system with a graphical desktop, a ring-3
+app runtime, and a security architecture that aims past conventional zero
+trust. The kernel began as pure assembly and is being migrated module-by-module
+to **NexusHL** (`.nxh`), a zero-asm high-level kernel language compiled by
+`tools/nxhc.py` with bounds-checked state access, source-line traceability,
+and a lossless function-level optimizer.
+
+## Highlights
+
+- **UEFI GOP framebuffer** (plus a legacy BIOS path) — no per-vendor GPU
+  bring-up; widely compatible interfaces only.
+- **Hardened syscall boundary** — per-app capability manifests, validator
+  descriptors, kernel shadow stack, kernel-stack-first entry, CPI-signed
+  callbacks, W^X / NX / SMAP enforcement, KASLR.
+- **Nested-kernel monitor** — portable MMU+WP page-table protection; PTE
+  writers must go through an explicit write window.
+- **Signed-everything (Track 2)** — in-kernel signed-artifact envelope reader
+  with real Ed25519 threshold/quorum verification, a 25-case executable reject
+  matrix, fuzz + differential decoder suites, and dual-approval quorum
+  ratcheting.
+- **Proven invariants (Track 3)** — 12 seL4-style security invariants backed
+  by exhaustive vector checks (`scripts/test/eval_invariants.py`).
+- **RAM-only / anti-forensic memory (Track 4)** — volatile-by-default RAM with
+  secure zeroize on shutdown/panic/tamper, plus a data-egress vs. elevation
+  barrier matrix.
+- **Defense-in-depth roadmap (Tracks 5–6)** — hardware-residual hypervisor
+  monitor and a compartmentalized software "-1" monitor
+  (see `docs/architecture-defense-in-depth.md`).
+
+One verification entry point runs the security guard suite:
+
+```powershell
+.\scripts\test\test_nhl_security_guards.ps1
+```
 
 ## Prerequisites
 
@@ -159,8 +189,12 @@ For the current syscall and callback ABI, see:
 
 ## Notes
 
-- Built-in apps still ship inside the monolithic kernel image today.
-- The source tree is arranged so future independently built user apps can move
-  out cleanly.
-- Security hardening for the old syscall 9 window-handler exploit path is in
-  place and covered by the current tree organization and verification flow.
+- All userspace apps are NexusHL (`.nxh`); the raw-asm app migration is
+  complete. `security_probe` intentionally stays raw asm as a fault-injection
+  regression harness.
+- `docs/TODO-INDEX.md` is the single entry point for the spec/TODO doc set;
+  `docs/STATUS.md` holds detailed status and milestones.
+- See `SECURITY.md` for the vulnerability disclosure policy.
+- The private QRNG seed (`tools/quantum/seed.bin` and derived files) is a
+  build secret and is never committed or published; releases ship only the
+  folded boot image.

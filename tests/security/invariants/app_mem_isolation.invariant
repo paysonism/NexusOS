@@ -1,0 +1,9 @@
+# Memory isolation between apps: cross-namespace reads require an explicitly
+# shared handle; there is no implicit cross-namespace access.
+invariant=INV-APP-MEM-ISOLATION
+title=No cross-namespace read without a shared handle
+statement=A granted access with reader_ns != owner_ns and no shared handle is a violation; same-namespace or handle-mediated access is permitted.
+compromised=Any single app domain
+denied_authority=AUTH_MEMORY_GRANT (implicit: cross-namespace read absent a shared handle)
+predicate=inv_app_mem_isolation
+status=proven

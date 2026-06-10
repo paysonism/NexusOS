@@ -33,6 +33,11 @@ extern kernel_canary
 extern kernel_panic_canary
 extern tick_count, frame_count, fps_count, last_fps, start_tick
 extern wm_window_count, klog_count, free_page_count
+; _start is the kernel image base label (link address == KERNEL_LINK_BASE). Its
+; runtime address minus KERNEL_LINK_BASE is the live KASLR slide, used to print
+; a slide-relative ("link") RIP on the recovery path so a logged fault maps 1:1
+; to build/kslroff.lst (the slide-0 listing) without knowing this boot's slide.
+extern _start
 
 ; ============================================================================
 ; Exception ISR Stubs (0-31)
@@ -174,14 +179,29 @@ FN_DECL isr_common_stub, 0, 0, FN_RET_SCALAR
     mov rax, [rsp + 160]               ; saved CS
     and rax, 3
     jnz .no_kguard                     ; ring 3 -> normal slot-abort path
-    ; Compact log so a recovered fault is visible without the full dump:
-    ;   KREC=<faulting RIP> C=<cr2>
+    ; Compact-but-complete log so a recovered ring-0 fault is one-shot fixable
+    ; without the full register dump and WITHOUT freezing the OS:
+    ;   KREC=<faulting RIP> L=<link RIP> V=<vector> E=<errcode> C=<cr2>
+    ; L is the faulting RIP rebased to KERNEL_LINK_BASE (RIP - live KASLR slide),
+    ; so it maps directly into build/kslroff.lst regardless of this boot's slide.
     SER 'K'
     SER 'R'
     SER 'E'
     SER 'C'
     SER '='
     mov rdi, [rsp + 152]               ; faulting RIP
+    call ser_print_hex64
+    SER 'L'
+    mov rdi, [rsp + 152]               ; faulting RIP
+    lea rax, [rel _start]              ; runtime kernel base
+    sub rax, KERNEL_LINK_BASE          ; rax = live KASLR slide
+    sub rdi, rax                       ; rdi = link-time (slide-0) RIP
+    call ser_print_hex64
+    SER 'V'
+    mov rdi, [rsp + 136]               ; exception vector number
+    call ser_print_hex64
+    SER 'E'
+    mov rdi, [rsp + 144]               ; CPU error code
     call ser_print_hex64
     SER 'C'
     mov rdi, cr2

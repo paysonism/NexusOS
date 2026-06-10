@@ -18,7 +18,7 @@ _Last reconciled: 2026-06-04._
    (separation-kernel, the kill-chain defense matrix, the capability-vs-crypto
    rule, opportunistic-hardware-with-software-floor rule). Nothing overrides this
    on "what is the intended architecture."
-3. **The four `trackN-*.md` docs** — authoritative for their slice of the
+3. **The `trackN-*.md` docs** — authoritative for their slice of the
    beyond-zero-trust program, and **more current than the master list** where they
    overlap (the master list lags; trust the track doc).
 4. **`docs/nhl-beyond-zero-trust-todo.md`** — the master program checklist
@@ -39,7 +39,7 @@ _Last reconciled: 2026-06-04._
   backlog.
 - **`nhl-beyond-zero-trust-todo.md` + `trackN` + `architecture-defense-in-depth.md`**
   = the **newer NHL-only "beyond zero trust" architecture** layered on top
-  (signed-everything, threshold, seL4 invariants, RAM-only/anti-forensic,
+  (signed-everything, threshold, seL4 invariants, RAM-only/secure-erasure,
   user-space drivers + proxies + monitor). This is the *active backlog*.
 
 They are complementary, not duplicates: the tracks build the architecture; the
@@ -60,9 +60,12 @@ They are complementary, not duplicates: the tracks build the architecture; the
 |---|---|---|
 | `nhl-beyond-zero-trust-todo.md` | master checklist + Extended Hardening + Kill-Chain Defense + HW mem-enc | active; master P0/P1 mostly `[ ]`; Extended/Kill-Chain are net-new |
 | `track1-repo-enforcement-todo.md` | repo enforcement (no new .asm/.inc, presubmits, CI) | **DONE / green** |
-| `track2-signed-everything-todo.md` | signed-artifact envelope + threshold | **checker only** — runtime reader/writer + threshold TODO |
-| `track3-sel4-validity-todo.md` | seL4-style authority invariants | 9 invariants **`tested`** (runner executes vectors); `proven`/exhaustive-checker next |
-| `track4-ram-anti-forensic-todo.md` | RAM-only/amnesiac + anti-forensic + HW FME (TME/SME) + leak≠elevation | **new, not started**; design + honest scope written |
+| `track2-signed-everything-todo.md` | signed-artifact envelope + threshold | **reader landed** (2026-06-09): in-kernel `envelope_reader.nxh` in the image + full reject matrix executed by `eval_envelope.py`; threshold signing, host writer, boot/update call-site binding TODO |
+| `track3-sel4-validity-todo.md` | seL4-style authority invariants | 12 invariants **`proven`** (exhaustive bounded checker, 2.28M evaluations); recovery-bypass / confused-deputy / app-mem-isolation added 2026-06-10 |
+| `track4-ram-secure-erasure-todo.md` | RAM-only/volatile + secure-erasure + HW FME (TME/SME) + leak≠elevation | Part A landed; Part B partial; Part C detect-only; Part D matrix audited |
+| `track4-data-egress-elevation-matrix.md` | Part D leak≠elevation matrix: artifact × barrier, with code citations | **static audit DONE**; planted-leak negative test still `[ ]` |
+| `track5-hypervisor-monitor-todo.md` | **all-vendor hardware** monitor tier — the two irreducible-hardware guarantees only (G1 privilege-below-ring-0 to make the floor un-disableable; G2 IOMMU device-DMA), abstracted across Intel VT-x/VT-d, AMD SVM/AMD-Vi, ARM EL2/SMMUv3, RISC-V H-ext/IOMMU behind one `mon_hal` | **new, design only**; opportunistic; hardens Track 6 |
+| `track6-compartmentalized-monitor-todo.md` | the **software "-1" monitor** decomposed into mutually-isolated single-authority compartments (PT/KEY/HASH/CAP/DMA/LOAD-MON) so one compromise ≠ total compromise; the non-hardware half of the final goal, TCG-verifiable | **new, design only**; the realizable core; Track 5 makes it un-disableable |
 
 ### Landed baseline
 | Doc | Scope | State |
@@ -127,11 +130,27 @@ Build: monolithic `nasm -f bin` on `src/kernel/kernel_build.asm` via
 
 ## Current frontier (what to pick up next)
 
-- **Track 2**: in-OS signed-envelope reader + reject-matrix fixtures (turns
-  "checker exists" into "system enforces") — the keystone.
-- **Track 3**: promote `tested → proven` via the exhaustive 7-bit-space checker.
-- **Track 4**: Part A amnesiac/RAM-only increment; Part C TME/SME detection
-  scaffold (CET/SMAP/KPTI pattern, status via SYS_SYSINFO); Part D planted-leak
-  negative test.
+- **Track 2**: reader + reject matrix LANDED (2026-06-09); structural quorum +
+  host writer LANDED (2026-06-09); P1 parser-safety suite (fuzz + differential
+  decoder + canonical round-trip property, `scripts/test/fuzz_envelope.py`)
+  LANDED (2026-06-10); **real Ed25519 threshold crypto LANDED (2026-06-10)**
+  (`ed25519_check.nxh` in the kernel image, `envelope_verify_signed` entry
+  point, real-signing writer, `eval_ed25519.py` in the guard suite); boot/
+  update call sites + verified-artifact hash cache LANDED (2026-06-10,
+  envelope_gate.nxh); **quorum-change tracking path LANDED (2026-06-10)** —
+  staged KQUORUM.ENV requires BOTH old+new quorum approval
+  (`security_threshold_change_valid` now enforced at a real call site) and
+  ratchets the active per-class quorum for all later admissions; stolen-key
+  negative suite (one key/build server/update server/recovery key) green.
+  Next: the "Residuals" list (loader-side KERNEL.BIN envelope, RTC/now
+  binding, persistent anti-rollback floors).
+- **Track 3**: DONE through P2 — all 12 invariants `proven` (exhaustive
+  bounded checker; recovery non-bypass, confused-deputy IPC, and app
+  memory-isolation landed 2026-06-10). Remaining: bind authority bitmasks to
+  the real signed capability policy (P3 mapping work).
+- **Track 4**: Part A volatile landed; Part C TME/SME detection scaffold done;
+  Part D exfil→elevation matrix audited (`track4-data-egress-elevation-matrix.md`). Next:
+  the Part D **planted-leak negative test** + the `pmemsave` RAM-dump grep (the
+  dynamic proofs that turn the audit into a demonstration).
 - **Kill-Chain Defense**: biggest lift is moving drivers out of the kernel into
   user-space sandboxed processes — everything else in that section builds on it.

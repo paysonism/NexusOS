@@ -19,8 +19,9 @@
 #   off 6  : artifact_type                          (u16, ART_*)
 #   off 8  : target_domain                          (u16, DOMAIN_*)
 #   off 10 : field_count                            (u16)
-#   off 12 : header_len                             (u16, start of TLV region)
-#   ...    : field_count TLV records, field ids strictly ascending
+#   off 12 : header_len                             (u16, end of TLV region)
+#   off 14 : payload_len                            (u32)
+#   off 18 : field_count TLV records, field ids strictly ascending
 #   ...    : payload, then detached signature block
 
 module "security_signed_envelope";
@@ -85,7 +86,7 @@ const REQUIRED_RUNNABLE = 8191;
 
 const MIN_FIELDS = 12;
 const MAX_FIELDS = 64;
-const MIN_ENVELOPE_HEADER_LEN = 14;
+const MIN_ENVELOPE_HEADER_LEN = 18;
 const MAX_ENVELOPE_TOTAL_LEN = 16777216;
 const MAX_ENVELOPE_PAYLOAD_LEN = 8388608;
 const MAX_ENVELOPE_SIGNATURE_LEN = 4096;

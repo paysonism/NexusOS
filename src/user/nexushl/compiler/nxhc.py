@@ -638,6 +638,18 @@ def _emit_db_bytes(val):
 #   C) mov rax, OP ; mov rcx, rax ; pop rax
 #        -> mov rcx, OP ; pop rax
 #      Catches binary-op RHS evaluation where rax is about to be overwritten.
+#   D) push rax ; mov REG, OP ; pop rax   -> mov REG, OP
+#      The push/pop bracket only protects rax across the middle mov; when the
+#      middle mov neither reads nor writes rax (and does not read rsp, which
+#      the push displaced), the bracket is a pure no-op and is dropped. This is
+#      the dominant binary-op RHS shape left after pass C (mov rcx, imm/slot).
+#   E) jmp L ; L:   -> L:
+#      A jump to the literally-next code line (the unconditional `jmp .fn_end`
+#      the emitter places before the epilogue label on every final return).
+#   F) mov [rbp±K], R ; mov R, [rbp±K]   -> mov [rbp±K], R
+#      An adjacent reload of the exact slot/register pair just stored; R
+#      already holds the value, the reload is a no-op.
+# B/C/D are iterated to a fixpoint: removing one bracket exposes the next.
 
 _PEEP_LOAD_RAX = re.compile(r"^\s*mov\s+rax,\s*(.+?)\s*$")
 _PEEP_PUSH_RAX = re.compile(r"^\s*push\s+rax\s*$")
@@ -681,7 +693,11 @@ def _operand_safe_for_target(op, target_reg):
             return False
     return True
 
-def _peephole(lines):
+def _peephole(lines, extended=True):
+    # `extended=False` (--O0) limits this pass to the original single-round
+    # A/B/C patterns so -O0 reproduces the historical byte-exact output for
+    # debugging / byte-diffing. The D/E/F passes and the B/C/D fixpoint loop
+    # are part of the default (-O1) optimizer.
     # Pass A: collapse N-arg push/pop staging into direct moves.
     out = []
     i = 0
@@ -746,42 +762,123 @@ def _peephole(lines):
         out.append(lines[i])
         i += 1
 
-    # Pass B: any remaining adjacent push rax / pop REG.
+    # Passes B/C/D iterate to a fixpoint: each removed staging bracket can make
+    # a new adjacent pattern (bounded: every pass only deletes/shrinks lines).
     lines = out
+    for _round in range(16 if extended else 1):
+        changed = False
+
+        # Pass B: any remaining adjacent push rax / pop REG.
+        out = []
+        i = 0
+        n = len(lines)
+        while i < n:
+            if (i + 1 < n
+                and _PEEP_PUSH_RAX.match(_code(lines[i]))
+                and _PEEP_POP_REG.match(_code(lines[i+1]))):
+                reg = _PEEP_POP_REG.match(_code(lines[i+1])).group(1)
+                if reg != "rax":
+                    out.append(f"    mov {reg}, rax{_comment(lines[i])}")
+                i += 2
+                changed = True
+                continue
+            out.append(lines[i])
+            i += 1
+
+        # Pass C: mov rax, OP / mov rcx, rax / pop rax  -> mov rcx, OP / pop rax
+        # (and same for any target reg, not just rcx). The trailing pop rax shows
+        # the rax load was only a staging step.
+        lines = out
+        out = []
+        i = 0
+        n = len(lines)
+        while i < n:
+            if i + 2 < n:
+                m1 = _PEEP_LOAD_RAX.match(_code(lines[i]))
+                m2 = _PEEP_MOV_R_RAX.match(_code(lines[i+1]))
+                m3 = _PEEP_POP_REG.match(_code(lines[i+2]))
+                if m1 and m2 and m3 and m3.group(1) == "rax" and m2.group(1) != "rax":
+                    op = m1.group(1)
+                    tgt = m2.group(1)
+                    if _operand_safe_for_target(op, tgt):
+                        out.append(f"    mov {tgt}, {op}{_comment(lines[i])}")
+                        out.append(lines[i+2])
+                        i += 3
+                        changed = True
+                        continue
+            out.append(lines[i])
+            i += 1
+
+        if not extended:
+            lines = out
+            break
+
+        # Pass D: push rax / mov REG, OP / pop rax  -> mov REG, OP.
+        # Sound iff the middle mov is independent of the bracket: REG is a plain
+        # GPR other than rax/rsp, and OP mentions neither rax (the protected
+        # value) nor rsp (displaced by the push). The push/pop then cancels.
+        lines = out
+        out = []
+        i = 0
+        n = len(lines)
+        while i < n:
+            if i + 2 < n and _PEEP_PUSH_RAX.match(_code(lines[i])):
+                mm = _MOV2_RE.match(_code(lines[i+1]).strip())
+                mp = _PEEP_POP_REG.match(_code(lines[i+2]))
+                if mm and mp and mp.group(1) == "rax":
+                    dest = mm.group(1).strip()
+                    src = mm.group(2).strip()
+                    if (dest not in ("rax", "rsp")
+                        and re.fullmatch(r"[a-z][a-z0-9]+", dest)
+                        and _canon(dest)
+                        and not re.search(r"\brax\b", src)
+                        and not re.search(r"\brsp\b", src)):
+                        out.append(f"    mov {dest}, {src}{_comment(lines[i+1])}")
+                        i += 3
+                        changed = True
+                        continue
+            out.append(lines[i])
+            i += 1
+
+        lines = out
+        if not changed:
+            break
+
+    if not extended:
+        return lines
+
+    # Pass E: drop `jmp L` when the immediately following code line is `L:`.
     out = []
     i = 0
     n = len(lines)
     while i < n:
-        if (i + 1 < n
-            and _PEEP_PUSH_RAX.match(_code(lines[i]))
-            and _PEEP_POP_REG.match(_code(lines[i+1]))):
-            reg = _PEEP_POP_REG.match(_code(lines[i+1])).group(1)
-            if reg != "rax":
-                out.append(f"    mov {reg}, rax{_comment(lines[i])}")
-            i += 2
-            continue
+        c = _code(lines[i]).strip()
+        if c.startswith("jmp ") and i + 1 < n:
+            nxt = _code(lines[i+1]).strip()
+            if nxt.endswith(":") and nxt[:-1].strip() == c[4:].strip():
+                i += 1
+                continue
         out.append(lines[i])
         i += 1
 
-    # Pass C: mov rax, OP / mov rcx, rax / pop rax  -> mov rcx, OP / pop rax
-    # (and same for any target reg, not just rcx). The trailing pop rax shows
-    # the rax load was only a staging step.
+    # Pass F: drop an adjacent exact-pair reload `mov [rbp±K], R` / `mov R,
+    # [rbp±K]` (same slot text, same 64-bit reg). R already holds the value.
     lines = out
     out = []
     i = 0
     n = len(lines)
+    _slot_re = re.compile(r"^\[rbp[+-]\d+\]$")
     while i < n:
-        if i + 2 < n:
-            m1 = _PEEP_LOAD_RAX.match(_code(lines[i]))
-            m2 = _PEEP_MOV_R_RAX.match(_code(lines[i+1]))
-            m3 = _PEEP_POP_REG.match(_code(lines[i+2]))
-            if m1 and m2 and m3 and m3.group(1) == "rax" and m2.group(1) != "rax":
-                op = m1.group(1)
-                tgt = m2.group(1)
-                if _operand_safe_for_target(op, tgt):
-                    out.append(f"    mov {tgt}, {op}{_comment(lines[i])}")
-                    out.append(lines[i+2])
-                    i += 3
+        if i + 1 < n:
+            m1 = _MOV2_RE.match(_code(lines[i]).strip())
+            m2 = _MOV2_RE.match(_code(lines[i+1]).strip())
+            if m1 and m2:
+                d1, s1 = m1.group(1).strip(), m1.group(2).strip()
+                d2, s2 = m2.group(1).strip(), m2.group(2).strip()
+                if (_slot_re.match(d1) and s2 == d1 and d2 == s1
+                        and _canon(s1) and REG_TABLE.get(s1, (None, 0))[1] == 64):
+                    out.append(lines[i])
+                    i += 2
                     continue
         out.append(lines[i])
         i += 1
@@ -1323,7 +1420,38 @@ def _o2_reg_free_in_body(canon, codes, lo, hi):
             return False
     return True
 
-def _regalloc_one_fn(seg):
+def _o2_fn_name(seg):
+    # The function's label name from its FN_BEGIN marker, or None.
+    for l in seg:
+        c=_code(l).strip()
+        if c.startswith("FN_BEGIN "):
+            return c.split(None,1)[1].split(",",1)[0].strip()
+    return None
+
+def _o2_is_leaf(codes, lo, hi):
+    for c in codes[lo:hi]:
+        if (c.startswith(("call ","FN_CALL","call_table")) or c=="call"
+                or c.startswith(("syscall","APP_SYSNO"))):
+            return False
+    return True
+
+def _o2_preserved_regs(seg):
+    # For a LEAF same-unit function (final, post-regalloc text): the set of
+    # callee-saved regs it provably preserves. A reg is preserved if the
+    # segment push/pop-brackets it, or if no spelling of it appears anywhere
+    # in the segment (a leaf cannot clobber a reg it never names).
+    codes=[_code(l).strip() for l in seg]
+    text=" ".join(codes)
+    preserved=set()
+    for r in _O2_CALLEE_SAVED:
+        if f"push {r}" in codes and f"pop {r}" in codes:
+            preserved.add(r); continue
+        if not any(re.search(r"\b"+re.escape(sp)+r"\b", text)
+                   for sp in _spellings_for_canon(r)):
+            preserved.add(r)
+    return preserved
+
+def _regalloc_one_fn(seg, safe_callees=None):
     codes=[_code(l).strip() for l in seg]
     if _opt_fn_uses_addr_of_frame(codes):
         return seg
@@ -1347,10 +1475,28 @@ def _regalloc_one_fn(seg):
     # promotion is sound regardless of callee register behavior. Compute-heavy
     # leaf bodies (the intended target) still benefit; call-laden syscall
     # wrappers are already shrunk by Phase 1.
+    #
+    # GATE EXTENSION (same-unit leaf callees): a body containing direct `call`s
+    # is also eligible when EVERY call targets a same-unit NHL LEAF function
+    # whose final emitted text provably preserves a known set of callee-saved
+    # regs (push/pop-bracketed, or never named anywhere in the leaf — a leaf
+    # cannot clobber a reg it never names). Promotion candidates are then
+    # restricted to the intersection of all callees' preserved sets. syscall /
+    # APP_SYSNO / indirect / extern / non-leaf targets still bail.
+    allowed_regs=set(_O2_CALLEE_SAVED)
     for c in codes[lo:hi]:
-        if (c.startswith(("call ","FN_CALL","call_table")) or c=="call"
-                or c.startswith(("syscall","APP_SYSNO"))):
+        if c.startswith(("syscall","APP_SYSNO","call_table")) or c=="call":
             return seg
+        if c.startswith(("call ","FN_CALL ")):
+            # `call name` / `FN_CALL name, argc` — FN_CALL is a pure compile-
+            # time argc check followed by `call name` (src/include/trace.inc).
+            tgt=c.split(None,1)[1].split(",",1)[0].strip()
+            pres=(safe_callees or {}).get(tgt)
+            if not pres:
+                return seg              # extern / non-leaf / unknown callee
+            allowed_regs&=pres
+            if not allowed_regs:
+                return seg              # no commonly-preserved reg left
     # Promotable negative slots referenced anywhere in the segment. The prologue
     # spill `mov [rbp-K], <call_reg>` sits before `lo`; include the whole
     # segment when proving the plain-mov property and when rewriting.
@@ -1379,6 +1525,7 @@ def _regalloc_one_fn(seg):
         # find a free callee-saved reg
         chosen=None
         for r in _O2_CALLEE_SAVED:
+            if r not in allowed_regs: continue
             if r in used_regs: continue
             if not _o2_reg_free_in_body(r, codes, lo, hi): continue
             chosen=r; break
@@ -1476,9 +1623,34 @@ def _regalloc_one_fn(seg):
 def _regalloc_functions(lines, target):
     if target!="user":
         return lines
-    out=[]
+    # Pass 1: regalloc every function under the base (leaf-only) gate. Collect
+    # the FINAL text of each same-unit leaf fn so pass 2 can prove which
+    # callee-saved regs each one preserves.
+    segs=[]
     for is_fn,chunk in _fn_segments(lines):
-        out.extend(_regalloc_one_fn(chunk) if is_fn else chunk)
+        segs.append((is_fn, _regalloc_one_fn(chunk) if is_fn else chunk))
+    safe_callees={}
+    for is_fn,chunk in segs:
+        if not is_fn: continue
+        name=_o2_fn_name(chunk)
+        if not name: continue
+        codes=[_code(l).strip() for l in chunk]
+        body=_body_codes(codes)
+        if body is None: continue
+        lo,hi=body
+        if _o2_is_leaf(codes, lo, hi):
+            pres=_o2_preserved_regs(chunk)
+            if pres: safe_callees[name]=pres
+    # Pass 2: retry the call-containing fns (pass 1 left them unchanged) now
+    # that callee preservation facts are known. Leaf fns are already done.
+    out=[]
+    for is_fn,chunk in segs:
+        if is_fn:
+            codes=[_code(l).strip() for l in chunk]
+            body=_body_codes(codes)
+            if body is not None and not _o2_is_leaf(codes,*body):
+                chunk=_regalloc_one_fn(chunk, safe_callees)
+        out.extend(chunk)
     return out
 
 def _contains_asm_stmt(stmts):
@@ -1737,7 +1909,7 @@ def compile_unit(decls,app_prefix,embed=False,kernel=False,src=None,target="user
             out.append(f"global {g}")
     if not embed:
         out.append("section .text")
-    body=_peephole(cg.text)
+    body=_peephole(cg.text, extended=optimize)
     # Phase 1 (function scaffolding cleanup) runs when the global default switch
     # is on OR when --O2 is requested. --O2 is the explicit opt-in that turns the
     # whole function optimizer on without disturbing the default (-O0/-O1) builds,

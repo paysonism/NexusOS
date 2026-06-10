@@ -49,6 +49,7 @@ const CMD_N = 110;  # 'n'  ICMP ping gateway
 const CMD_NI = 78;  # 'N'  ICMP ping ICS host
 const CMD_I = 105;  # 'i'  ICMP ping 8.8.8.8
 const CMD_CLOSE = 120;  # 'x'  close focused window
+const CMD_WIPE = 119;   # 'w'  Track 4 volatile wipe (zero secrets + arenas) then halt
 
 # Echo bytes (debug telemetry over COM1).
 const ASCII_ZERO = 48;   # '0'
@@ -75,6 +76,8 @@ extern net_ping_ics_start_msg;
 extern net_ping_google_start_msg;
 extern net_ping_ok_msg;
 extern net_ping_fail_msg;
+# Track 4 Part A: volatile clean-exit wipe (zero secrets + slot arenas, halt).
+extern nx_volatile_wipe_halt;
 
 # al = the post-arm command byte. Decodes + dispatches; see header.
 fn serial_dispatch_control(al cmd) {
@@ -154,6 +157,14 @@ fn serial_dispatch_control(al cmd) {
         let r = net_ping_ipv4(GOOGLE_DNS_IP);
         if r != PING_FAIL { call svg_dump_puts(rsi: &net_ping_ok_msg); }
         else { call svg_dump_puts(rsi: &net_ping_fail_msg); }
+        return;
+    }
+
+    # 'w' -> Track 4 volatile clean-exit wipe: zero every per-boot secret and
+    # every app-slot arena, then HLT (no power-off) so a QEMU `pmemsave` can
+    # confirm nothing survives. Never returns.
+    if cmd == CMD_WIPE {
+        nx_volatile_wipe_halt();
         return;
     }
 

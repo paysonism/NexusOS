@@ -69,6 +69,15 @@ state 9→8, terminal 7→5, media_viewer 23→21; diag probe 46→35. Builds gr
 untouched — splitting those is boot-/runtime-sensitive manual work, intentionally
 not fanned out to agents.
 
+> **2026-06-10 update — the table below is stale on size/TODO columns.** The
+> byte-identical split program (§3a) decomposed every >700-line monolith in
+> `kernel/drivers`, `kernel/fs`, `kernel/gui`, `kernel/lib`, and `kernel/proc`
+> except `syscall_dispatch_core.inc` (727 — single `syscall_entry` local-label
+> scope, no safe seam) and `syscall_user.inc` (723). Stray TODO/STUB/FIXME is
+> **zero repo-wide** (§3b). Remaining oversized: `src/diag/uefi_mouse_probe.asm`
+> (2,202), `src/user/apps/launch.inc` (1,671), `media_viewer` parts, and the
+> font data tables (data, not logic). Re-measure per §5 before re-rating.
+
 | Sector | Files | Lines | Largest | TODO | Magic | Rating | Primary action |
 |---|--:|--:|--:|--:|--:|---|---|
 | `src/user/lib` | 3 | 173 | 98 | 0 | 4 | 🟢 Excellent | hold the line |
@@ -99,23 +108,39 @@ not fanned out to agents.
   - **Dead code deleted**: the four `real_boot_diag_*` modules (~1,400 asm lines, `%ifdef`-gated debug with 200+ inline externs) + their two live call sites (the `=` keybind / serial command) were removed rather than ported — a verbatim port was pointless, and deletion satisfies "no asm" with no default-build behavior change.
   - **Compiler additions (nxhc.py) that made full zero-asm possible**: (1) `cfg "NAME" {..}` / `cfg !"NAME" {..}` build-config conditionals → NASM `%ifdef`/`%ifndef` (kmain's ENABLE_SMAP/CET/KPTI/SHADOW_STACK_POC/FBPERF_NO_WC/NEXUS_SMP/PROBE_NK_PT paths); (2) `ind()`/`outd()` 32-bit port I/O intrinsics (PCI CF8/CFC config access, inline in debug_overlay); (3) `const NAME = extern;` symbolic-constant passthrough (reference a kernel `equ` by name — NASM resolves it — instead of duplicating its value, used throughout frame_present). These join the earlier explicit-register ABI + `preserves(...)` + privileged intrinsics.
 - [x] [`src/kernel/proc/syscall.asm`](../src/kernel/proc/syscall.asm) — ~~**4,942** lines. Dispatcher + hardening in one file.~~ Split 2026-06-02 into a 284-line orchestrator + 10 `syscall_*.inc` modules (largest `syscall_security.inc` at 641). Pure textual `%include` split — `KERNEL.BIN` byte-identical pre/post (sha256 verified). Handler slices stay in `syscall_entry`'s local-label scope.
-- [ ] [`src/kernel/drivers/rtl8156.asm`](../src/kernel/drivers/rtl8156.asm) — 3,282
-- [ ] [`src/kernel/drivers/xhci.asm`](../src/kernel/drivers/xhci.asm) — 2,641
-- [ ] [`src/kernel/drivers/display.asm`](../src/kernel/drivers/display.asm) — 2,502
+- [x] [`src/kernel/drivers/rtl8156.asm`](../src/kernel/drivers/rtl8156.asm) — ~~3,282~~ Split 2026-06-10 into a 134-line orchestrator + 8 `rtl8156_*.inc` modules (largest `rtl8156_phy.inc` at 562). Pure textual `%include` split — `KERNEL.BIN` byte-identical pre/post (sha256 verified).
+- [x] [`src/kernel/drivers/xhci.asm`](../src/kernel/drivers/xhci.asm) — ~~2,641~~ Split 2026-06-10 into a 55-line orchestrator + 7 `xhci_*.inc` modules (largest `xhci_init.inc` at 653). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/drivers/display.asm`](../src/kernel/drivers/display.asm) — ~~2,502~~ Split 2026-06-10 into a 28-line orchestrator + 5 `display_*.inc` modules (largest `display_flip.inc` at 607). Byte-identical `KERNEL.BIN` (sha256 verified). Cut points respect `FN_BEGIN` local-label scopes.
 - [ ] [`src/boot/boot.asm`](../src/boot/boot.asm) — 2,339 (also 3 TODO/STUB)
 - [ ] [`src/boot/uefi_loader.asm`](../src/boot/uefi_loader.asm) — 2,214 (3 TODO/STUB — most of any file)
-- [ ] [`src/kernel/drivers/usb_hid.asm`](../src/kernel/drivers/usb_hid.asm) — 2,164
-- [ ] [`src/diag/uefi_mouse_probe.asm`](../src/diag/uefi_mouse_probe.asm) — 2,160
+- [x] [`src/kernel/drivers/usb_hid.asm`](../src/kernel/drivers/usb_hid.asm) — ~~1,996~~ Split 2026-06-10 into a 157-line orchestrator + 4 `usb_hid_*.inc` modules (largest `usb_hid_poll.inc` at 631). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/diag/uefi_mouse_probe.asm`](../src/diag/uefi_mouse_probe.asm) — ~~2,160~~ split 2026-06-10 into 5 `uefi_mouse_probe_*.inc` modules (largest 589) + 200-line orchestrator; KERNEL.PROBE.RAW sha256 byte-identical.
 - [ ] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — 1,956
-- [ ] [`src/kernel/gui/window.asm`](../src/kernel/gui/window.asm) — 1,813
-- [ ] [`src/user/apps/launch.inc`](../src/user/apps/launch.inc) — 1,704
-- [ ] [`src/kernel/fs/fat16.asm`](../src/kernel/fs/fat16.asm) — 1,733
+- [x] [`src/kernel/gui/window.asm`](../src/kernel/gui/window.asm) — ~~1,023~~ Split 2026-06-10 into a 78-line orchestrator + 4 `window_*.inc` modules (largest `window_draw.inc` at 353). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/user/apps/launch.inc`](../src/user/apps/launch.inc) — ~~1,704~~ split 2026-06-10 into 4 `launch_*.inc` modules (largest 580) + 13-line orchestrator; KERNEL.BIN + APPS.BIN sha256 byte-identical.
+- [x] [`src/kernel/fs/fat16.asm`](../src/kernel/fs/fat16.asm) — ~~1,791~~ Split 2026-06-10 into a 91-line orchestrator + 4 `fat16_*.inc` modules (largest `fat16_nav.inc` at 508). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/lib/xml.asm`](../src/kernel/lib/xml.asm) — ~~1,609~~ Split 2026-06-10 into an 81-line orchestrator + 3 `xml_*.inc` modules (largest `xml_parse.inc` at 618). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/drivers/hid_parser.asm`](../src/kernel/drivers/hid_parser.asm) — ~~1,400~~ Split 2026-06-10 into a 62-line orchestrator + 4 `hid_parser_*.inc` modules (largest `hid_parser_parse.inc` at 510). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/drivers/fbperf.asm`](../src/kernel/drivers/fbperf.asm) — ~~1,251~~ Split 2026-06-10 into a 67-line orchestrator + 4 `fbperf_*.inc` modules (largest `fbperf_get.inc` at 502). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/proc/process.asm`](../src/kernel/proc/process.asm) — ~~1,224~~ Split 2026-06-10 into a 38-line orchestrator + 4 `process_*.inc` modules (largest `process_callbacks.inc` at 465). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/drivers/rtl8139.asm`](../src/kernel/drivers/rtl8139.asm) — ~~1,146~~ Split 2026-06-10 into a 56-line orchestrator + 4 `rtl8139_*.inc` modules (largest `rtl8139_init.inc` at 370). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/gui/taskbar.asm`](../src/kernel/gui/taskbar.asm) — ~~1,131~~ Split 2026-06-10 into a 115-line orchestrator + 3 `taskbar_*.inc` modules (largest `taskbar_draw.inc` at 563). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/drivers/mouse.asm`](../src/kernel/drivers/mouse.asm) — ~~1,019~~ Split 2026-06-10 into a 19-line orchestrator + 4 `mouse_*.inc` modules (largest `mouse_init.inc` at 400). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/proc/workqueue.asm`](../src/kernel/proc/workqueue.asm) — ~~783~~ Split 2026-06-10 into a 153-line orchestrator + 2 `workqueue_*.inc` modules (largest `workqueue_worker.inc` at 384). Byte-identical `KERNEL.BIN` (sha256 verified).
+- `src/kernel/proc/syscall_dispatch_core.inc` (727) — **skipped 2026-06-10**: the file is a single `syscall_entry` body containing only `.local` labels (no top-level seams), so any cut would break local-label scope. Leave intact.
 - [x] [`src/kernel/proc/usermode.asm`](../src/kernel/proc/usermode.asm) — split 2026-06-01 into a 24-line wrapper plus focused `usermode_*.inc` files; largest resulting file is `usermode_paging.inc` at 329 lines. Build verified with deterministic UEFI path.
 - [ ] [`src/kernel/drivers/i2c_hid.asm`](../src/kernel/drivers/i2c_hid.asm) — 1,612
 - [ ] [`src/kernel/lib/*`](../src/kernel/lib) — 1,519-line file
 - [ ] [`src/resources/design-system/*`](../src/resources/design-system) — 978-line file
 
 ### 3b. Stray TODO/STUB/FIXME — resolve or convert to tracked issues
+
+> ✅ **CLEARED 2026-06-10.** The dashboard's TODO regex is now case-sensitive
+> (`-CaseSensitive`, word-bounded) and the `## TODO/STUB/FIXME Counts` section
+> of a fresh `tools/complexity_dashboard.ps1` run is **empty** — zero stray
+> markers across `src/`. Genuine unfinished phases were converted to tracked
+> issue references (ramdisk write-back → #21); the rest were prose false
+> positives, reworded. §4.3 is met repo-wide.
 
 > ⚠️ **Measurement bug (found 2026-06-01).** The dashboard's TODO metric is
 > **case-insensitive** (`Select-String` default), so the per-file counts in §2/§5
@@ -125,10 +150,9 @@ not fanned out to agents.
 > `"todo.txt"` all match. The **genuine** stray-debt markers are only these:
 >
 > - [x] [`src/boot/uefi_loader.asm`](../src/boot/uefi_loader.asm) — ~~3 (`TODO Phase 1b.2/1b.3/1b.4`)~~ cleared 2026-06-03. 1b.2 (root-dir DATA.IMG walk) and 1b.3 (FAT32 chain→extent coalesce) were already implemented in `uefi_loader_storage_extents.inc` (`fat32_find_dirent` / `fat32_emit_data_extents`); the stale `[ ]` checkboxes were corrected to `[x]`. 1b.4 (partition-relative→absolute LBA, needs a kernel NVMe/USB-MSC backing driver) is a tracked issue (#21), referenced in-code via `see #21`.
-> - [ ] [`src/kernel/drivers/ramdisk.asm`](../src/kernel/drivers/ramdisk.asm) — 1 (`TODO(Phase 4)`)
-> - [ ] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — 1 (`No scrolling (TODO)`)
->   - 2026-06-04 NexusHL scaffold landed: `media.nxh` adds `mp_text_scroll_line`, and `media_player.nxh` handles Up/Down/PageUp/PageDown for XML/text previews. The remaining item is renderer consumption in the existing XML draw path; no new ASM/INC files were added.
-> - [ ] [`src/kernel/drivers/process.asm`](../src/kernel/proc/process.asm) — 1 (a `stub` body note, line 627)
+> - [x] [`src/kernel/drivers/ramdisk.asm`](../src/kernel/drivers/ramdisk.asm) — ~~1 (`TODO(Phase 4)`)~~ converted 2026-06-10: write-back is blocked on the kernel block-device driver, same blocker as issue #21; comment now reads `Phase 4 plan (see #21)` per §4.3 (tracked issue, no stray marker).
+> - [x] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — ~~1 (`No scrolling (TODO)`)~~ **done** (verified 2026-06-10): renderer consumption landed — `media_viewer_vector.inc` `nx_media_blit_xml` skips `mp_text_scroll_line` lines before drawing; `media.nxh`/`media_player.nxh` own the key handling. No `TODO` markers remain anywhere under `src/user/apps/`.
+> - [x] [`src/kernel/proc/process.asm`](../src/kernel/proc/process.asm) — ~~1 (a `stub` body note, line 627)~~ false positive: `process_find_by_window` is implemented; the comment said the body "was a stub" (historical prose). Reworded 2026-06-10.
 >
 > **Action:** make the dashboard regex case-sensitive and exclude `*_todo.md`
 > filename matches before chasing §4.3. Until then the TODO column is not a
@@ -138,11 +162,11 @@ not fanned out to agents.
 
 - [x] [`src/boot/uefi_loader.asm`](../src/boot/uefi_loader.asm) — ~~3~~ cleared 2026-06-03 (1b.2/1b.3 already implemented; 1b.4 → issue #21, `see #21` in-code)
 - [x] [`src/user/poc/poc_standalone_prelude.inc`](../src/user/poc/poc_standalone_prelude.inc) — ~~1~~ resolved (was a doc x-ref, reworded to `spec ref: security_todo.md §13`)
-- [ ] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — 1
-- [ ] [`src/kernel/drivers/ramdisk.asm`](../src/kernel/drivers/ramdisk.asm) — 1
+- [x] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — ~~1~~ done 2026-06-10 (scroll renderer consumption verified in `media_viewer_vector.inc`; no TODO markers under `src/user/apps/`)
+- [x] [`src/kernel/drivers/ramdisk.asm`](../src/kernel/drivers/ramdisk.asm) — ~~1~~ converted 2026-06-10 to tracked issue ref (`Phase 4 plan (see #21)`)
 - [x] Measured boot - SHA-256/HMAC owner is `src/kernel/nexushlk/crypto.nxh`; old hand-written assembly implementation removed.
-- [ ] [`src/kernel/core/kernel_lockdown.asm`](../src/kernel/core/kernel_lockdown.asm) — 1
-- [ ] [`src/include/kpti.inc`](../src/include/kpti.inc) — 1
+- [x] [`src/kernel/core/kernel_lockdown.asm`](../src/kernel/core/kernel_lockdown.asm) — ~~1~~ false positive (prose "this TODO targets"); reworded 2026-06-10 to cite security_todo.md §9
+- [x] [`src/include/kpti.inc`](../src/include/kpti.inc) — ~~1~~ false positive: `ENTRY-STUB RELOCATION` heading (identifier-style prose, not stray debt); left as-is
 
 ### 3c. Magic-constant hotspots — name in headers
 
@@ -176,7 +200,7 @@ not fanned out to agents.
 - [ ] MMIO/register offsets carry a comment citing the spec section they come from.
 
 ### 4.3 Debt
-- [ ] Zero stray `TODO`/`STUB`/`FIXME`. Anything unfinished is a tracked GitHub issue, referenced by number in the code comment.
+- [x] Zero stray `TODO`/`STUB`/`FIXME`. Anything unfinished is a tracked GitHub issue, referenced by number in the code comment. *(met repo-wide 2026-06-10; dashboard TODO section empty)*
 
 ### 4.4 Traceability  *(expand this — user to spec)*
 - [ ] Every public function appears in [`docs/kernel-function-reference.md`](kernel-function-reference.md).

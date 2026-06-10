@@ -149,6 +149,9 @@ def main():
     ap.add_argument("--b", required=True, help="KERNEL.B.RAW (ORG 0x200000)")
     ap.add_argument("--image", action="append", default=[],
                     help="extra image(s) to patch identically (optional)")
+    ap.add_argument("--export-table", default=None, metavar="FILE",
+                    help="also write marker + patched table bytes (the "
+                         "SYSSIG.ENV envelope payload) to FILE")
     args = ap.parse_args()
 
     a = read_file(args.a)
@@ -194,6 +197,12 @@ def main():
         mac_off = slot + 4 + APP_MANIFEST_ENTRY_SIZE * APP_MANIFEST_MAX
         buf[mac_off:mac_off + 32] = mac
         write_file(path, buf)
+
+    if args.export_table:
+        # Marker + patched table = the exact app_integrity_table bytes the
+        # kernel holds at runtime (KASLR-stable by construction: the digests
+        # zero the sliding qwords). This is the Track-2 SYSSIG.ENV payload.
+        write_file(args.export_table, MANIFEST_MARKER + bytes(patched_table))
 
     labels = ", ".join(str(app_id) for app_id, _off, _size, _entry_off in entries)
     print(f"  app-manifest: {len(entries)} segment digests patched "

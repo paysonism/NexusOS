@@ -19,6 +19,9 @@ extern net_info
 extern net_ipv4_tx_proto
 extern net_nic_poll_rx
 extern tick_count
+; Track 4 Part B item 4: per-boot secret-whitening mask (ram_atrest.nxh). The TCP
+; ISN key is stored XOR-masked at rest and unmasked only into a register at use.
+extern nx_secret_mask
 
 section .text
 
@@ -337,6 +340,8 @@ net_tcp_rng_ensure_seed:
     jnz .store
     mov rbx, SPLITMIX64_GOLDEN           ; non-zero guard
 .store:
+    ; Whiten the ISN key at rest: store plaintext ^ nx_secret_mask (item 4).
+    xor rbx, [rel nx_secret_mask]
     mov [rel net_tcp_rng_key], rbx
     ; Mix RDTSC into the running state too so the first nonce isn't 0.
     rdtsc
@@ -362,8 +367,11 @@ net_tcp_rng_next:
     mov rcx, SPLITMIX64_GOLDEN
     add rax, rcx
     mov [rel net_tcp_rng_state], rax
-    ; z = (state ^ key); SplitMix64 finaliser.
-    xor rax, [rel net_tcp_rng_key]
+    ; z = (state ^ key); SplitMix64 finaliser. Unmask the at-rest ISN key into a
+    ; register only at point of use (item 4): key = stored ^ nx_secret_mask.
+    mov rcx, [rel net_tcp_rng_key]
+    xor rcx, [rel nx_secret_mask]
+    xor rax, rcx
     mov rdx, rax
     shr rdx, 30
     xor rax, rdx
@@ -400,6 +408,10 @@ section .bss
 alignb 16
 net_tcp_segment: resb 1500
 net_tcp_pseudo:  resb 1536
+; Exported so the Track 4 volatile scrub (ram_volatile.nxh) can zero the TCP ISN
+; key/state (per-boot RDTSC^RDRAND secret) on shutdown/panic/tamper.
+global net_tcp_rng_key
+global net_tcp_rng_state
 net_tcp_rng_key:   resq 1
 net_tcp_rng_state: resq 1
 net_tcp_rng_inited: resb 1

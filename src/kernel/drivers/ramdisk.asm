@@ -316,9 +316,11 @@ ramdisk_storage_class:
 ;   * 1 Hz tick from main loop (best-effort)
 ;   * shutdown syscall (must complete)
 ;
-; Phase 1 status: this is a stub. The dispatch table to nvme_write_sectors /
-; usb_msc_write_sectors lands in Phase 4 (blkdev.asm). Today this returns 1
-; ("no backing configured") so behavior is unchanged.
+; Phase 1 status: write-back is not implemented yet. The dispatch table to
+; nvme_write_sectors / usb_msc_write_sectors lands in Phase 4 (blkdev.asm),
+; which is blocked on the kernel block-device backing driver — tracked as
+; issue #21 (same blocker as the loader's partition-relative LBA item). Today
+; this returns 1 ("no backing configured") so behavior is unchanged.
 ; ----------------------------------------------------------------------------
 ramdisk_flush:
     movzx eax, byte [abs VBE_INFO_ADDR + VBE_STORAGE_CLASS_OFF]
@@ -327,7 +329,7 @@ ramdisk_flush:
     mov eax, 1
     ret
 .rf_have_backing:
-    ; TODO(Phase 4): for each dirty page idx p in ramdisk_dirty_bitmap:
+    ; Phase 4 plan (see #21): for each dirty page idx p in ramdisk_dirty_bitmap:
     ;   1. translate p*8 (sector_in_region) -> physical_lba via the loader's
     ;      extent table at [VBE_STORAGE_EXT_PTR_OFF].
     ;   2. blk_write(class, lba, ramdisk_base + p*4096, 8 sectors).

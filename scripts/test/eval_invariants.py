@@ -334,6 +334,36 @@ def exhaustive_specs(mod):
             'cases': ((flag,) for flag in BOOL_SPACE),
             'expect': lambda args: 1 if args[0] == 0 else 0,
         },
+        # The expected fn deliberately IGNORES recovery_mode while the case
+        # space quantifies over it: any recovery-dependent behaviour in the
+        # predicate would show up as a mismatch (the non-bypass theorem).
+        'INV-RECOVERY-NO-BYPASS': {
+            'predicate': 'inv_recovery_no_measure_bypass',
+            'cases': ((rec, measured, expected, proceeds)
+                      for rec in BOOL_SPACE
+                      for measured in AUTH_SPACE
+                      for expected in AUTH_SPACE
+                      for proceeds in BOOL_SPACE),
+            'expect': lambda args: 1 if (args[3] == 0 or args[1] == args[2]) else 0,
+        },
+        'INV-IPC-NO-CONFUSED-DEPUTY': {
+            'predicate': 'inv_ipc_no_deputy_laundering',
+            'cases': ((req, dep, op)
+                      for req in AUTH_SPACE
+                      for dep in AUTH_SPACE
+                      for op in AUTH_SPACE),
+            'expect': lambda args: 1 if (args[2] & args[0] & args[1]) == args[2] else 0,
+        },
+        'INV-APP-MEM-ISOLATION': {
+            'predicate': 'inv_app_mem_isolation',
+            'cases': ((reader, owner, handle, granted)
+                      for reader in AUTH_SPACE
+                      for owner in AUTH_SPACE
+                      for handle in BOOL_SPACE
+                      for granted in BOOL_SPACE),
+            'expect': lambda args: 0 if (args[3] != 0 and args[0] != args[1]
+                                         and args[2] == 0) else 1,
+        },
     }
 
 

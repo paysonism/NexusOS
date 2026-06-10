@@ -42,55 +42,228 @@ Spec: `docs/signed-artifact-envelope.md`.
 
 ## P0 — threshold signing on top of the envelope
 
-- [ ] Define threshold policy per artifact class (boot accept, kernel/hypervisor
+- [x] Define threshold policy per artifact class (boot accept, kernel/hypervisor
       activation, driver, app, policy, config, firmware, recovery, key rotation,
-      key revocation) — extend `threshold_check.nxh`.
-- [ ] `COSIGNER_ROLES` field must be cross-checked against the class threshold:
-      reject if quorum/required roles unmet.
-- [ ] Reject duplicate signers, wrong-role signers, threshold downgrade.
-- [ ] Quorum change requires BOTH old and new quorum approval.
-- [ ] Negative tests: one stolen key cannot authorize; one build server cannot
+      key revocation) — `security_threshold_class_min_count` +
+      `security_threshold_class_required_mask` + `security_threshold_class_quorum_ok`
+      added to `src/tools/security/threshold_check.nxh` (2026-06-09).
+- [x] `COSIGNER_ROLES` field must be cross-checked against the class threshold:
+      reject if quorum/required roles unmet. DONE (2026-06-09):
+      `envelope_reader.nxh` captures min_count/allowed_mask/required_mask from
+      the COSIGNER_ROLES TLV and calls `security_threshold_class_quorum_ok`
+      returning `ENVR_ERR_QUORUM = 21` on failure. Three new executable negative
+      tests: `quorum_count_below_class_floor`, `quorum_missing_required_role`,
+      `quorum_allowed_mask_too_narrow`.
+- [x] Reject duplicate signers, wrong-role signers, threshold downgrade.
+      `security_threshold_rule_valid` + `security_threshold_has_duplicate3` +
+      `security_threshold_approves3` already in `threshold_check.nxh`.
+      `quorum_allowed_mask_too_narrow` covers the downgrade case.
+- [x] Quorum change requires BOTH old and new quorum approval.
+      DONE (2026-06-10): `quorum_change_admit` + `boot_quorum_check` in
+      `envelope_gate.nxh` — the gate keeps the ACTIVE per-class quorum table
+      (init from the build-time class policy); a change arrives as a staged
+      `\EFI\BOOT\KQUORUM.ENV` policy-class envelope (loader publishes at
+      VBE_INFO+0xA0/0xA8) carrying an 18-byte `QCH1` payload (kind + old rule
+      + new rule). Admission requires: fresh full Ed25519 verify (never the
+      hash cache), declared old rule == active rule (stale/replayed change
+      rejected, GATE_ERR_QCH_STATE=25), `security_threshold_rule_valid` +
+      `security_threshold_change_valid` non-downgrade (required roles can only
+      be added; GATE_ERR_QCH_RULE=26), and the verified signer-role set
+      (`ed25519_last_verified_roles`) satisfying BOTH the old AND new quorum
+      (GATE_ERR_QCH_APPROVAL=27). An accepted change RATCHETS: every later
+      `artifact_gate_admit` checks the envelope's declared (signed,
+      cache-keyed) quorum rule against the active table
+      (GATE_ERR_QUORUM_RATCHET=28) — binding even on hash-cache hits.
+      Verified: 11 host checks in `eval_ed25519.py` §8 + QEMU phases 5/6 of
+      `test_track2_envelope_callsites.ps1` ("[QUORUM] accepted" /
+      tampered -> "[QUORUM] rejected rc=" non-fatal / absent -> "[QUORUM]
+      none").
+- [x] Negative tests: one stolen key cannot authorize; one build server cannot
       release; one update server cannot ship; one recovery key cannot reset
-      trust anchors.
+      trust anchors. DONE (2026-06-10): `eval_ed25519.py` §7 — all four named
+      scenarios as executable negatives through the real NHL
+      `envelope_verify_signed` (single KERNEL key on a kernel artifact; one
+      key's signature repeated 3x counts as one role; single build-server key
+      on an app; single UPDATE key on an update; single RECOVERY key on a
+      recovery artifact — all ENVR_ERR_SIGCRYPTO), plus the declared-rule
+      forgery (min_count=1 below the class floor -> ENVR_ERR_QUORUM).
 
 ## P0 — reject matrix (every one needs a fail fixture)
 
-- [ ] unsigned artifact
-- [ ] malformed envelope (bad magic / short / overflow offsets)
-- [ ] mismatched artifact type (app signature presented for kernel)
-- [ ] wrong target domain
-- [ ] wrong target device / device class
-- [ ] expired signature window
-- [ ] stale revocation epoch
-- [ ] replayed artifact (nonce / monotonic counter)
-- [ ] downgraded artifact (monotonic version / rollback counter)
-- [ ] valid signature from a role not authorized for the type
-- [ ] manifest/payload disagreement (hash mismatch)
-- [ ] missing required field per class (have: runnable-missing-policy-dep)
-- [ ] non-canonical / duplicate / descending field encoding (have: fixture)
+DONE (2026-06-09): every row below is an **executable negative test**, not just
+a declared fixture. `scripts/test/eval_envelope.py` builds each case as real
+envelope bytes and interprets the actual in-kernel reader source
+(`envelope_reader.nxh`, via the production compiler's parser with lb/lw/lq
+mapped onto the blob), asserting the exact `ENVR_ERR_*` reason code. Wired into
+`test_nhl_security_guards.ps1`; per-row `.fixture` files live in
+`tests/security/fixtures/signed_envelope/` and are cross-checked against the
+evaluator's case table so they cannot drift.
+
+- [x] unsigned artifact
+- [x] malformed envelope (bad magic / short / overflow offsets)
+- [x] mismatched artifact type (app signature presented for kernel)
+- [x] wrong target domain
+- [x] wrong target device / device class
+- [x] expired signature window (+ not-yet-valid)
+- [x] stale revocation epoch
+- [x] replayed artifact (rollback counter below required)
+- [x] downgraded artifact (monotonic version below required)
+- [x] valid signature from a role not authorized for the type
+- [x] manifest/payload disagreement (hash mismatch, constant-control-flow compare)
+- [x] missing required field per class (runnable-missing-policy-dep)
+- [x] non-canonical / duplicate / descending field encoding
+- [x] (extra) trailing garbage in TLV region; unknown critical field;
+      partial / oversized signature block; bad field_count range
 
 ## P1 — host integration (the real producers/consumers)
 
-- [ ] Write a memory-safe host *envelope writer* (build-time) that emits v1
+- [x] Write a memory-safe host *envelope writer* (build-time) that emits v1
       envelopes for build outputs; keep it out of the running OS image.
-- [ ] Write the kernel/boot *envelope reader* that decodes TLVs and calls the
+      DONE (2026-06-09): `scripts/build/write_envelope.py` — CLI tool, produces
+      canonical v1 envelopes with correct TLV ordering, per-class quorum defaults,
+      and placeholder sig slots; output accepted by `envelope_verify` in the
+      evaluator. Signature slots are 0x5A placeholders pending Ed25519 crypto.
+- [x] Write the kernel/boot *envelope reader* that decodes TLVs and calls the
       NHL predicates — this is what turns "checker exists" into "system enforces".
-- [ ] Bind envelope verification into the boot chain (P1 Boot Chain track).
-- [ ] Bind envelope verification into the update path (P1 Update System track).
-- [ ] Cache verified immutable artifacts by hash (perf gate).
+      DONE (2026-06-09): `src/kernel/nexushlk/envelope_reader.nxh`
+      (`envelope_verify`) — zero-asm, bounds-checked byte walk, distinct
+      `ENVR_ERR_*` reason code per reject-matrix row; pinned the v1 TLV wire
+      encoding + `payload_len` header field in `docs/signed-artifact-envelope.md`;
+      compiled into the kernel image alongside `signed_envelope.nxh` +
+      `signed_artifact_check.nxh` (same sources the host fixture gate compiles,
+      so contract and enforcement cannot drift). NOT yet bound to a boot/update
+      call site, and signature *crypto* (threshold Ed25519 over the canonical
+      bytes) is still open — the reader binds the signed HASH field to a
+      caller-computed payload SHA-256.
+- [x] Bind envelope verification into the boot chain (P1 Boot Chain track).
+      DONE (2026-06-10): `src/kernel/nexushlk/envelope_gate.nxh` —
+      `artifact_gate_admit` (the single admission entry point; computes the
+      payload SHA-256 itself via crypto.nxh and calls `envelope_verify_signed`)
+      + `syssig_verify_boot`, called from kmain at K5. The UEFI loader reads
+      `\EFI\BOOT\SYSSIG.ENV` (built + DEV-quorum-signed every build by
+      build_uefi.ps1 step 2a3 via write_envelope.py) and publishes (base,size)
+      at VBE_INFO+0x80/0x88; the kernel FAIL-CLOSED panics ('SSG0'..'SSG3') if
+      the envelope is missing, rejected, or its payload is not byte-identical
+      to the in-image per-app integrity table — which transitively covers
+      every app segment hash, so no app code runs without threshold
+      signatures. The gate also pins the call site's artifact class
+      (GATE_ERR_CALLER_TYPE = 23: a validly signed envelope of the wrong
+      class is inadmissible).
+- [x] Bind envelope verification into the update path (P1 Update System track).
+      DONE (2026-06-10): `boot_update_check` (same module, kmain K5) — the
+      loader reads OPTIONAL `\EFI\BOOT\KUPDATE.ENV` (VBE_INFO+0x90/0x98); the
+      verdict comes ONLY from `artifact_gate_admit` (type=update, class
+      quorum 3-of roles BOOT+KERNEL+UPDATE) and is latched + logged
+      "[UPDATE] accepted|rejected rc=N|none". Staging/commit of an accepted
+      artifact is the next Update System increment; until then no other path
+      accepts update input, so unsigned update input is unreachable.
+- [x] Cache verified immutable artifacts by hash (perf gate).
+      DONE (2026-06-10): 8-entry round-robin cache in envelope_gate.nxh keyed
+      by the SHA-256 of the ENTIRE envelope byte range (header+payload+sigs);
+      a hit skips only the Ed25519 crypto — structure + context-dependent
+      semantics (window/device/anti-rollback) are re-checked on every admit;
+      only accepted envelopes are inserted. Proven on host (eval_ed25519
+      gate suite: hit/miss counters) and in-kernel (QEMU "[SYSSIG] ok c=1").
+- [ ] Residuals for full "no unsigned input anywhere": the loader does not
+      yet envelope-verify KERNEL.BIN itself (pre-kernel stage; needs the
+      verifier ported into the loader or a measured handoff); the gate's
+      verifier context pins now=1 / device_id=1 / floors=1 (RTC wallclock
+      binding + persistent anti-rollback counters are open); driver/config/
+      policy artifact classes have no loaded artifacts yet.
+
+### Verification (call-site binding)
+
+- Host: `scripts/test/eval_ed25519.py` sections 5–6 (run by
+  `test_nhl_security_guards.ps1`) — transpiles crypto.nxh + envelope_gate.nxh
+  with the production frontend and exercises admit/cache/wrong-class/
+  fail-closed-panic/update-latch paths (15 checks).
+- QEMU end-to-end: `scripts/test/test_track2_envelope_callsites.ps1` — 4
+  boots: signed accept (+ in-kernel cache hit), tampered SYSSIG fail-closed
+  (no [/BOOTTIME]), signed KUPDATE accepted, tampered KUPDATE rejected
+  non-fatally. All 13 checks green 2026-06-10.
+
+### Gotcha: stale `ram_amnesiac.asm` breaks sig-coverage
+
+If `ram_amnesiac.asm` (or any other stale raw-asm shim that was not migrated
+to zero-asm NHLK) is still present in the build, it will be included in the
+kernel image outside the envelope's signed coverage. The envelope's HASH field
+covers only the canonically-assembled payload bytes; any unsigned bytes that
+execute at ring-0 break the "signed everything" invariant. **Audit the build
+manifest after any new raw-asm file appears; the `--forbid-asm` gate catches
+new violations at compile time but does not retroactively flag stale files that
+were already excluded from the NHLK build.**
 
 ## P1 — fuzzing & parser safety
 
-- [ ] Fuzz the envelope decoder (malformed TLV, length overflow, deep nesting,
+- [x] Fuzz the envelope decoder (malformed TLV, length overflow, deep nesting,
       duplicate/critical-unknown fields, path traversal in bundle names).
-- [ ] Differential test: two independent decoders agree on accept/reject.
-- [ ] Property test: canonicalize(decode(x)) == x for all accepted envelopes.
+      DONE (2026-06-10): `scripts/test/fuzz_envelope.py` — structure-aware
+      mutators (15 classes: byte flips, truncation, header/length extremes,
+      duplicate/dropped/shuffled fields, unknown critical ids incl.
+      path-traversal value blobs, non-minimal widths, wrong value lengths,
+      sig-block games, field_count lies, splices) + raw random blobs, run
+      against the REAL interpreted `envelope_verify` (same eval_envelope.py
+      interpreter over production NHL source). Safety invariants per input:
+      the blob is placed at the END of interpreter memory so ANY
+      out-of-bounds load raises (verified to fire on a planted mid-TLV
+      truncation with a lying total_len); bounded-loop cap; result must be a
+      defined ENVR_* code. Deterministic seed; `--seed/--iters` to explore.
+      Wired into `test_nhl_security_guards.ps1`.
+- [x] Differential test: two independent decoders agree on accept/reject.
+      DONE (2026-06-10): clean-room Python `ref_verify` in fuzz_envelope.py
+      (written from docs/signed-artifact-envelope.md + the policy tables, not
+      the reader's control flow) compared against the kernel reader on every
+      corpus + fuzz input (54 valid envelopes across all 9 artifact classes ×
+      domains × target kinds, plus all fuzz inputs). No splits across 3 seeds
+      / ~9.5k inputs; detection plumbing meta-tested with a planted
+      always-accept ref.
+- [x] Property test: canonicalize(decode(x)) == x for all accepted envelopes.
+      DONE (2026-06-10): every accepted envelope is decoded to fields and
+      re-emitted through the canonical writer; byte-identical or the suite
+      fails (meta-tested with a planted non-minimal-width encoding).
 
 ## Done definition for Track 2
 
-- [ ] Every trusted artifact is a signed v1 envelope; unsigned input is impossible
-      to accept anywhere in boot/kernel/update.
-- [ ] Every entry in the reject matrix has a passing negative test.
-- [ ] Threshold quorum is enforced from the `COSIGNER_ROLES` field per class.
-- [ ] A memory-safe writer produces, and an in-OS reader verifies, real envelopes.
-- [ ] No single stolen key authorizes any critical action.
+- [~] Every trusted artifact is a signed v1 envelope; unsigned input is impossible
+      to accept anywhere in boot/kernel/update. (2026-06-10: boot-chain +
+      update-path call sites are BOUND to `envelope_verify_signed` via
+      envelope_gate.nxh — app code is covered transitively through the signed
+      integrity table, and update input has no non-gate path. Remaining for
+      [x]: loader-side KERNEL.BIN envelope verification, RTC/now binding,
+      persistent anti-rollback floors — see "Residuals" above.)
+- [x] Every entry in the reject matrix has a passing negative test.
+      (28 cases including 3 new quorum cases; all green 2026-06-09.)
+- [x] Threshold quorum is enforced from the `COSIGNER_ROLES` field per class.
+      (Structural quorum policy enforced at parse time via
+      `security_threshold_class_quorum_ok`; actual Ed25519 multi-sig crypto
+      LANDED 2026-06-10 — see below.)
+- [x] **Real Ed25519 threshold-signature verification** (2026-06-10):
+      `src/kernel/nexushlk/ed25519_check.nxh` — zero-asm RFC 8032 verify
+      (SHA-512, mod-2^255-19 field arithmetic over 32-bit digits, point
+      decompression, [S]B == R + [h]A) compiled into the kernel image
+      (`--forbid-asm`, build green, QEMU boot healthy).
+      `envelope_verify_signed` = `envelope_verify` (structure+semantics) AND
+      `ed25519_envelope_sigs_ok`: every 64-byte signature in the detached
+      block is checked against the allowed threshold-role public keys over
+      the canonical bytes [0, header_len+payload_len); a role counts at most
+      once; accept iff >= min_count distinct allowed roles verified AND all
+      required roles verified, else `ENVR_ERR_SIGCRYPTO` (22).
+      Host side: `scripts/build/ed25519_host.py` (pure-Python RFC 8032) +
+      `write_envelope.py --sign-roles` emits REAL quorum signatures (DEV keys
+      from fixed seeds; production re-bakes `ed_role_pubs` from HSM keys).
+      Tested by `scripts/test/eval_ed25519.py` (real NHL source through the
+      production nxhc frontend, transpiled): RFC 8032 TEST 1-3 + tamper/
+      malleability negatives, SHA-512 vs hashlib differential, pubkey-drift
+      guard, and envelope accept / tampered-sig / placeholder / under-quorum /
+      missing-required-role rejects. Wired into test_nhl_security_guards.ps1.
+- [x] A memory-safe writer produces, and an in-OS reader verifies, real envelopes.
+      (`scripts/build/write_envelope.py` writer + `envelope_reader.nxh` reader;
+      round-trip verified via `eval_envelope.py`.)
+- [x] No single stolen key authorizes any critical action *at the envelope
+      layer* (2026-06-10): `envelope_verify_signed` requires >= class-floor
+      distinct role keys (real Ed25519) with all class-required roles present;
+      one key can contribute at most one role. Verified negatively
+      (under-quorum and missing-required-role envelopes reject with
+      ENVR_ERR_SIGCRYPTO). System-wide closure still needs the boot/update
+      call sites to be bound to `envelope_verify_signed` (P1 above) so no
+      unsigned path remains.

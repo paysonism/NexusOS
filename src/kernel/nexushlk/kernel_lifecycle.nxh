@@ -271,6 +271,9 @@ fn kmain() {
     tss_init();
     kernel_canary_init();
     slot_cap_hmac_init();             # seed per-slot cap-mask HMACs (canary final)
+    nx_mem_key_ensure();              # Track 4 Part B: draw the per-boot ephemeral memory key (canary final)
+    nx_secret_mask_seed();            # Track 4 Part B item 4: derive the per-boot secret-whitening mask from nx_mem_key
+    nx_atrest_selftest();             # Track 4 Part B item 2: round-trip the at-rest cipher under the live key (fail-soft)
     bootlog2(TAG_K, D0 + 4);          # K4: descriptors/canary/cap HMAC ready
 
     measured_boot_init();             # fold boot stages -> mb_digest
@@ -280,6 +283,13 @@ fn kmain() {
     cfg "LEGACY_BLOB_HMAC" {
         app_blob_verify_signature();  # rollback: whole-blob MAC; fails closed
     }
+    # Track 2 boot-chain call sites (envelope_gate.nxh): the integrity table
+    # verified above must ALSO arrive inside a threshold-Ed25519-signed
+    # envelope (SYSSIG.ENV, fail-closed panic), and any staged update artifact
+    # (KUPDATE.ENV) is admitted/rejected only through the same signed gate.
+    syssig_verify_boot();
+    boot_update_check();
+    boot_quorum_check();              # staged KQUORUM.ENV: dual-quorum ratchet
     bootlog2(TAG_K, D0 + 5);          # K5: app integrity manifest ready
 
     l3_install_syscall_stack_pt();    # per-slot syscall-stack guard pages
@@ -502,8 +512,14 @@ fn kmain() {
 
             sb(&main_loop_stage, 4);
             slowmo_step(5);
-            if feat_on(FEAT_DEBUG_OVERLAY) != 0 {
-                usb_debug_overlay();  # USB + I2C-HID (touchpad) debug overlay
+            # usb_debug_overlay lives in debug_overlay.asm, which kernel_build.asm
+            # only %includes when !RELEASE_BUILD. Gate the call to match (the gate
+            # symbol ENABLE_DEBUG_SERIAL is defined iff !RELEASE_BUILD) so a
+            # -Release link doesn't fail on the undefined symbol.
+            cfg "ENABLE_DEBUG_SERIAL" {
+                if feat_on(FEAT_DEBUG_OVERLAY) != 0 {
+                    usb_debug_overlay();  # USB + I2C-HID (touchpad) debug overlay
+                }
             }
             sb(&main_loop_stage_done, 4);
 

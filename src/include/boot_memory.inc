@@ -224,6 +224,35 @@ VBE_BOOTCFG_BASE_OFF    equ 0x70   ; u64 base of the loaded config text (0 = non
 VBE_BOOTCFG_SIZE_OFF    equ 0x78   ; u64 byte length of the config text
 BOOTCFG_MAX_SIZE        equ 0x1000 ; 4 KiB cap (one firmware page)
 
+; --- Track 2 signed-artifact envelopes (SYSSIG.ENV / KUPDATE.ENV) ----------
+; The loader reads two OPTIONAL signed-artifact envelope files
+; (docs/signed-artifact-envelope.md v1) from the ESP and publishes (base,size)
+; here for the kernel's envelope gate (src/kernel/nexushlk/envelope_gate.nxh):
+;   SYSSIG.ENV  - REQUIRED by the kernel (fail-closed): quorum-signed envelope
+;                 whose payload is the per-app integrity table; verified via
+;                 envelope_verify_signed at boot (K5) before any app runs.
+;   KUPDATE.ENV - optional staged update artifact; accepted/rejected through
+;                 the same gate (the only admission path for update input).
+; Absent file -> base/size 0 (kernel policy: SYSSIG missing = boot panic,
+; KUPDATE missing = "no update staged").
+VBE_SYSSIG_BASE_OFF     equ 0x80   ; u64 base of loaded SYSSIG.ENV (0 = none)
+VBE_SYSSIG_SIZE_OFF     equ 0x88   ; u64 byte length
+VBE_KUPDATE_BASE_OFF    equ 0x90   ; u64 base of loaded KUPDATE.ENV (0 = none)
+VBE_KUPDATE_SIZE_OFF    equ 0x98   ; u64 byte length
+SYSSIG_MAX_SIZE         equ 0x2000   ; 8 KiB cap (header + 1460B payload + sigs)
+KUPDATE_MAX_SIZE        equ 0x100000 ; 1 MiB cap for a staged update envelope
+
+; --- Track 2 quorum-change tracking path (KQUORUM.ENV) ---------------------
+; Optional staged quorum-change artifact: a policy-class envelope whose
+; payload requests raising the active per-class threshold quorum. Admitted
+; only by quorum_change_admit (envelope_gate.nxh), which requires the
+; signature set to satisfy BOTH the current (old) and the proposed (new)
+; quorum and validates the transition via security_threshold_change_valid.
+; Absent file -> base/size 0 -> "no quorum change staged".
+VBE_KQUORUM_BASE_OFF    equ 0xA0   ; u64 base of loaded KQUORUM.ENV (0 = none)
+VBE_KQUORUM_SIZE_OFF    equ 0xA8   ; u64 byte length
+KQUORUM_MAX_SIZE        equ 0x2000 ; 8 KiB cap (header + 18B payload + sigs)
+
 ; Feature bits — MUST stay in lockstep with src/kernel/nexushlk/boot_features.nxh.
 ; (asm callers — e.g. the SYS_DISPLAY_SET_MODE gate — use these names.)
 FEAT_CURSOR_DRAW           equ 1

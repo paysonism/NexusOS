@@ -21,8 +21,8 @@ Per-track working plans (with their own granular TODOs and verified increments):
 - `docs/track1-repo-enforcement-todo.md` — P0 repository enforcement.
 - `docs/track2-signed-everything-todo.md` — P0 signed-everything keystone.
 - `docs/track3-sel4-validity-todo.md` — P2 seL4 validity / invariants.
-- `docs/track4-ram-anti-forensic-todo.md` — RAM-only / amnesiac execution +
-  best-effort anti-forensic memory (threat-model expansion: snapshot/RAM-dump
+- `docs/track4-ram-secure-erasure-todo.md` — RAM-only / volatile execution +
+  best-effort secure-erasure memory (threat-model expansion: snapshot/RAM-dump
   attacker, with the irreducible software residual documented).
 
 Single verification entry point for all of the above:
@@ -615,14 +615,14 @@ verifies that. Largest unaddressed surface.
 - [ ] Zeroize transient secrets after use everywhere (HMAC scratch, key
       derivation buffers, decrypted pages).
 - [ ] Secure-delete semantics for the FS.
-- See `docs/track4-ram-anti-forensic-todo.md` for the in-RAM (not at-rest)
+- See `docs/track4-ram-secure-erasure-todo.md` for the in-RAM (not at-rest)
   variant of this work.
 
 ### P1: Hardware Memory Encryption (opportunistic — detect + enable, no-op if absent)
 Transparent memory-controller AES so a cold-boot / physical-DIMM / DMA-of-DRAM
 capture is ciphertext. Same scaffold pattern as CET/SMAP/KPTI (detect always
 compiled, enable gated, status via SYS_SYSINFO). Full detail + MSR/CPUID specifics
-in `docs/track4-ram-anti-forensic-todo.md` Part C.
+in `docs/track4-ram-secure-erasure-todo.md` Part C.
 
 - [x] **Intel TME** detect (CPUID.7.0.ECX[13]; IA32_TME_ACTIVATE MSR 0x982 bit 1
       = enabled / bit 0 = locked) — OS detects + asserts (BIOS enables+locks).

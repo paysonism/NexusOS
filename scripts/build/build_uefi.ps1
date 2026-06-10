@@ -207,6 +207,8 @@ $KernelModules = @(
     @{ src = 'src\kernel\nexushlk\cpu_acct.nxh';    out = 'build\nxh\cpu_acct.asm' },
     @{ src = 'src\kernel\nexushlk\serial_console.nxh'; out = 'build\nxh\serial_console.asm' },
     @{ src = 'src\kernel\nexushlk\crypto.nxh'; out = 'build\nxh\crypto.asm' },
+    @{ src = 'src\kernel\nexushlk\ram_volatile.nxh'; out = 'build\nxh\ram_volatile.asm' },
+    @{ src = 'src\kernel\nexushlk\ram_atrest.nxh'; out = 'build\nxh\ram_atrest.asm' },
     @{ src = 'src\kernel\nexushlk\syscall_validate.nxh'; out = 'build\nxh\syscall_validate.asm' },
     @{ src = 'src\kernel\nexushlk\syscall_secure.nxh'; out = 'build\nxh\syscall_secure.asm' },
     @{ src = 'src\kernel\nexushlk\wm_helpers.nxh'; out = 'build\nxh\wm_helpers.asm' },
@@ -220,7 +222,21 @@ $KernelModules = @(
     @{ src = 'src\kernel\nexushlk\net_dhcp_dispatch.nxh'; out = 'build\nxh\net_dhcp_dispatch.asm' },
     @{ src = 'src\kernel\nexushlk\boot_features.nxh'; out = 'build\nxh\boot_features.asm' },
     @{ src = 'src\kernel\nexushlk\cursor.nxh'; out = 'build\nxh\cursor.asm' },
-    @{ src = 'src\kernel\nexushlk\eth.nxh'; out = 'build\nxh\eth.asm' }
+    @{ src = 'src\kernel\nexushlk\eth.nxh'; out = 'build\nxh\eth.asm' },
+    # Track 2 signed-envelope enforcement: the structural + semantic policy
+    # kernels (shared with the host checker fixtures) and the in-kernel reader
+    # that walks envelope bytes and calls them (envelope_verify).
+    @{ src = 'src\tools\security\signed_envelope.nxh'; out = 'build\nxh\signed_envelope.asm' },
+    @{ src = 'src\tools\security\signed_artifact_check.nxh'; out = 'build\nxh\signed_artifact_check.asm' },
+    @{ src = 'src\tools\security\threshold_check.nxh'; out = 'build\nxh\threshold_check.asm' },
+    @{ src = 'src\kernel\nexushlk\envelope_reader.nxh'; out = 'build\nxh\envelope_reader.asm' },
+    # Real Ed25519 threshold-signature crypto for the envelope
+    # (envelope_verify_signed = structure + semantics + signatures).
+    @{ src = 'src\kernel\nexushlk\ed25519_check.nxh'; out = 'build\nxh\ed25519_check.asm' },
+    # Track 2 artifact admission gate: binds envelope_verify_signed into the
+    # boot-chain (SYSSIG.ENV) + update-path (KUPDATE.ENV) call sites, with the
+    # verified-artifact hash cache in front of the Ed25519 crypto.
+    @{ src = 'src\kernel\nexushlk\envelope_gate.nxh'; out = 'build\nxh\envelope_gate.asm' }
 )
 foreach ($m in $KernelModules) {
     $mSrc = Join-Path $Root $m.src
@@ -388,8 +404,23 @@ if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED - blob signing' -ForegroundColor
 # whole-blob HMAC path intact (phase 1), while producing the per-segment SHA-256
 # table future boot/launch verification code will consume.
 Write-Host '[2a2] Patching per-app integrity manifest...' -ForegroundColor Yellow
-& python (Join-Path $Root 'tools\build\gen_app_manifest.py') --a $kernelA --b $kernelB
+$syssigPayload = Join-Path $BUILD_DIR 'syssig_payload.bin'
+& python (Join-Path $Root 'tools\build\gen_app_manifest.py') --a $kernelA --b $kernelB --export-table $syssigPayload
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED - app manifest patch' -ForegroundColor Red; exit 1 }
+
+# 2a3. Track 2 (signed everything): wrap the integrity table in a quorum-signed
+# v1 envelope -> ESP\SYSSIG.ENV. The kernel's boot-chain call site
+# (envelope_gate.nxh syssig_verify_boot, kmain K5) verifies it fail-closed via
+# envelope_verify_signed and requires the payload to be byte-identical to the
+# in-image app_integrity_table. DEV role keys sign here; production signing
+# replaces this step with the HSM signer.
+Write-Host '[2a3] Signing SYSSIG.ENV (Track 2 envelope)...' -ForegroundColor Yellow
+& python (Join-Path $Root 'scripts\build\write_envelope.py') `
+    --payload $syssigPayload --out "$ESP\SYSSIG.ENV" `
+    --type app --device-id 1
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED - SYSSIG.ENV signing' -ForegroundColor Red; exit 1 }
+$sz = (Get-Item "$ESP\SYSSIG.ENV").Length
+Write-Host "  OK - SYSSIG.ENV ($sz bytes)" -ForegroundColor Green
 
 # 2b. Extract APPS.BIN from pass A BEFORE wrapping. The extractor scans for
 # byte markers in the raw kernel image; the KASLR container header would shift
@@ -658,6 +689,7 @@ if ($CopyToE -or -not $PSBoundParameters.ContainsKey('CopyToE')) {
             Copy-Item "$ESP\BOOTX64.EFI" $eEfi -Force
             Copy-Item "$ESP\KERNEL.BIN"  $eEfi -Force
             Copy-Item "$ESP\APPS.BIN"    $eEfi -Force
+            Copy-Item "$ESP\SYSSIG.ENV"  $eEfi -Force
             Copy-Item "$ESP\DATA.IMG"    $eEfi -Force
             Write-Host '  OK - E:\EFI\BOOT\ updated (boot-ready)' -ForegroundColor Green
         } catch {

@@ -92,6 +92,9 @@ s_kern_path:    ustr "\EFI\BOOT\KERNEL.BIN"
 s_apps_path:    ustr "\EFI\BOOT\APPS.BIN"
 s_data_path:    ustr "\EFI\BOOT\DATA.IMG"
 s_bootcfg_path: ustr "\EFI\BOOT\BOOTCFG.TXT"
+s_syssig_path:  ustr "\EFI\BOOT\SYSSIG.ENV"
+s_kupdate_path: ustr "\EFI\BOOT\KUPDATE.ENV"
+s_kquorum_path: ustr "\EFI\BOOT\KQUORUM.ENV"
 s_klog_path:    ustr "\KLOG.TXT"
 
 ; FAT32 8.3 path components for \EFI\BOOT\DATA.IMG extent resolution.

@@ -1,0 +1,16 @@
+# INV-IPC-NO-CONFUSED-DEPUTY vectors —
+# predicate inv_ipc_no_deputy_laundering(requester_auth, deputy_auth, op_auth).
+invariant=INV-IPC-NO-CONFUSED-DEPUTY
+predicate=inv_ipc_no_deputy_laundering
+# op {MEMORY_GRANT} held by both requester {1,8} and deputy {1,4}
+case=accept | 9, 5, 1
+# empty op is always within any intersection
+case=accept | 0, 0, 0
+# requester and deputy identical, op equals both
+case=accept | 7, 7, 7
+# LAUNDERING: deputy has DMA_MAP (4), requester does not — requester gains DMA via the deputy
+case=reject | 1, 5, 4
+# reverse deputy abuse: requester has PERSIST (8), deputy does not — requester pushes deputy past its own authority
+case=reject | 8, 1, 8
+# op outside both
+case=reject | 1, 2, 64
