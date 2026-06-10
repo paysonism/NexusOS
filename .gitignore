@@ -2,9 +2,11 @@
 .claude/
 .claude/worktrees/
 .claude/worktrees/agent-*/
+worktrees/
 
 # Local-only internal notes / scratch (never publish)
 /MEMORY.md
+/docs/The final goal after the rest.txt
 /docs/security_todo.md
 /sandbox_shadow/
 /tools/agentchat/
@@ -27,6 +29,8 @@ _ser.txt
 _test_output.txt
 qemu_debug.log
 serial_launch_debug.log
+qemu_out.txt
+qemu_err.txt
 
 # External or sensitive material that belongs outside the OS repo
 Unrelated/

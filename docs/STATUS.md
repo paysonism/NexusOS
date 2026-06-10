@@ -68,15 +68,20 @@ BSP, on every flip.
 
 Three tiers of work, ordered by effort and risk:
 
-### Tier 1 — Faster CPU paths (1-3 weeks, low risk)
-- SSE2/AVX2 memcpy for `display_flip` (currently scalar `movsq`).
-- Dirty-rect tracking so we don't blit the whole screen each frame.
-  Window manager already knows which windows moved.
-- Offload `display_flip` to an AP core (SMP path is up; PAT already
-  propagates). BSP returns to interactive work while the AP blits.
+### Tier 1 — Faster CPU paths — **DONE (2026-06-09)**
+- [x] SSE2 non-temporal copy (8×`movntdq`/128B) in `display_flip` and
+  `display_flip_rect` (`src/kernel/drivers/display.asm`).
+- [x] Dirty-rect tracking — `render_mark_dirty` + per-rect
+  `display_flip_rect` flush (`src/kernel/gui/render.asm`), counters in
+  `fbperf.asm`.
+- [x] AP-core flip offload — `render_flush` snapshots the dirty list and
+  submits `render_flip_job` to the SMP work queue (WQ_PRIO_HIGH, one job
+  in flight, `workqueue_wait_timeout` drain so a dead AP can't freeze the
+  GUI, inline fallback on single-core/queue-full). BSP returns to
+  interactive work while the AP blits.
 
-Expected: 2–5× on top of the WC win we already have. No new
-firmware, no new microcontrollers, no PSP front-door.
+Tier 1 is the only surviving tier (see the supersession note above);
+with it landed this section is closed.
 
 ### Tier 2 — DCN flip queue (4-8 weeks, medium risk)
 - Page-flip via the display controller instead of CPU copy. Still
@@ -202,8 +207,8 @@ software stack — there is no silicon to stop them, and we do not pretend to.
 A fused, hardware-verified boot chain is a non-goal for this project.
 
 **Refinement (2026-06-04): a one-shot RAM-dump / snapshot attacker is now a
-BEST-EFFORT in-scope goal** (Track 4, `docs/track4-ram-anti-forensic-todo.md`).
-NexusOS is moving to RAM-only / amnesiac operation with three layers:
+BEST-EFFORT in-scope goal** (Track 4, `docs/track4-ram-secure-erasure-todo.md`).
+NexusOS is moving to RAM-only / volatile operation with three layers:
   - **Software at-rest encryption** of stored DRAM (FS cache, app blobs, idle slot
     arenas, kernel secrets) under a per-boot ephemeral key — protects *stored*
     data; the only software residual is the on-die/cache state and the single
@@ -222,12 +227,48 @@ NexusOS is moving to RAM-only / amnesiac operation with three layers:
     tags, cap-mask HMAC, W^X + nk-monitor, measured boot + blob MAC, KPTI/SMAP,
     anomaly+strike teardown, default-deny caps, shadow stack (Track 4 Part D).
 
+**Part C honest caveats (do not overclaim FME).** Two limits bound any
+hardware-full-memory-encryption (TME/SME) claim: (a) **QEMU TCG does not emulate
+the memory-controller crypto** — guest DRAM stays plaintext on the host, so the
+`pmemsave` test validates only the Part B *software* at-rest layer; a TME/SME
+"active" row reported from a TCG boot proves the detect/report path, not that DRAM
+is encrypted. Part C is verifiable only on real silicon (or KVM+SEV). (b) **TME/SME
+defeat passive DRAM capture only** (cold-boot / physical-DIMM / DMA-of-DRAM); they
+do NOT defend against code executing on the same CPU, since the memory controller
+decrypts transparently for any on-die access — that attacker is the §1-§12 ring-3
+containment / Part D (leak != elevation) job, not FME's.
+
 This does NOT contradict the line above: a **sustained** attacker who reads DRAM
 repeatedly or single-steps the CPU still wins (they read on-die plaintext), and is
 out of scope. Earlier wording said this was "impossible in software" — that
 overstated it: software protects *stored* data and hardware FME extends that to
 all DRAM; only on-die transient state is irreducible. Every claim is bounded by
 Track 4's `pmemsave` test and the Part D planted-leak negative test.
+
+**Part A landed (2026-06-08): RAM-only / volatile execution.** NexusOS runs from
+RAM only — FS writes go to a session-only ramdisk (`ata_write_sectors` →
+`ramdisk_intercept_write`; the `ramdisk_flush` write-back is an unimplemented
+stub) and there is no swap / hibernation / scratch file, so nothing survives
+power-off by construction. `src/kernel/nexushlk/ram_volatile.nxh` (zero-asm)
+scrubs the per-boot/per-slot secrets (`kernel_canary`, `l3_boot_nonce`,
+`l3_slot_key[]`, code/stack ASLR slides, `l3_code_hash[]`, `slot_cap_hmac[]`,
+TCP ISN key) and the live app-slot arenas on three teardown paths:
+  - **shutdown** — serial `'w'` → `nx_volatile_wipe_halt` (scrub + wipe live
+    arenas + `[WIPED]` + HLT; `pmemsave`-inspectable). `nx_volatile_shutdown` is
+    the power-off variant.
+  - **panic** — `kernel_panic_canary` / `kernel_panic_shadow` →
+    `nx_volatile_panic_scrub` (secrets only) before the final HLT.
+  - **tamper** — nk-monitor #PF, cap-mask HMAC mismatch and code-range mismatch
+    all fail closed into `kernel_panic_canary`, so the panic hook covers them.
+The arena sweep is page-table-walk-driven (only PRESENT pages, skipping the
+non-present user-stack guard) and brackets its writes in the nk-monitor WP
+window + `smap_open` so it can zero the read-only W^X code pages and the
+user-PTE arena pages from ring 0. Verified in QEMU: a live app slot is wiped and
+`[WIPED]` is reached with no fault. **Residual still plaintext at dump time**
+(the irreducible live set, unchanged by Part A): the executing `.text`, live
+page tables, the qrng seed in the now-RO image, and any secret currently in a
+register/cache. Part B (at-rest encryption) and Part C (HW FME) are what shrink
+that residual further; do not claim Part A erases it.
 
 **What IS in scope** (the things a software root of trust can and must
 defend against):

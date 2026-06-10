@@ -80,7 +80,9 @@ align 8;
 data slot_cap_mask_hi: MAX_WINDOWS x 1 = 0;
 
 # Per-slot capability-cache authenticator paralleling slot_cap_mask[]. Seeded at
-# boot by slot_cap_hmac_init once kernel_canary holds its final value.
+# boot by slot_cap_hmac_init once kernel_canary holds its final value. Exported
+# so the Track 4 volatile scrub (ram_volatile.nxh) can zero it on teardown.
+global slot_cap_hmac;
 align 8;
 data slot_cap_hmac: MAX_WINDOWS x 1 = 0;
 

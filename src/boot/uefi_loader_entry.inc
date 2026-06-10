@@ -75,6 +75,11 @@ _start:
     ; file leaves the fields zero -> kernel defaults everything ON (byte-compat).
     call load_bootcfg
 
+    ; === S2b2c: Load Track-2 signed-envelope files (SYSSIG.ENV required by
+    ; the kernel fail-closed; KUPDATE.ENV optional staged update). Publishes
+    ; (base,size) pairs in VBE_INFO for envelope_gate.nxh. ===
+    call load_envelopes
+
     ; === S2b3: Phase 1b - resolve DATA.IMG physical LBA extents on the ESP
     ; via EFI_BLOCK_IO_PROTOCOL while firmware services are still alive.
     ; Captured in VBE_INFO + STORAGE_EXTENTS_ADDR for ramdisk_flush in the

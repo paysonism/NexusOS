@@ -8,6 +8,15 @@ bits 64
 %include "structs.inc"
 %include "macros.inc"
 
+; .bss start marker. entry.asm is the FIRST include in kernel_build.asm, so this
+; `section .bss` block is the first BSS content in the aggregated `-f bin`
+; image; _bss_end is emitted last (kernel_build.asm). _start zeroes
+; [_bss_start, _bss_end) so a KASLR-slid kernel does not run on uninitialized
+; BSS (the trampoline copies only the payload, never the BSS tail).
+section .bss
+alignb 16
+_bss_start:
+
 section .text
 global _start
 extern kmain
@@ -83,6 +92,23 @@ _start:
 
     ; Set up kernel stack
     mov rsp, KERNEL_STACK_TOP
+
+    ; Zero the .bss section. The kernel ships as a NASM `-f bin` image whose
+    ; .bss occupies NO file bytes; the KASLR trampoline copies only the
+    ; payload (.text+.data) to the slid base and never clears the BSS tail
+    ; that follows it. With slide=0 the BSS happens to land in the loader's
+    ; freshly-allocated (zero) PE image region, but with a non-zero KASLR
+    ; slide it lands in arbitrary DRAM, leaving per-slot state (e.g.
+    ; l3_slot_ustack_off[]) full of garbage. That non-canonical garbage then
+    ; surfaces as a ring-0 #GP in process_create's user-stack iret-frame
+    ; build (mov [rax],rdx). Clear it here, before kmain or any subsystem
+    ; touches BSS. RIP-relative leas keep this correct under any slide.
+    lea rdi, [rel _bss_start]
+    lea rcx, [rel _bss_end]
+    sub rcx, rdi            ; byte count
+    shr rcx, 3              ; -> qwords (_bss_start is 16B-aligned, end padded)
+    xor eax, eax
+    rep stosq
 
     ; Enable SSE/SSE2 (required for fast framebuffer operations)
     ; CR0: clear EM (bit 2), set MP (bit 1)

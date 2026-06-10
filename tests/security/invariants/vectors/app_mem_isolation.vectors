@@ -1,0 +1,14 @@
+# INV-APP-MEM-ISOLATION vectors —
+# predicate inv_app_mem_isolation(reader_ns, owner_ns, shared_handle, access_granted).
+invariant=INV-APP-MEM-ISOLATION
+predicate=inv_app_mem_isolation
+# same namespace, granted, no handle needed
+case=accept | 3, 3, 0, 1
+# cross-namespace but mediated by an explicit shared handle
+case=accept | 3, 9, 1, 1
+# cross-namespace, no handle, but access NOT granted — nothing leaked
+case=accept | 3, 9, 0, 0
+# THE violation: cross-namespace read granted with no shared handle
+case=reject | 3, 9, 0, 1
+# another pair, same violation shape
+case=reject | 0, 127, 0, 1

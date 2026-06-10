@@ -1,0 +1,7 @@
+# Track-2 reject-matrix row. Executed (not just declared): the named case
+# in scripts/test/eval_envelope.py builds this envelope as real bytes and
+# runs the in-kernel reader source (envelope_reader.nxh) against it.
+checker = signed_envelope
+expect = fail
+case = COSIGNER_ROLES declares min_count below the per-class quorum floor
+matrix_case = quorum_count_below_class_floor

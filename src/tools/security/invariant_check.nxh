@@ -27,6 +27,9 @@ global inv_pt_no_persist_without_threshold;
 global inv_policy_loader_signed_only;
 global inv_hypervisor_no_foreign_measurement;
 global inv_release_no_observation;
+global inv_recovery_no_measure_bypass;
+global inv_ipc_no_deputy_laundering;
+global inv_app_mem_isolation;
 
 # Authority bits. One bit per mintable authority in the model.
 const AUTH_MEMORY_GRANT = 1;       # map/grant memory to another domain
@@ -132,4 +135,46 @@ fn inv_hypervisor_no_foreign_measurement(signer_domain, measured_domain, signs_m
 # Release builds must not observe the user: no telemetry/logging/identifier flag.
 fn inv_release_no_observation(telemetry_present) {
     return inv_flag_absent(telemetry_present);
+}
+
+# Recovery cannot be used to skip measurement: execution proceeds only when the
+# measured hash matches the expected hash, and `recovery_mode` is quantified
+# over both values to prove it grants NO exemption (the non-bypass claim is
+# that the predicate is constant in recovery_mode).
+fn inv_recovery_no_measure_bypass(recovery_mode, measured_hash, expected_hash, proceeds) {
+    if proceeds == 0 {
+        return 1;
+    }
+    if measured_hash == expected_hash {
+        return 1;
+    }
+    return 0;
+}
+
+# No confused deputy: when a deputy (proxy) performs an operation on behalf of
+# a requester, the exercised authority must be a subset of BOTH the requester's
+# and the deputy's own authority — a peer cannot launder authority the
+# requester never had, and a requester cannot push the deputy past its own.
+fn inv_ipc_no_deputy_laundering(requester_auth, deputy_auth, op_auth) {
+    if inv_subset(op_auth, requester_auth) == 0 {
+        return 0;
+    }
+    return inv_subset(op_auth, deputy_auth);
+}
+
+# Memory isolation between apps: a read across namespaces is permitted only
+# through an explicitly shared handle. Same-namespace access and non-granted
+# access are always fine; cross-namespace granted access without a shared
+# handle is the violation.
+fn inv_app_mem_isolation(reader_ns, owner_ns, shared_handle, access_granted) {
+    if access_granted == 0 {
+        return 1;
+    }
+    if reader_ns == owner_ns {
+        return 1;
+    }
+    if shared_handle != 0 {
+        return 1;
+    }
+    return 0;
 }

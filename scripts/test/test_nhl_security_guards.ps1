@@ -139,6 +139,36 @@ if ($LASTEXITCODE -ne 0) {
     throw 'NHL invariant guard failed.'
 }
 
+Write-Host '[nhl-security] === Track-2 signed-envelope reject matrix (real reader executed) ===' -ForegroundColor Cyan
+$EnvelopeEval = Join-Path $Root 'scripts\test\eval_envelope.py'
+if (-not (Test-Path -LiteralPath $EnvelopeEval)) {
+    throw "Missing envelope reject-matrix evaluator: $EnvelopeEval"
+}
+& python $EnvelopeEval
+if ($LASTEXITCODE -ne 0) {
+    throw 'Signed-envelope reject-matrix evaluation failed.'
+}
+
+Write-Host '[nhl-security] === Track-2 envelope fuzz + differential + canonical round-trip ===' -ForegroundColor Cyan
+$EnvelopeFuzz = Join-Path $Root 'scripts\test\fuzz_envelope.py'
+if (-not (Test-Path -LiteralPath $EnvelopeFuzz)) {
+    throw "Missing envelope fuzz/differential suite: $EnvelopeFuzz"
+}
+& python $EnvelopeFuzz
+if ($LASTEXITCODE -ne 0) {
+    throw 'Signed-envelope fuzz/differential/property suite failed.'
+}
+
+Write-Host '[nhl-security] === Track-2 Ed25519 threshold-signature crypto (real NHL verifier) ===' -ForegroundColor Cyan
+$Ed25519Eval = Join-Path $Root 'scripts\test\eval_ed25519.py'
+if (-not (Test-Path -LiteralPath $Ed25519Eval)) {
+    throw "Missing Ed25519 verifier evaluator: $Ed25519Eval"
+}
+& python $Ed25519Eval
+if ($LASTEXITCODE -ne 0) {
+    throw 'Ed25519 verifier evaluation failed.'
+}
+
 Write-Host '[nhl-security] === Enforcement meta-tests (the guards have negative tests) ===' -ForegroundColor Cyan
 & powershell -NoProfile -ExecutionPolicy Bypass -File $MetaTest
 if ($LASTEXITCODE -ne 0) {

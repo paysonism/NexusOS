@@ -1,0 +1,14 @@
+# INV-RECOVERY-NO-BYPASS vectors —
+# predicate inv_recovery_no_measure_bypass(recovery_mode, measured_hash, expected_hash, proceeds).
+invariant=INV-RECOVERY-NO-BYPASS
+predicate=inv_recovery_no_measure_bypass
+# normal boot, hash matches, proceeds
+case=accept | 0, 42, 42, 1
+# recovery boot, hash matches, proceeds — recovery with valid measurement is fine
+case=accept | 1, 42, 42, 1
+# recovery boot, hash mismatch, does NOT proceed — refusing is always fine
+case=accept | 1, 7, 42, 0
+# THE bypass: recovery mode used to proceed past a hash mismatch
+case=reject | 1, 7, 42, 1
+# same mismatch must also be rejected in normal mode (recovery changes nothing)
+case=reject | 0, 7, 42, 1

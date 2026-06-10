@@ -487,6 +487,12 @@ sc_hirisk_table:
 ; ----------------------------------------------------------------------------
 global kernel_panic_canary
 extern dbg_event_dump_serial
+; Track 4 Part A: wipe-on-panic / wipe-on-tamper. nk-monitor #PF, a cap-mask
+; HMAC mismatch and a code-range mismatch all fail closed into this routine, so
+; scrubbing the per-boot secrets here before the final HLT covers panic AND
+; detected tamper (ram_volatile.nxh). Called after the forensic serial dump has
+; consumed rdi/rsi, so it does not disturb the banner.
+extern nx_volatile_panic_scrub
 kernel_panic_canary:
     cli
     DBG_EVT_IMPORTANT EVT_PANIC, r15, rdi, rsi, rdx, r10, 0, 0
@@ -556,6 +562,9 @@ kernel_panic_canary:
     SER 13
     SER 10
 %endif
+    ; Wipe-on-panic: zero every per-boot/per-slot kernel secret now that the
+    ; forensic dump above is done, so a crash-then-dump cannot harvest them.
+    call nx_volatile_panic_scrub
 .kpc_halt:
     cli
     hlt
@@ -584,6 +593,8 @@ kernel_panic_shadow:
     call ser_print_hex64                ; rsi = expected (shadow) return address
     SER 13
     SER 10
+    ; Wipe-on-panic: scrub kernel secrets before halting on a shadow-stack abort.
+    call nx_volatile_panic_scrub
 .kps_halt:
     cli
     hlt

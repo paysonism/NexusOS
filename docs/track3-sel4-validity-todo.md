@@ -29,7 +29,7 @@ Maps to `docs/nhl-beyond-zero-trust-todo.md` → "P2: seL4 Validity Track" and
       invariants for scheduler, IPC, driver-DMA, page-table persistence, policy
       loader, hypervisor measurement, release observation). Compiles
       `--forbid-asm --deny-unsafe`.
-- [x] 9 machine-checkable invariant files under `tests/security/invariants/`,
+- [x] 12 machine-checkable invariant files under `tests/security/invariants/`,
       each binding a compromised component + denied authority to a predicate
       and marked `proven` after exhaustive bounded checking.
 - [x] Runner `scripts/test/test_nhl_invariants.ps1`: validates files, asserts
@@ -38,7 +38,7 @@ Maps to `docs/nhl-beyond-zero-trust-todo.md` → "P2: seL4 Validity Track" and
       source (via `scripts/test/eval_invariants.py`, which parses
       `invariant_check.nxh` with the production compiler's own lexer/parser and
       interprets each predicate as a pure integer fn — no re-implementation).
-- [x] Exhaustive bounded checker for the current 9 invariants: `eval_invariants.py
+- [x] Exhaustive bounded checker for the current 12 invariants: `eval_invariants.py
       --exhaustive` enumerates the full 7-bit authority/domain space (0..127)
       plus boolean side conditions for each theorem and compares the real
       predicate result to the theorem table before the runner passes.
@@ -55,9 +55,16 @@ Maps to `docs/nhl-beyond-zero-trust-todo.md` → "P2: seL4 Validity Track" and
 - [x] policy install requires signature                         — INV-POLICY-SIGNED-ONLY
 - [x] hypervisor measures only its own domain                   — INV-HV-NO-FOREIGN-MEASURE
 - [x] privacy non-observation in release                        — INV-RELEASE-NO-OBSERVE
-- [ ] recovery non-bypass invariant (recovery cannot be used to skip measurement)
-- [ ] confused-deputy IPC invariant (no authority laundering through a peer)
-- [ ] memory isolation between apps (no cross-namespace read without shared handle)
+- [x] recovery non-bypass invariant (recovery cannot be used to skip measurement)
+      — INV-RECOVERY-NO-BYPASS (2026-06-10): proceed requires measured_hash ==
+      expected_hash; recovery_mode is quantified over both values in the
+      exhaustive check and proven irrelevant (65,536 cases).
+- [x] confused-deputy IPC invariant (no authority laundering through a peer)
+      — INV-IPC-NO-CONFUSED-DEPUTY (2026-06-10): op authority must be a subset
+      of requester ∩ deputy; full 128^3 space proven (2,097,152 cases).
+- [x] memory isolation between apps (no cross-namespace read without shared handle)
+      — INV-APP-MEM-ISOLATION (2026-06-10): granted cross-namespace access
+      without a shared handle is the violation; 65,536 cases proven.
 
 ## P2 — promote `modeled` → `tested`
 

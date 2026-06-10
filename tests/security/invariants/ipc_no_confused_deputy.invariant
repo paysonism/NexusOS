@@ -1,0 +1,9 @@
+# No authority laundering through a peer: an operation a deputy performs on
+# behalf of a requester must lie within the INTERSECTION of both authorities.
+invariant=INV-IPC-NO-CONFUSED-DEPUTY
+title=No authority laundering through a peer (confused deputy)
+statement=op_auth must be a subset of requester_auth AND of deputy_auth; neither party's authority alone suffices.
+compromised=Either IPC peer (requester or deputy)
+denied_authority=Any authority bit absent from the requester or from the deputy
+predicate=inv_ipc_no_deputy_laundering
+status=proven

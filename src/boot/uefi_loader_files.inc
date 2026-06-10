@@ -382,3 +382,114 @@ load_bootcfg:
     add rsp, 48
     pop rbx
     ret
+
+; ============================================================================
+; LOAD_OPT_FILE - generic optional-ESP-file slurp (Track 2 envelope files).
+; Opens the UCS-2 path in RSI, reads up to RBP bytes into freshly allocated
+; firmware pages, and publishes (base, size) at VBE_INFO + RDI (+ RDI+8).
+; Non-fatal on EVERY error: leaves the two fields zero (the kernel decides
+; whether a missing file is fatal). Mirrors load_bootcfg.
+;   in: rsi = ustr path, rdi = VBE_INFO offset of base field, rbp = max bytes
+; ============================================================================
+load_opt_file:
+    push rbx
+    push rsi
+    push rdi
+    push rbp
+    sub rsp, 56
+
+    mov qword [VBE_INFO + rdi], 0
+    mov qword [VBE_INFO + rdi + 8], 0
+
+    mov rbx, [v_sfs]
+    test rbx, rbx
+    jz .of_fail
+    mov rcx, rbx
+    lea rdx, [v_root]
+    mov rax, [rbx + SFS_OPENVOL]
+    call rax
+    test rax, rax
+    jnz .of_fail
+
+    mov rbx, [v_root]
+    mov rcx, rbx
+    lea rdx, [v_file]
+    mov r8,  rsi                     ; UCS-2 path
+    mov r9,  1                       ; EFI_FILE_MODE_READ
+    mov qword [rsp+32], 0
+    mov rax, [rbx + FP_OPEN]
+    call rax
+    test rax, rax
+    jnz .of_fail
+
+    mov qword [v_tmp_addr], 0
+    mov rcx, [v_bs]
+    mov rax, [rcx + BS_ALLOCPG]
+    mov ecx, 0                       ; AllocateAnyPages
+    mov edx, 2                       ; EfiLoaderData
+    mov r8, rbp
+    shr r8, 12                       ; max bytes -> pages
+    lea r9, [v_tmp_addr]
+    call rax
+    test rax, rax
+    jnz .of_close_and_fail
+
+    mov [rsp+40], rbp                ; in/out: bytes to read / bytes read
+    mov rbx, [v_file]
+    mov rcx, rbx
+    lea rdx, [rsp+40]
+    mov r8, [v_tmp_addr]
+    mov rax, [rbx + FP_READ]
+    call rax
+    test rax, rax
+    jnz .of_close_and_fail
+
+    mov rax, [rsp+40]
+    test rax, rax
+    jz .of_close_and_fail
+    mov rdx, [v_tmp_addr]
+    mov [VBE_INFO + rdi], rdx
+    mov [VBE_INFO + rdi + 8], rax
+
+    SER 'V'                          ; V = optional envelope file loaded
+    mov rbx, [v_file]
+    mov rcx, rbx
+    mov rax, [rbx + FP_CLOSE]
+    call rax
+    jmp .of_done
+
+.of_close_and_fail:
+    mov rbx, [v_file]
+    mov rcx, rbx
+    mov rax, [rbx + FP_CLOSE]
+    call rax
+.of_fail:
+.of_done:
+    add rsp, 56
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rbx
+    ret
+
+; LOAD_ENVELOPES - load the Track 2 signed-envelope files (see boot_memory.inc).
+load_envelopes:
+    push rsi
+    push rdi
+    push rbp
+    lea rsi, [s_syssig_path]
+    mov edi, VBE_SYSSIG_BASE_OFF
+    mov ebp, SYSSIG_MAX_SIZE
+    call load_opt_file
+    lea rsi, [s_kupdate_path]
+    mov edi, VBE_KUPDATE_BASE_OFF
+    mov ebp, KUPDATE_MAX_SIZE
+    call load_opt_file
+    lea rsi, [s_kquorum_path]
+    mov edi, VBE_KQUORUM_BASE_OFF
+    mov ebp, KQUORUM_MAX_SIZE
+    call load_opt_file
+    pop rbp
+    pop rdi
+    pop rsi
+    ret

@@ -3,6 +3,20 @@
 # Live CPUID/MSR reads remain a kernel integration task. This module owns the
 # pure policy contract: constants, feature predicates, and SECST-compatible
 # status mapping for Intel TME/MKTME and AMD SME/SEV-family inventory.
+#
+# HONEST CAVEATS (Track 4 Part C — do not overclaim):
+#   1. QEMU TCG does NOT emulate the TME/SME memory-controller crypto. Guest
+#      DRAM stays plaintext on the host, so a `pmemsave` dump under TCG reflects
+#      only the Part B software at-rest layer. A SECST_ACTIVE row reported from a
+#      TCG boot proves the detect/report path, NOT that DRAM is encrypted. Part C
+#      is verifiable only on real silicon (or KVM+SEV). Never claim FME works from
+#      a TCG boot.
+#   2. TME/SME defeat PASSIVE DRAM capture only (cold-boot / physical-DIMM /
+#      DMA-of-DRAM). They do NOT defend against an attacker executing on the same
+#      CPU: the memory controller transparently decrypts for any on-die access, so
+#      anything the CPU can read is plaintext to code running on it. Containing
+#      that attacker is the §1-§12 ring-3 containment job (Track 4 Part D —
+#      leak != elevation), not this module's.
 
 module "security_fme_memory_encryption_check";
 

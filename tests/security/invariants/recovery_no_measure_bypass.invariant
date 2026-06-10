@@ -1,0 +1,10 @@
+# Recovery mode is not a measurement bypass: execution proceeds only when the
+# measured hash matches the expected hash, and the predicate is proven constant
+# in recovery_mode over the full bounded space (recovery grants no exemption).
+invariant=INV-RECOVERY-NO-BYPASS
+title=Recovery cannot be used to skip measurement
+statement=Execution proceeds only if measured_hash == expected_hash; recovery_mode is quantified over both values and changes nothing.
+compromised=Recovery path / recovery trigger
+denied_authority=AUTH_SIGN_MEASUREMENT (implicit: accepting an unmeasured artifact)
+predicate=inv_recovery_no_measure_bypass
+status=proven

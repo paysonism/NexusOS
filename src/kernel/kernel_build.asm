@@ -68,6 +68,38 @@ section .text
 section .text
 %include "build/nxh/crypto.asm"
 section .text
+; Track 4 Part A: RAM-only / volatile secret scrubbing (wipe-on-shutdown / panic
+; / tamper). Provides nx_volatile_panic_scrub (called from kernel_panic_canary /
+; kernel_panic_shadow) and nx_volatile_wipe_halt (serial 'w' clean-exit wipe).
+%include "build/nxh/ram_volatile.asm"
+section .text
+; Track 4 Part B items 2+4: encrypt-at-rest-in-RAM (nx_atrest_xcrypt + the
+; decrypt-into-window helpers) and whiten-kernel-secrets-at-rest (nx_secret_mask
+; + nx_mask_secret/nx_unmask_secret). %included after ram_volatile so its
+; nx_mem_key / nx_splitmix64 labels resolve as same-unit symbols.
+%include "build/nxh/ram_atrest.asm"
+section .text
+; Track 2 signed-envelope enforcement: structural policy kernel
+; (security_envelope_*), semantic policy kernel (security_artifact_*), and the
+; in-kernel byte-walking reader (envelope_verify) that composes them. The
+; policy kernels are the SAME sources the host fixture gate compiles
+; (src/tools/security), so the in-OS verifier and the checked contract cannot
+; drift apart.
+%include "build/nxh/signed_envelope.asm"
+section .text
+%include "build/nxh/signed_artifact_check.asm"
+section .text
+%include "build/nxh/threshold_check.asm"
+section .text
+%include "build/nxh/envelope_reader.asm"
+section .text
+%include "build/nxh/ed25519_check.asm"
+section .text
+; Track 2 admission gate: binds envelope_verify_signed into the boot-chain
+; (SYSSIG.ENV, fail-closed) + update-path (KUPDATE.ENV) call sites, with the
+; verified-artifact hash cache in front of the Ed25519 crypto.
+%include "build/nxh/envelope_gate.asm"
+section .text
 %include "src/kernel/core/nk_monitor.asm"
 section .text
 %include "src/kernel/core/kernel_lockdown.asm"
@@ -307,8 +339,9 @@ global _kernel_text_end
 _kernel_text_end:
 
 ; --- BSS Section ---
+; NASM aggregates sections, so all .bss from included files end up between
+; _bss_start (declared first, in entry.asm) and _bss_end here. _start clears
+; this whole span so a KASLR-slid kernel never runs on uninitialized BSS.
 section .bss
-alignb 16
-_bss_start:
-; NASM aggregates sections, so all .bss from included files will end up here.
+alignb 16                      ; keep _bss_end - _bss_start a multiple of 8 (16)
 _bss_end:
