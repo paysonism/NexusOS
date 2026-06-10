@@ -104,12 +104,21 @@ not fanned out to agents.
 - [x] [`src/kernel/drivers/display.asm`](../src/kernel/drivers/display.asm) — ~~2,502~~ Split 2026-06-10 into a 28-line orchestrator + 5 `display_*.inc` modules (largest `display_flip.inc` at 607). Byte-identical `KERNEL.BIN` (sha256 verified). Cut points respect `FN_BEGIN` local-label scopes.
 - [ ] [`src/boot/boot.asm`](../src/boot/boot.asm) — 2,339 (also 3 TODO/STUB)
 - [ ] [`src/boot/uefi_loader.asm`](../src/boot/uefi_loader.asm) — 2,214 (3 TODO/STUB — most of any file)
-- [ ] [`src/kernel/drivers/usb_hid.asm`](../src/kernel/drivers/usb_hid.asm) — 2,164
+- [x] [`src/kernel/drivers/usb_hid.asm`](../src/kernel/drivers/usb_hid.asm) — ~~1,996~~ Split 2026-06-10 into a 157-line orchestrator + 4 `usb_hid_*.inc` modules (largest `usb_hid_poll.inc` at 631). Byte-identical `KERNEL.BIN` (sha256 verified).
 - [ ] [`src/diag/uefi_mouse_probe.asm`](../src/diag/uefi_mouse_probe.asm) — 2,160
 - [ ] [`src/user/apps/media_viewer.inc`](../src/user/apps/media_viewer.inc) — 1,956
-- [ ] [`src/kernel/gui/window.asm`](../src/kernel/gui/window.asm) — 1,813
+- [x] [`src/kernel/gui/window.asm`](../src/kernel/gui/window.asm) — ~~1,023~~ Split 2026-06-10 into a 78-line orchestrator + 4 `window_*.inc` modules (largest `window_draw.inc` at 353). Byte-identical `KERNEL.BIN` (sha256 verified).
 - [ ] [`src/user/apps/launch.inc`](../src/user/apps/launch.inc) — 1,704
-- [ ] [`src/kernel/fs/fat16.asm`](../src/kernel/fs/fat16.asm) — 1,733
+- [x] [`src/kernel/fs/fat16.asm`](../src/kernel/fs/fat16.asm) — ~~1,791~~ Split 2026-06-10 into a 91-line orchestrator + 4 `fat16_*.inc` modules (largest `fat16_nav.inc` at 508). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/lib/xml.asm`](../src/kernel/lib/xml.asm) — ~~1,609~~ Split 2026-06-10 into an 81-line orchestrator + 3 `xml_*.inc` modules (largest `xml_parse.inc` at 618). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/drivers/hid_parser.asm`](../src/kernel/drivers/hid_parser.asm) — ~~1,400~~ Split 2026-06-10 into a 62-line orchestrator + 4 `hid_parser_*.inc` modules (largest `hid_parser_parse.inc` at 510). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/drivers/fbperf.asm`](../src/kernel/drivers/fbperf.asm) — ~~1,251~~ Split 2026-06-10 into a 67-line orchestrator + 4 `fbperf_*.inc` modules (largest `fbperf_get.inc` at 502). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/proc/process.asm`](../src/kernel/proc/process.asm) — ~~1,224~~ Split 2026-06-10 into a 38-line orchestrator + 4 `process_*.inc` modules (largest `process_callbacks.inc` at 465). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/drivers/rtl8139.asm`](../src/kernel/drivers/rtl8139.asm) — ~~1,146~~ Split 2026-06-10 into a 56-line orchestrator + 4 `rtl8139_*.inc` modules (largest `rtl8139_init.inc` at 370). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/gui/taskbar.asm`](../src/kernel/gui/taskbar.asm) — ~~1,131~~ Split 2026-06-10 into a 115-line orchestrator + 3 `taskbar_*.inc` modules (largest `taskbar_draw.inc` at 563). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/drivers/mouse.asm`](../src/kernel/drivers/mouse.asm) — ~~1,019~~ Split 2026-06-10 into a 19-line orchestrator + 4 `mouse_*.inc` modules (largest `mouse_init.inc` at 400). Byte-identical `KERNEL.BIN` (sha256 verified).
+- [x] [`src/kernel/proc/workqueue.asm`](../src/kernel/proc/workqueue.asm) — ~~783~~ Split 2026-06-10 into a 153-line orchestrator + 2 `workqueue_*.inc` modules (largest `workqueue_worker.inc` at 384). Byte-identical `KERNEL.BIN` (sha256 verified).
+- `src/kernel/proc/syscall_dispatch_core.inc` (727) — **skipped 2026-06-10**: the file is a single `syscall_entry` body containing only `.local` labels (no top-level seams), so any cut would break local-label scope. Leave intact.
 - [x] [`src/kernel/proc/usermode.asm`](../src/kernel/proc/usermode.asm) — split 2026-06-01 into a 24-line wrapper plus focused `usermode_*.inc` files; largest resulting file is `usermode_paging.inc` at 329 lines. Build verified with deterministic UEFI path.
 - [ ] [`src/kernel/drivers/i2c_hid.asm`](../src/kernel/drivers/i2c_hid.asm) — 1,612
 - [ ] [`src/kernel/lib/*`](../src/kernel/lib) — 1,519-line file
